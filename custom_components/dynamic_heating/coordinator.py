@@ -20,6 +20,16 @@ from .const import (
     CONF_MAX_PREHEAT_MINUTES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PRESENCE_ENTITY,
+    CONF_PERSON_ENTITIES,
+    CONF_GUEST_ENTITY,
+    CONF_ENTER_HOME_DURATION,
+    CONF_LEAVING_HOME_DURATION,
+    CONF_PROXIMITY_ENTITY,
+    CONF_PROXIMITY_DURATION,
+    CONF_PROXIMITY_DISTANCE,
+    CONF_PRESENCE_SCHEDULE_ENTITY,
+    CONF_PRESENCE_ON_DURATION,
+    CONF_PRESENCE_OFF_DURATION,
     CONF_ROOM_TEMPERATURE_ENTITY,
     CONF_SCHEDULE_ENTITY,
     CONF_WINDOW_ENTITY,
@@ -319,6 +329,85 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "enabled": self.enabled,
         }
 
+    def _presence_is_active(self, state: State, expected: bool, delay_seconds: int) -> bool:
+        """Apply a configurable stability delay to an on/off presence state."""
+        current = state.state in ("on", "home")
+        if current != expected:
+            return False
+        return delay_seconds <= 0 or (dt_util.utcnow() - state.last_changed).total_seconds() >= delay_seconds
+
+    def _proximity_is_active(self, state: State) -> bool:
+        """Treat proximity as present only when home or approaching within range."""
+        if state.state == "home":
+            return True
+        distance = _as_float(state)
+        direction = str(state.attributes.get("dir_of_travel", "")).lower()
+        if distance is None or direction not in ("towards", "toward", "arrived"):
+            return False
+        if distance > float(self.config.get(CONF_PROXIMITY_DISTANCE, 500)):
+            return False
+        delay = int(self.config.get(CONF_PROXIMITY_DURATION, 120))
+        return delay <= 0 or (dt_util.utcnow() - state.last_changed).total_seconds() >= delay
+
+    def _evaluate_presence(self) -> tuple[bool | None, str]:
+        """Combine household, guest, proximity and scheduled presence signals."""
+        people = self.config.get(CONF_PERSON_ENTITIES) or []
+        if isinstance(people, str):
+            people = [people]
+        household_home = not people and not self.config.get(CONF_PROXIMITY_ENTITY)
+        invalid_people = False
+        enter_delay = int(self.config.get(CONF_ENTER_HOME_DURATION, 2))
+        leave_delay = int(self.config.get(CONF_LEAVING_HOME_DURATION, 2))
+        for entity_id in people:
+            state = self.hass.states.get(entity_id)
+            if not self._valid(state):
+                invalid_people = True
+            elif state.state == "home" and self._presence_is_active(state, True, enter_delay):
+                household_home = True
+            elif state.state == "not_home" and not self._presence_is_active(state, False, leave_delay):
+                household_home = True
+
+        guest_id = self.config.get(CONF_GUEST_ENTITY)
+        if guest_id:
+            guest = self.hass.states.get(guest_id)
+            if not self._valid(guest):
+                return None, "Gastmodus-Entität nicht verfügbar – keine Sollwertänderung"
+            household_home = household_home or guest.state == "on"
+
+        proximity_home = False
+        proximity_id = self.config.get(CONF_PROXIMITY_ENTITY)
+        if proximity_id:
+            proximity = self.hass.states.get(proximity_id)
+            if not self._valid(proximity):
+                return None, "Proximity-Entität nicht verfügbar – keine Sollwertänderung"
+            proximity_home = self._proximity_is_active(proximity)
+        if invalid_people and not household_home and not proximity_home:
+            return None, "Personen-/Geräte-Tracker nicht verfügbar – keine Sollwertänderung"
+
+        present = household_home or proximity_home
+        presence_id = self.config.get(CONF_PRESENCE_ENTITY)
+        use_presence = bool(presence_id)
+        schedule_id = self.config.get(CONF_PRESENCE_SCHEDULE_ENTITY)
+        if schedule_id:
+            schedule = self.hass.states.get(schedule_id)
+            if not self._valid(schedule):
+                return None, "Präsenzzeitplan nicht verfügbar – keine Sollwertänderung"
+            use_presence = use_presence and schedule.state == "on"
+        if use_presence:
+            state = self.hass.states.get(presence_id)
+            if not self._valid(state):
+                return None, "Anwesenheitssensor nicht verfügbar – keine Sollwertänderung"
+            on_delay = int(self.config.get(CONF_PRESENCE_ON_DURATION, 0))
+            off_delay = int(self.config.get(CONF_PRESENCE_OFF_DURATION, 0))
+            if state.state == "on":
+                sensor_present = self._presence_is_active(state, True, on_delay)
+            elif state.state == "off":
+                sensor_present = not self._presence_is_active(state, False, off_delay)
+            else:
+                return None, "Anwesenheitssensor liefert ungültigen Zustand – keine Sollwertänderung"
+            present = present and sensor_present
+        return present, "Anwesenheit erkannt" if present else "Keine Anwesenheit – abgesenkt"
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Read Home Assistant states, calculate a target and optionally apply it."""
         room_temperature = _as_float(self._state(CONF_ROOM_TEMPERATURE_ENTITY))
@@ -359,17 +448,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             window_open = window_state.state == "on"
 
-        present = True
-        presence_id = self.config.get(CONF_PRESENCE_ENTITY)
-        if presence_id:
-            presence_state = self.hass.states.get(presence_id)
-            if not self._valid(presence_state):
-                return self._waiting_result(
-                    "Anwesenheitssensor nicht verfügbar – keine Sollwertänderung",
-                    room_temperature,
-                    outdoor_temperature,
-                )
-            present = presence_state.state == "on"
+        present, presence_status = self._evaluate_presence()
+        if present is None:
+            return self._waiting_result(presence_status, room_temperature, outdoor_temperature)
 
         comfort_temperature = float(
             self.config.get(CONF_COMFORT_TEMPERATURE, DEFAULT_COMFORT_TEMPERATURE)
@@ -442,6 +523,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "next_event": next_event.isoformat() if next_event else None,
             "window_open": window_open,
             "present": present,
+            "presence_status": presence_status,
             "enabled": self.enabled,
             "decision_status": decision.status,
             "control_error": False,
