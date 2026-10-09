@@ -21,6 +21,8 @@ from .const import (
     CONF_ENTER_HOME_DURATION,
     CONF_LEAVING_HOME_DURATION,
     CONF_PROXIMITY_ENTITY,
+    CONF_PROXIMITY_DIRECTION_ENTITY,
+    CONF_PROXIMITY_MAX_AGE,
     CONF_PROXIMITY_DURATION,
     CONF_PROXIMITY_DISTANCE,
     CONF_PRESENCE_SCHEDULE_ENTITY,
@@ -37,6 +39,7 @@ from .const import (
     DEFAULT_LEAVING_HOME_DURATION,
     DEFAULT_PROXIMITY_DURATION,
     DEFAULT_PROXIMITY_DISTANCE,
+    DEFAULT_PROXIMITY_MAX_AGE,
     DEFAULT_PRESENCE_ON_DURATION,
     DEFAULT_PRESENCE_OFF_DURATION,
     DOMAIN,
@@ -84,6 +87,7 @@ _DURATION_OPTIONS = (
     CONF_PROXIMITY_DURATION,
     CONF_PRESENCE_ON_DURATION,
     CONF_PRESENCE_OFF_DURATION,
+    CONF_PROXIMITY_MAX_AGE,
 )
 
 
@@ -129,12 +133,11 @@ def _user_schema() -> vol.Schema:
                 selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])
             ),
             vol.Optional(CONF_PROXIMITY_ENTITY): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="proximity")
+                selector.EntitySelectorConfig(domain=["sensor", "proximity"])
             ),
-            vol.Optional(
-                CONF_PROXIMITY_DURATION,
-                default=_seconds_to_duration(DEFAULT_PROXIMITY_DURATION),
-            ): _duration_selector(),
+            vol.Optional(CONF_PROXIMITY_DIRECTION_ENTITY): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
             vol.Optional(
                 CONF_PROXIMITY_DISTANCE, default=DEFAULT_PROXIMITY_DISTANCE
             ): selector.NumberSelector(
@@ -142,6 +145,14 @@ def _user_schema() -> vol.Schema:
                     min=0, max=100000, step=50, mode="box"
                 )
             ),
+            vol.Optional(
+                CONF_PROXIMITY_DURATION,
+                default=_seconds_to_duration(DEFAULT_PROXIMITY_DURATION),
+            ): _duration_selector(),
+            vol.Optional(
+                CONF_PROXIMITY_MAX_AGE,
+                default=_seconds_to_duration(DEFAULT_PROXIMITY_MAX_AGE),
+            ): _duration_selector(),
             vol.Optional(CONF_PRESENCE_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])
             ),
@@ -267,7 +278,8 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             (CONF_WINDOW_ENTITY, "binary_sensor"),
             (CONF_PERSON_ENTITIES, ["person", "device_tracker"]),
             (CONF_GUEST_ENTITY, ["binary_sensor", "input_boolean"]),
-            (CONF_PROXIMITY_ENTITY, "proximity"),
+            (CONF_PROXIMITY_ENTITY, ["sensor", "proximity"]),
+            (CONF_PROXIMITY_DIRECTION_ENTITY, "sensor"),
             (CONF_PRESENCE_ENTITY, ["binary_sensor", "input_boolean"]),
             (CONF_PRESENCE_SCHEDULE_ENTITY, "schedule"),
             (CONF_OUTDOOR_TEMPERATURE_ENTITY, "sensor"),
@@ -302,8 +314,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 add_duration(
                     CONF_LEAVING_HOME_DURATION, DEFAULT_LEAVING_HOME_DURATION
                 )
-            elif key == CONF_PROXIMITY_ENTITY:
-                add_duration(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION)
+            elif key == CONF_PROXIMITY_DIRECTION_ENTITY:
                 schema[
                     vol.Optional(
                         CONF_PROXIMITY_DISTANCE,
@@ -318,6 +329,8 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                         min=0, max=100000, step=50, mode="box"
                     )
                 )
+                add_duration(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION)
+                add_duration(CONF_PROXIMITY_MAX_AGE, DEFAULT_PROXIMITY_MAX_AGE)
             elif key == CONF_PRESENCE_SCHEDULE_ENTITY:
                 add_duration(
                     CONF_PRESENCE_ON_DURATION, DEFAULT_PRESENCE_ON_DURATION
@@ -361,6 +374,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                     CONF_PERSON_ENTITIES,
                     CONF_GUEST_ENTITY,
                     CONF_PROXIMITY_ENTITY,
+                    CONF_PROXIMITY_DIRECTION_ENTITY,
                     CONF_PRESENCE_SCHEDULE_ENTITY,
                 ):
                     options[key] = user_input.get(key) or None
