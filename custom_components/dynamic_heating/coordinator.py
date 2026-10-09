@@ -246,15 +246,18 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         target_temperature = decision.target_temperature
         if target_temperature is not None and self._valid(climate_state):
-            climate_min = _as_float(
-                State("climate", "unused", climate_state.attributes)
-                if False else None
-            )
-            # Clamp computed targets to the capability range exposed by the thermostat.
+            # Respect the temperature limits advertised by the thermostat.
             try:
-                min_temp = float(climate_state.attributes.get("min_temp", target_temperature))
-                max_temp = float(climate_state.attributes.get("max_temp", target_temperature))
-                target_temperature = max(min_temp, min(target_temperature, max_temp))
+                min_temp = float(
+                    climate_state.attributes.get("min_temp", target_temperature)
+                )
+                max_temp = float(
+                    climate_state.attributes.get("max_temp", target_temperature)
+                )
+                if min_temp <= max_temp:
+                    target_temperature = max(
+                        min_temp, min(target_temperature, max_temp)
+                    )
             except (TypeError, ValueError):
                 pass
 
