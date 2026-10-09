@@ -375,10 +375,15 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
 
         # Use values already entered on a failed submission as suggested values.
         schema = self._options_schema(current)
+        suggested = dict(user_input or current)
+        # Config entries store durations as seconds, while the form's native
+        # DurationSelector expects {hours, minutes, seconds} dictionaries.
+        # Convert stored values before suggesting them to the frontend.
+        for key in _DURATION_OPTIONS:
+            if key in suggested and not isinstance(suggested[key], dict):
+                suggested[key] = _seconds_to_duration(suggested[key])
         return self.async_show_form(
             step_id="init",
-            data_schema=self.add_suggested_values_to_schema(
-                schema, user_input or current
-            ),
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
             errors=errors,
         )
