@@ -33,7 +33,9 @@ jobs:
         run: ruff check .
 
       - name: Run tests inside isolated Home Assistant
-        run: pytest -q --junitxml=test-results/junit.xml
+        run: |
+          mkdir -p test-results
+          pytest -q --junitxml=test-results/junit.xml
 
       - name: Upload test results
         if: always()
