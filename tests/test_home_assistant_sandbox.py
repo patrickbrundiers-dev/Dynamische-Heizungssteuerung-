@@ -106,6 +106,8 @@ async def test_controller_calculates_preheat_but_does_not_control_by_default(
 
     assert coordinator.data["mode"] == "preheat"
     assert coordinator.data["target_temperature"] == 21.0
+    assert coordinator.data["current_setpoint"] == 18.0
+    assert coordinator.data["solar_adjustment_minutes"] == 0
     assert coordinator.data["enabled"] is False
 
     with _capture_climate_calls(hass) as calls:
