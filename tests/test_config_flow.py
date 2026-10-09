@@ -48,6 +48,12 @@ async def test_user_flow_creates_entry(hass, enable_custom_integrations):
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Dynamische Heizung – climate.living_room"
     assert result["data"]["climate_entity"] == "climate.living_room"
+    # Native duration selector values are normalized to numeric seconds.
+    assert result["data"]["enter_home_duration"] == 2
+    assert result["data"]["leaving_home_duration"] == 2
+    assert result["data"]["proximity_duration"] == 120
+    assert result["data"]["presence_on_duration"] == 300
+    assert result["data"]["presence_off_duration"] == 1200
 
 
 @pytest.mark.asyncio
