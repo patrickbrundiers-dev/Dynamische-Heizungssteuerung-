@@ -10,6 +10,9 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.dynamic_heating.diagnostics import (
+    async_get_config_entry_diagnostics,
+)
 from custom_components.dynamic_heating.const import (
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
@@ -519,4 +522,28 @@ async def test_presence_sensor_works_standalone_and_schedule_can_disable_it(
     hass.states.async_set("binary_sensor.someone_home", "off")
     await coordinator.async_refresh()
     assert coordinator.data["present"] is True
+
+@pytest.mark.asyncio
+async def test_diagnostics_redact_new_presence_and_location_entities(
+    hass, enable_custom_integrations
+):
+    """Person, guest, Proximity and presence schedule IDs are sensitive diagnostics."""
+    entry, _ = await _setup_integration(hass)
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            "person_entities": ["person.patrick", "person.jenny"],
+            "guest_entity": "input_boolean.guest_mode",
+            "proximity_entity": "proximity.home",
+            "presence_schedule_entity": "schedule.presence_active",
+        },
+    )
+
+    diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+    config = diagnostics["config"]
+
+    assert config["person_entities"] != ["person.patrick", "person.jenny"]
+    assert config["guest_entity"] != "input_boolean.guest_mode"
+    assert config["proximity_entity"] != "proximity.home"
+    assert config["presence_schedule_entity"] != "schedule.presence_active"
 
