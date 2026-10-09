@@ -1,0 +1,10 @@
+{
+  "domain": "dynamic_heating",
+  "name": "Dynamische Heizungssteuerung",
+  "codeowners": ["@patrickbrundiers-dev"],
+  "config_flow": true,
+  "documentation": "https://github.com/patrickbrundiers-dev/Dynamische-Heizungssteuerung-",
+  "issue_tracker": "https://github.com/patrickbrundiers-dev/Dynamische-Heizungssteuerung-/issues",
+  "iot_class": "calculated",
+  "version": "0.1.0"
+}
