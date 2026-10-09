@@ -4,6 +4,7 @@ from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -95,24 +96,44 @@ async def test_controller_calculates_preheat_but_does_not_control_by_default(
 
 
 @pytest.mark.asyncio
-async def test_controller_applies_target_only_after_explicit_activation(
+async def test_controller_switch_enables_real_ha_service_call(
     hass, enable_custom_integrations
 ):
-    """The coordinator issues a Home Assistant service call only when enabled."""
+    """Calling the exposed HA switch enables target writes."""
     _set_up_test_entities(hass)
-    _, coordinator = await _setup_integration(hass)
-
-    service_call = AsyncMock()
-    with patch.object(hass.services, "async_call", service_call):
-        coordinator.enabled = True
-        await coordinator.async_refresh()
-
-    service_call.assert_awaited_once_with(
-        "climate",
-        "set_temperature",
-        {"entity_id": "climate.living_room", "temperature": 21.0},
-        blocking=True,
+    entry, coordinator = await _setup_integration(hass)
+    registry = er.async_get(hass)
+    switch_entity_id = registry.async_get_entity_id(
+        "switch", DOMAIN, f"{entry.entry_id}_enabled"
     )
+    assert switch_entity_id is not None
+
+    calls = []
+    original_call = hass.services.async_call
+
+    async def record_climate_calls(domain, service, service_data=None, *args, **kwargs):
+        if domain == "climate" and service == "set_temperature":
+            calls.append((domain, service, service_data))
+            return None
+        return await original_call(domain, service, service_data, *args, **kwargs)
+
+    with patch.object(hass.services, "async_call", record_climate_calls):
+        await hass.services.async_call(
+            "switch",
+            "turn_on",
+            {"entity_id": switch_entity_id},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+    assert coordinator.enabled is True
+    assert calls == [
+        (
+            "climate",
+            "set_temperature",
+            {"entity_id": "climate.living_room", "temperature": 21.0},
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -137,3 +158,22 @@ async def test_open_window_overrides_schedule_preheat(
         {"entity_id": "climate.living_room", "temperature": 18.0},
         blocking=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_unavailable_room_sensor_prevents_control(
+    hass, enable_custom_integrations
+):
+    """Bad sensor readings must never result in a temperature service call."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    hass.states.async_set("sensor.living_room_temperature", "unavailable")
+
+    service_call = AsyncMock()
+    with patch.object(hass.services, "async_call", service_call):
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    service_call.assert_not_awaited()
+    assert coordinator.data["target_temperature"] is None
+    assert coordinator.data["mode"] == "waiting"
