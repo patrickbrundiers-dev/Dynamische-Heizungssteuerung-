@@ -44,10 +44,13 @@ from .const import (
 
 
 def _duration_selector() -> selector.DurationSelector:
-    """Use Home Assistant's hours/minutes/seconds duration input."""
-    return selector.DurationSelector(
-        selector.DurationSelectorConfig(enable_second=True)
-    )
+    """Use Home Assistant's hours/minutes/seconds duration input.
+
+    Seconds are enabled by default in Home Assistant's DurationSelector. Do not
+    pass optional selector configuration here to remain compatible with Core
+    releases whose selector config schema differs.
+    """
+    return selector.DurationSelector()
 
 
 def _duration_to_seconds(value: object) -> int:
