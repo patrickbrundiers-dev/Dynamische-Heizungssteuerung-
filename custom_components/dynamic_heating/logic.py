@@ -17,6 +17,8 @@ class HeatingDecision:
     target_temperature: float | None
     preheat_minutes: int
     projected_temperature: float | None = None
+    forecast_condition: str | None = None
+    solar_adjustment_minutes: int = 0
 
 
 def calculate_lead_minutes(
@@ -58,6 +60,7 @@ def decide_heating_target(
     heating_rate_c_per_hour: float,
     max_preheat_minutes: int,
     cooling_rate_c_per_hour: float = 0.0,
+    forecast_condition: str | None = None,
     window_open: bool = False,
     present: bool = True,
 ) -> HeatingDecision:
@@ -105,6 +108,16 @@ def decide_heating_target(
         max_preheat_minutes,
     )
 
+    solar_adjustment = 0
+    if (
+        next_event is not None
+        and minutes_until_event is not None
+        and minutes_until_event <= lead
+    ):
+        lead, solar_adjustment = apply_forecast_solar_adjustment(
+            lead, forecast_condition, next_event
+        )
+
     if minutes_until_event is not None:
         should_preheat = (
             minutes_until_event > 0
@@ -118,6 +131,8 @@ def decide_heating_target(
                 comfort_temperature,
                 lead,
                 projected_temperature,
+                forecast_condition,
+                solar_adjustment,
             )
 
     return HeatingDecision(
@@ -126,4 +141,72 @@ def decide_heating_target(
         eco_temperature,
         lead,
         projected_temperature,
+        forecast_condition,
+        solar_adjustment,
     )
+
+
+
+def select_forecast_condition(
+    forecast: list[dict], target_time: datetime | None, now: datetime
+) -> str | None:
+    """Select the nearest forecast condition to the next target time."""
+    wanted = target_time if target_time is not None and target_time > now else now
+    nearest_condition: str | None = None
+    nearest_delta: float | None = None
+
+    for item in forecast:
+        raw_datetime = item.get("datetime")
+        condition = item.get("condition")
+        if not isinstance(raw_datetime, str) or not isinstance(condition, str):
+            continue
+        try:
+            forecast_time = datetime.fromisoformat(
+                raw_datetime.replace("Z", "+00:00")
+            )
+        except ValueError:
+            continue
+
+        comparison_time = wanted
+        if forecast_time.tzinfo is None and comparison_time.tzinfo is not None:
+            forecast_time = forecast_time.replace(tzinfo=comparison_time.tzinfo)
+        elif forecast_time.tzinfo is not None and comparison_time.tzinfo is None:
+            comparison_time = comparison_time.replace(tzinfo=forecast_time.tzinfo)
+
+        delta = abs((forecast_time - comparison_time).total_seconds())
+        if nearest_delta is None or delta < nearest_delta:
+            nearest_delta = delta
+            nearest_condition = condition.lower().replace("_", "")
+
+    # Do not trust stale or distant forecast points for a control decision.
+    if nearest_delta is None or nearest_delta > 90 * 60:
+        return None
+    return nearest_condition
+
+
+def apply_forecast_solar_adjustment(
+    lead_minutes: int,
+    forecast_condition: str | None,
+    target_time: datetime | None,
+) -> tuple[int, int]:
+    """Conservatively reduce the lead only for sunny daytime forecast points.
+
+    This is a transparent heuristic rather than a room-specific solar model.
+    The maximum reduction is capped at 15 minutes.
+    """
+    if lead_minutes <= 0 or target_time is None:
+        return lead_minutes, 0
+    if not 8 <= target_time.hour < 17:
+        return lead_minutes, 0
+
+    condition = (forecast_condition or "").lower().replace("_", "")
+    if condition == "sunny":
+        factor = 0.15
+    elif condition == "partlycloudy":
+        factor = 0.08
+    else:
+        return lead_minutes, 0
+
+    reduction = min(15, round(lead_minutes * factor))
+    adjusted = max(0, lead_minutes - reduction)
+    return adjusted, lead_minutes - adjusted
