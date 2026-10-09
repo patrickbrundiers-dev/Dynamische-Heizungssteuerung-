@@ -9,7 +9,7 @@ Eine vorausschauende, lernfähige Heizungsregelung als eigene Home-Assistant-Int
 - Nutzt den nächsten Zustandswechsel des Zeitplans, um bei Bedarf vor dem Komfortzeitraum vorzuheizen.
 - Lernt während tatsächlicher Heizphasen die Aufheizrate und während stabiler Absenkphasen eine Abkühlrate. Beide Werte werden begrenzt, lokal gespeichert und über Neustarts erhalten.
 - Berücksichtigt die gelernte Abkühlrate in der Prognose für den Beginn des nächsten Komfortzeitraums. Die Prognose fällt nicht unter die aktuelle Temperatur, wenn der Raum bereits kälter als die Absenktemperatur ist, und sonst nicht unter den konfigurierten Absenkwert.
-- Berücksichtigt optional Fensterkontakt, Anwesenheit, Außentemperatur und eine Wetter-Entität. Stündliche Wetterprognosen werden höchstens alle 30 Minuten abgerufen; bei sonnigen Tagesprognosen kann die Vorheizzeit um bis zu 15 Minuten sinken. Bei fehlender oder ungültiger Prognose bleibt die normale Berechnung erhalten.
+- Berücksichtigt optional Fensterkontakt, Personen-/Geräte-Tracker, Gastmodus, Präsenzsensor samt Zeitplan und Reaktionszeiten, Proximity/Geo-Fencing, Außentemperatur und Wetter-Entität. Ankunfts-/Abwesenheitsverzögerungen und Entfernungsschwelle sind pro Raum konfigurierbar. Stündliche Wetterprognosen werden höchstens alle 30 Minuten abgerufen; bei sonnigen Tagesprognosen kann die Vorheizzeit um bis zu 15 Minuten sinken. Bei fehlender oder ungültiger Prognose bleibt die normale Berechnung erhalten.
 - Stellt Status, Raum-/Außentemperatur, berechnete Solltemperatur, aktuellen Thermostat-Sollwert, prognostizierte Temperatur, Wetterbedingung, Sonnenkorrektur, Vorheizzeit sowie gelernte Aufheiz- und Abkühlraten als Sensoren bereit. Der Statussensor enthält Diagnoseattribute zur letzten Entscheidung.
 - Unterstützt Home-Assistant-Diagnosedaten; konfigurierte Entity-IDs werden beim Export redigiert.
 - Hat einen **separaten Aktivierungsschalter**. Nach der Installation bleibt die Regelung zunächst ausgeschaltet; solange sie ausgeschaltet ist, werden keine Thermostat-Sollwerte verändert.
@@ -33,7 +33,7 @@ Alternativ manuell:
 2. Den Ordner custom_components/dynamic_heating nach <config>/custom_components/dynamic_heating/ kopieren.
 3. Home Assistant neu starten.
 4. Unter **Einstellungen → Geräte & Dienste → Integration hinzufügen** nach **Dynamische Heizungssteuerung** suchen.
-5. Thermostat, Raumtemperatursensor und Schedule-Helfer auswählen. Fenster-, Anwesenheits-, Außen- und Wetter-Entität sind optional. Eine Wetter-Entität lässt sich auch später über Einstellungen → Geräte & Dienste → Dynamische Heizungssteuerung → Konfigurieren setzen.
+5. Thermostat, Raumtemperatursensor und Schedule-Helfer auswählen. Fenster-, Anwesenheits-, Personen-/Geräte-Tracker-, Gastmodus-, Proximity-, Präsenzzeitplan-, Außen- und Wetter-Entitäten sind optional. Bei Geo-Fencing müssen die Entfernungsangaben zur Einheit der gewählten Proximity-Entität passen. Eine Wetter-Entität lässt sich auch später über Einstellungen → Geräte & Dienste → Dynamische Heizungssteuerung → Konfigurieren setzen.
 6. Im Schedule-Helfer alle gewünschten Komfort-Zeitfenster pro Wochentag konfigurieren. Komfort- und Absenktemperatur werden pro Regler eingestellt.
 7. Zuerst die Status-, Temperatur- und Prognosesensoren beobachten. Den Schalter **Regelung aktiv** erst einschalten, wenn die Prognose plausibel ist und AHC das Thermostat nicht mehr steuert.
 
@@ -98,3 +98,12 @@ Ein Lovelace-Beispiel liegt unter dashboards/dynamic_heating.yaml. Es enthält e
 Nach der Erstellung eines Raums kannst du über **Einstellungen → Geräte & Dienste → Dynamische Heizungssteuerung → Konfigurieren** den vollständigen Editor öffnen und Thermostat, Temperaturfühler, Schedule, Komfort-/Absenktemperaturen, maximale Vorheizzeit sowie optionale Sensoren ändern. Die Wetter-Entität kann dort ebenfalls hinzugefügt oder entfernt werden. Es werden stündliche Vorhersagen höchstens alle 30 Minuten geladen, damit die Integration nicht jede Minute einen Wetterabruf auslöst. Nur ein zeitlich passender Forecast-Punkt mit den Bedingungen sunny oder partlycloudy zwischen 08:00 und vor 17:00 Uhr kann die geschätzte Vorheizzeit reduzieren. Der maximale Einfluss ist auf 15 Minuten begrenzt. Wolkige, nächtliche, fehlende oder veraltete Prognosen verändern die Vorheizzeit nicht.
 
 Das ist bewusst eine konservative Heuristik und keine echte Strahlungs- oder Raumwärmesimulation. Bei Räumen mit wenig direkter Sonne kann sie den Einfluss überschätzen. Beobachte die Empfehlung erst bei ausgeschalteter Regelung und aktiviere sie nur, wenn sie zu deinem Raum passt.
+
+
+### Personen, Präsenz und Geo-Fencing (Version 0.3.3)
+
+- **Personen / Geräte-Tracker:** Komfortbetrieb gilt, wenn mindestens eine konfigurierte Person bzw. ein Tracker zu Hause ist. Ankunfts- und Abwesenheitswartezeit schützen vor kurzen Statuswechseln.
+- **Gastmodus:** Eine eingeschaltete Gast-Entität zählt als Anwesenheit.
+- **Präsenzsensor:** Optional mit eigenem Zeitplan sowie getrennten Reaktionszeiten für EIN und AUS. Ist der Präsenzzeitplan ausgeschaltet, wird der Präsenzsensor für die Entscheidung ignoriert.
+- **Proximity:** Eine Proximity-Entität kann als alternative Anwesenheitsquelle dienen, wenn sie „home“ meldet oder sich in Richtung Zuhause innerhalb der eingestellten Entfernung bewegt. Die Entfernung wird in der Einheit der Proximity-Entität angegeben.
+- **Sicherheit:** Ist eine konfigurierte erforderliche Entität nicht verfügbar, wird kein neuer Thermostat-Sollwert gesetzt. Alle neuen Funktionen sind optional; Präsenz-Reaktionszeiten sind für Bestandsräume standardmäßig 0, damit sie sich nicht unerwartet anders verhalten.
