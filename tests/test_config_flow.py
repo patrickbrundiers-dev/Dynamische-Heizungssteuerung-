@@ -116,10 +116,7 @@ async def test_editor_saves_room_temperature_and_schedule_changes(
         "schedule_entity": "schedule.bedroom_comfort",
         "comfort_temperature": 22.0,
         "eco_temperature": 17.0,
-        "window_entity": "",
-        "presence_entity": "",
-        "outdoor_temperature_entity": "",
-        "weather_entity": "",
+        # Empty optional selectors are omitted by Home Assistant's form.
     }
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], user_input=edited

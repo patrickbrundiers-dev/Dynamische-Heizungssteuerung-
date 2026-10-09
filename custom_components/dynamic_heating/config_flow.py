@@ -200,7 +200,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                     CONF_OUTDOOR_TEMPERATURE_ENTITY,
                     CONF_WEATHER_ENTITY,
                 ):
-                    options[key] = user_input.get(key, "")
+                    options[key] = user_input.get(key) or None
 
                 if climate_entity != self.config_entry.unique_id:
                     self.hass.config_entries.async_update_entry(
