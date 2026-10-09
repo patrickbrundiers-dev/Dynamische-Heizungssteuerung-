@@ -15,8 +15,12 @@ def test_lead_time_is_bounded_and_accounts_for_temperature_gap() -> None:
 
 
 def test_cold_outdoor_temperature_does_not_reduce_lead_time() -> None:
-    mild = calculate_lead_minutes(18.0, 21.0, 1.0, outdoor_temperature=15.0)
-    cold = calculate_lead_minutes(18.0, 21.0, 1.0, outdoor_temperature=-5.0)
+    mild = calculate_lead_minutes(
+        18.0, 21.0, 1.0, outdoor_temperature=15.0, max_preheat_minutes=300
+    )
+    cold = calculate_lead_minutes(
+        18.0, 21.0, 1.0, outdoor_temperature=-5.0, max_preheat_minutes=300
+    )
     assert cold > mild
 
 
@@ -73,6 +77,23 @@ def test_heating_starts_early_when_schedule_event_is_near() -> None:
     assert decision.mode == "preheat"
     assert decision.target_temperature == 21.0
     assert decision.preheat_minutes >= 30
+
+
+def test_active_schedule_uses_comfort_temperature() -> None:
+    now = datetime.now(UTC)
+    decision = decide_heating_target(
+        now=now,
+        schedule_active=True,
+        next_event=now + timedelta(hours=1),
+        room_temperature=18.5,
+        outdoor_temperature=4.0,
+        comfort_temperature=21.0,
+        eco_temperature=18.0,
+        heating_rate_c_per_hour=1.0,
+        max_preheat_minutes=120,
+    )
+    assert decision.mode == "comfort"
+    assert decision.target_temperature == 21.0
 
 
 def test_no_preheat_too_early_or_when_target_already_reached() -> None:
