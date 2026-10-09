@@ -41,14 +41,14 @@
           "comfort_temperature": "Comfort temperature (°C)",
           "eco_temperature": "Setback temperature (°C)",
           "max_preheat_minutes": "Maximum preheating time (minutes)"
-        },
-        "errors": {
-          "eco_must_be_below_comfort": "The setback temperature must be lower than the comfort temperature."
-        },
-        "abort": {
-          "already_configured": "This thermostat is already assigned to another heating controller."
         }
       }
+    },
+    "error": {
+      "eco_must_be_below_comfort": "The setback temperature must be lower than the comfort temperature."
+    },
+    "abort": {
+      "already_configured": "This thermostat is already assigned to another heating controller."
     }
   }
 }

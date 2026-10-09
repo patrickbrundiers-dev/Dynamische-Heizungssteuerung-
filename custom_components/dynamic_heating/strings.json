@@ -41,14 +41,14 @@
           "comfort_temperature": "Komforttemperatur (°C)",
           "eco_temperature": "Absenktemperatur (°C)",
           "max_preheat_minutes": "Maximale Vorheizzeit (Minuten)"
-        },
-        "errors": {
-          "eco_must_be_below_comfort": "Die Absenktemperatur muss unter der Komforttemperatur liegen."
-        },
-        "abort": {
-          "already_configured": "Dieses Thermostat wird bereits von einer anderen Heizungsregelung verwendet."
         }
       }
+    },
+    "error": {
+      "eco_must_be_below_comfort": "Die Absenktemperatur muss unter der Komforttemperatur liegen."
+    },
+    "abort": {
+      "already_configured": "Dieses Thermostat wird bereits von einer anderen Heizungsregelung verwendet."
     }
   }
 }
