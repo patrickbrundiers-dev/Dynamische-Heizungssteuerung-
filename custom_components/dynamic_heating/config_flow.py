@@ -80,7 +80,7 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry: ConfigEntry):
         """Allow existing entries to configure an optional weather entity."""
-        return DynamicHeatingOptionsFlow(config_entry)
+        return DynamicHeatingOptionsFlow()
 
     async def async_step_user(self, user_input=None):
         """Handle the initial setup form."""
@@ -103,11 +103,8 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 
-class DynamicHeatingOptionsFlow(config_entries.OptionsFlow):
+class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
     """Configure an optional weather forecast without recreating the entry."""
-
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        self.config_entry = config_entry
 
     async def async_step_init(self, user_input=None):
         """Manage the optional weather entity."""
