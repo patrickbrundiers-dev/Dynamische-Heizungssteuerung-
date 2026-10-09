@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -56,9 +57,23 @@ SENSORS = (
         state_class=SensorStateClass.MEASUREMENT,
     ),
     HeatingSensorDescription(
+        key="projected_temperature",
+        name="Prognostizierte Raumtemperatur",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
         key="heating_rate",
         name="Gelernte Aufheizrate",
         icon="mdi:chart-line",
+        native_unit_of_measurement="°C/h",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="cooling_rate",
+        name="Gelernte Abkühlrate",
+        icon="mdi:chart-bell-curve",
         native_unit_of_measurement="°C/h",
         state_class=SensorStateClass.MEASUREMENT,
     ),
@@ -112,3 +127,28 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
         if not self.coordinator.data:
             return None
         return self.coordinator.data.get(self.entity_description.key)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose decision context on the status sensor for easier troubleshooting."""
+        if self.entity_description.key != "status" or not self.coordinator.data:
+            return None
+
+        diagnostic_keys = (
+            "mode",
+            "enabled",
+            "schedule_active",
+            "next_event",
+            "window_open",
+            "present",
+            "preheat_minutes",
+            "heating_rate",
+            "cooling_rate",
+            "projected_temperature",
+            "target_temperature",
+        )
+        return {
+            key: self.coordinator.data[key]
+            for key in diagnostic_keys
+            if key in self.coordinator.data
+        }
