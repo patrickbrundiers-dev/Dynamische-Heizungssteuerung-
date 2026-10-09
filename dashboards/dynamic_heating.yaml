@@ -70,6 +70,15 @@ views:
             name: Erkannte Anfahrten
           - entity: sensor.dynamische_heizungssteuerung_bestaetigte_anfahrten
             name: Bestätigte Anfahrten
+      - type: history-graph
+        title: Standortaktualität und Update-Intervall (7 Tage)
+        hours_to_show: 168
+        refresh_interval: 300
+        entities:
+          - entity: sensor.dynamische_heizungssteuerung_alter_der_standortdaten
+            name: Alter des aktuellen Werts (s)
+          - entity: sensor.dynamische_heizungssteuerung_mittleres_standortupdate_intervall
+            name: Durchschnittliches Update-Intervall (s)
       - type: markdown
         title: Geo-Fencing richtig einstellen
         content: >-
@@ -145,6 +154,24 @@ views:
             name: Prognose
           - entity: sensor.dynamische_heizungssteuerung_letzte_tatsachliche_komforttemperatur
             name: Tatsächlich
+      - type: history-graph
+        title: Lernraten im Verlauf (30 Tage)
+        hours_to_show: 720
+        refresh_interval: 600
+        entities:
+          - entity: sensor.dynamische_heizungssteuerung_gelernte_aufheizrate
+            name: Aufheizrate (°C/h)
+          - entity: sensor.dynamische_heizungssteuerung_gelernte_abkuhlrate
+            name: Abkühlrate (°C/h)
+      - type: history-graph
+        title: Prognosequalität im Verlauf (30 Tage)
+        hours_to_show: 720
+        refresh_interval: 600
+        entities:
+          - entity: sensor.dynamische_heizungssteuerung_mittlerer_prognosefehler
+            name: MAE (°C)
+          - entity: sensor.dynamische_heizungssteuerung_letzter_prognosefehler
+            name: Letzter Fehler (°C)
       - type: markdown
         title: Wann die Lernqualität bewerten?
         content: >-
