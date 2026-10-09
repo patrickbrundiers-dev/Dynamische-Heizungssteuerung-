@@ -154,19 +154,25 @@ views:
             name: Prognose
           - entity: sensor.dynamische_heizungssteuerung_letzte_tatsachliche_komforttemperatur
             name: Tatsächlich
-      - type: history-graph
+      - type: statistics-graph
         title: Lernraten im Verlauf (30 Tage)
-        hours_to_show: 720
-        refresh_interval: 600
+        chart_type: line
+        period: day
+        days_to_show: 30
+        stat_types:
+          - mean
         entities:
           - entity: sensor.dynamische_heizungssteuerung_gelernte_aufheizrate
             name: Aufheizrate (°C/h)
           - entity: sensor.dynamische_heizungssteuerung_gelernte_abkuhlrate
             name: Abkühlrate (°C/h)
-      - type: history-graph
+      - type: statistics-graph
         title: Prognosequalität im Verlauf (30 Tage)
-        hours_to_show: 720
-        refresh_interval: 600
+        chart_type: line
+        period: day
+        days_to_show: 30
+        stat_types:
+          - mean
         entities:
           - entity: sensor.dynamische_heizungssteuerung_mittlerer_prognosefehler
             name: MAE (°C)
