@@ -9,8 +9,8 @@ Eine vorausschauende, lernfähige Heizungsregelung als eigene Home-Assistant-Int
 - Nutzt den nächsten Zustandswechsel des Zeitplans, um bei Bedarf vor dem Komfortzeitraum vorzuheizen.
 - Lernt während tatsächlicher Heizphasen die Aufheizrate und während stabiler Absenkphasen eine Abkühlrate. Beide Werte werden begrenzt, lokal gespeichert und über Neustarts erhalten.
 - Berücksichtigt die gelernte Abkühlrate in der Prognose für den Beginn des nächsten Komfortzeitraums. Die Prognose fällt nicht unter die aktuelle Temperatur, wenn der Raum bereits kälter als die Absenktemperatur ist, und sonst nicht unter den konfigurierten Absenkwert.
-- Berücksichtigt optional Fensterkontakt, Anwesenheit und Außentemperatur.
-- Stellt Status, Raum-/Außentemperatur, Solltemperatur, prognostizierte Temperatur, Vorheizzeit sowie gelernte Aufheiz- und Abkühlraten als Sensoren bereit. Der Statussensor enthält Diagnoseattribute zur letzten Entscheidung.
+- Berücksichtigt optional Fensterkontakt, Anwesenheit, Außentemperatur und eine Wetter-Entität. Stündliche Wetterprognosen werden höchstens alle 30 Minuten abgerufen; bei sonnigen Tagesprognosen kann die Vorheizzeit um bis zu 15 Minuten sinken. Bei fehlender oder ungültiger Prognose bleibt die normale Berechnung erhalten.
+- Stellt Status, Raum-/Außentemperatur, berechnete Solltemperatur, aktuellen Thermostat-Sollwert, prognostizierte Temperatur, Wetterbedingung, Sonnenkorrektur, Vorheizzeit sowie gelernte Aufheiz- und Abkühlraten als Sensoren bereit. Der Statussensor enthält Diagnoseattribute zur letzten Entscheidung.
 - Unterstützt Home-Assistant-Diagnosedaten; konfigurierte Entity-IDs werden beim Export redigiert.
 - Hat einen **separaten Aktivierungsschalter**. Nach der Installation bleibt die Regelung zunächst ausgeschaltet; solange sie ausgeschaltet ist, werden keine Thermostat-Sollwerte verändert.
 
@@ -32,7 +32,7 @@ Alternativ manuell:
 2. Den Ordner custom_components/dynamic_heating nach <config>/custom_components/dynamic_heating/ kopieren.
 3. Home Assistant neu starten.
 4. Unter **Einstellungen → Geräte & Dienste → Integration hinzufügen** nach **Dynamische Heizungssteuerung** suchen.
-5. Thermostat, Raumtemperatursensor und Schedule-Helfer auswählen. Fenster-, Anwesenheits- und Außentemperatursensor sind optional.
+5. Thermostat, Raumtemperatursensor und Schedule-Helfer auswählen. Fenster-, Anwesenheits-, Außen- und Wetter-Entität sind optional. Eine Wetter-Entität lässt sich auch später über Einstellungen → Geräte & Dienste → Dynamische Heizungssteuerung → Konfigurieren setzen.
 6. Im Schedule-Helfer alle gewünschten Komfort-Zeitfenster pro Wochentag konfigurieren. Komfort- und Absenktemperatur werden pro Regler eingestellt.
 7. Zuerst die Status-, Temperatur- und Prognosesensoren beobachten. Den Schalter **Regelung aktiv** erst einschalten, wenn die Prognose plausibel ist und AHC das Thermostat nicht mehr steuert.
 
@@ -50,7 +50,7 @@ Für den ersten Raum sollten zunächst die folgenden Werte beobachtet werden:
 
 - **Status** und dessen Attribute mode, enabled, schedule_active, next_event und preheat_minutes.
 - **Berechnete Solltemperatur** im Vergleich zum aktuell am Thermostat gesetzten Sollwert.
-- **Prognostizierte Raumtemperatur** und **Gelernte Abkühlrate**.
+- **Prognostizierte Raumtemperatur**, **Gelernte Abkühlrate**, **Wetterprognose** und **Sonnenkorrektur Vorheizzeit**.
 - **Fenster-/Anwesenheitszustand**, falls diese optionalen Sensoren eingerichtet sind.
 
 Wenn etwas nicht plausibel aussieht, bitte nicht sofort den Regler aktivieren. Die Diagnoseattribute zeigen zuerst, warum die Integration Komfort-, Absenk- oder Vorheizbetrieb gewählt hat.
@@ -86,3 +86,14 @@ ruff check .
 2. Dashboard-Ansicht mit Historie und Vergleich zur bisherigen Referenzregelung.
 
 Lizenz: MIT.
+
+
+## Dashboard mit Verlauf und Sollwertvergleich
+
+Ein Lovelace-Beispiel liegt unter dashboards/dynamic_heating.yaml. Es enthält einen Statusbereich, einen 24-Stunden-Verlauf sowie einen 7-Tage-Verlauf der Lernraten. Ersetze vor der Nutzung die Beispiel-Entity-IDs mit den IDs aus Einstellungen → Geräte & Dienste → Entitäten. Die Kurve für den aktuellen Thermostat-Sollwert dient als Referenz, während die dynamische Regelung noch ausgeschaltet ist; so lässt sich die Empfehlung zunächst beobachten, ohne zwei Regler gleichzeitig auf dasselbe Thermostat wirken zu lassen.
+
+### Wetterprognose und Sonneneinfluss
+
+Die Wetter-Entität kann beim Einrichten ausgewählt oder später über den Konfigurationsdialog hinzugefügt bzw. entfernt werden. Es werden stündliche Vorhersagen höchstens alle 30 Minuten geladen, damit die Integration nicht jede Minute einen Wetterabruf auslöst. Nur ein zeitlich passender Forecast-Punkt mit den Bedingungen sunny oder partlycloudy zwischen 08:00 und vor 17:00 Uhr kann die geschätzte Vorheizzeit reduzieren. Der maximale Einfluss ist auf 15 Minuten begrenzt. Wolkige, nächtliche, fehlende oder veraltete Prognosen verändern die Vorheizzeit nicht.
+
+Das ist bewusst eine konservative Heuristik und keine echte Strahlungs- oder Raumwärmesimulation. Bei Räumen mit wenig direkter Sonne kann sie den Einfluss überschätzen. Beobachte die Empfehlung erst bei ausgeschalteter Regelung und aktiviere sie nur, wenn sie zu deinem Raum passt.
