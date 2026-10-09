@@ -13,7 +13,17 @@ Eine vorausschauende, lernfähige Heizungsregelung als eigene Home-Assistant-Int
 
 > **Wichtig:** Advanced Heating Control (AHC) und diese Integration dürfen nicht gleichzeitig dasselbe Thermostat steuern. Teste zunächst mit ausgeschalteter Regelung. Vor dem Aktivieren muss AHC für das betreffende Thermostat deaktiviert sein.
 
-## Installation
+## Installation über HACS
+
+Derzeit ist das Repository für die manuelle Installation als **benutzerdefiniertes HACS-Repository** vorgesehen; es ist nicht automatisch Teil der offiziellen HACS-Standardliste.
+
+1. In Home Assistant **HACS → Integrationen** öffnen.
+2. Über das Drei-Punkte-Menü **Benutzerdefinierte Repositories** wählen.
+3. `https://github.com/patrickbrundiers-dev/Dynamische-Heizungssteuerung-` als Repository eintragen und als Kategorie **Integration** auswählen.
+4. Hinzufügen, **Dynamische Heizungssteuerung** suchen und installieren.
+5. Home Assistant neu starten und anschließend unter **Einstellungen → Geräte & Dienste → Integration hinzufügen** einrichten.
+
+Alternativ manuell:
 
 1. Home Assistant sichern.
 2. Den Ordner `custom_components/dynamic_heating` nach `<config>/custom_components/dynamic_heating/` kopieren.
@@ -22,6 +32,8 @@ Eine vorausschauende, lernfähige Heizungsregelung als eigene Home-Assistant-Int
 5. Thermostat, Raumtemperatursensor und Schedule-Helfer auswählen. Fenster-, Anwesenheits- und Außentemperatursensor sind optional.
 6. Prüfen, dass der Schedule-Helfer die Komfortzeiten korrekt abbildet. Wenn der Zeitplan ausgeschaltet ist, dient sein Attribut `next_event` als Grundlage für das vorausschauende Vorheizen.
 7. Zuerst die angezeigten Status- und Prognosesensoren beobachten. Den Schalter **Regelung aktiv** erst einschalten, wenn die Vorhersage plausibel ist und AHC das Thermostat nicht mehr steuert.
+
+Die Regelung wird nach einem Home-Assistant-Neustart aus Sicherheitsgründen wieder deaktiviert und muss bewusst erneut eingeschaltet werden. Das ist beabsichtigt, damit ein Update oder Neustart nicht unbemerkt eine Regelung aktiviert.
 
 ### Temperaturwerte
 
