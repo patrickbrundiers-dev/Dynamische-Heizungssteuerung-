@@ -64,7 +64,7 @@ views:
             name: Veraltete Standortphasen
           - entity: sensor.dynamische_heizungssteuerung_ungueltige_standortereignisse
             name: Ungültige Standortphasen
-          - entity: sensor.dynamische_heizungssteuerung_ausserhalb_der_anfahrsentfernung
+          - entity: sensor.dynamische_heizungssteuerung_ausserhalb_der_anfahrtsentfernung
             name: Außerhalb des Anfahrtsradius
           - entity: sensor.dynamische_heizungssteuerung_erkannte_anfahrten
             name: Erkannte Anfahrten
