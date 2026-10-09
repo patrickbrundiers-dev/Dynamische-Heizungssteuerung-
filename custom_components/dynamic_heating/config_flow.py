@@ -43,6 +43,47 @@ from .const import (
 )
 
 
+def _duration_selector() -> selector.DurationSelector:
+    """Use Home Assistant's hours/minutes/seconds duration input."""
+    return selector.DurationSelector(
+        selector.DurationSelectorConfig(enable_second=True)
+    )
+
+
+def _duration_to_seconds(value: object) -> int:
+    """Convert duration-selector output or a stored number to seconds."""
+    if isinstance(value, dict):
+        return (
+            int(value.get("days", 0) or 0) * 86400
+            + int(value.get("hours", 0) or 0) * 3600
+            + int(value.get("minutes", 0) or 0) * 60
+            + int(value.get("seconds", 0) or 0)
+        )
+    try:
+        return max(0, int(float(value or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _seconds_to_duration(value: object) -> dict[str, int]:
+    """Build a default value for the duration selector from stored seconds."""
+    seconds = _duration_to_seconds(value)
+    return {
+        "hours": seconds // 3600,
+        "minutes": (seconds % 3600) // 60,
+        "seconds": seconds % 60,
+    }
+
+
+_DURATION_OPTIONS = (
+    CONF_ENTER_HOME_DURATION,
+    CONF_LEAVING_HOME_DURATION,
+    CONF_PROXIMITY_DURATION,
+    CONF_PRESENCE_ON_DURATION,
+    CONF_PRESENCE_OFF_DURATION,
+)
+
+
 def _temperature_selector(minimum: float, maximum: float) -> selector.NumberSelector:
     """Create a temperature slider in Celsius."""
     return selector.NumberSelector(
@@ -73,14 +114,14 @@ def _user_schema() -> vol.Schema:
             ),
             vol.Optional(CONF_PERSON_ENTITIES): selector.EntitySelector(selector.EntitySelectorConfig(domain=["person", "device_tracker"], multiple=True)),
             vol.Optional(CONF_GUEST_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])),
-            vol.Optional(CONF_ENTER_HOME_DURATION, default=DEFAULT_ENTER_HOME_DURATION): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=900, step=30, mode="box", unit_of_measurement="s")),
-            vol.Optional(CONF_LEAVING_HOME_DURATION, default=DEFAULT_LEAVING_HOME_DURATION): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=900, step=30, mode="box", unit_of_measurement="s")),
+            vol.Optional(CONF_ENTER_HOME_DURATION, default=_seconds_to_duration(DEFAULT_ENTER_HOME_DURATION)): _duration_selector(),
+            vol.Optional(CONF_LEAVING_HOME_DURATION, default=_seconds_to_duration(DEFAULT_LEAVING_HOME_DURATION)): _duration_selector(),
             vol.Optional(CONF_PROXIMITY_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="proximity")),
-            vol.Optional(CONF_PROXIMITY_DURATION, default=DEFAULT_PROXIMITY_DURATION): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=1800, step=30, mode="box", unit_of_measurement="s")),
+            vol.Optional(CONF_PROXIMITY_DURATION, default=_seconds_to_duration(DEFAULT_PROXIMITY_DURATION)): _duration_selector(),
             vol.Optional(CONF_PROXIMITY_DISTANCE, default=DEFAULT_PROXIMITY_DISTANCE): selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=100000, step=50, mode="box")),
             vol.Optional(CONF_PRESENCE_SCHEDULE_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="schedule")),
-            vol.Optional(CONF_PRESENCE_ON_DURATION, default=DEFAULT_PRESENCE_ON_DURATION): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=3600, step=30, mode="box", unit_of_measurement="s")),
-            vol.Optional(CONF_PRESENCE_OFF_DURATION, default=DEFAULT_PRESENCE_OFF_DURATION): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=3600, step=30, mode="box", unit_of_measurement="s")),
+            vol.Optional(CONF_PRESENCE_ON_DURATION, default=_seconds_to_duration(DEFAULT_PRESENCE_ON_DURATION)): _duration_selector(),
+            vol.Optional(CONF_PRESENCE_OFF_DURATION, default=_seconds_to_duration(DEFAULT_PRESENCE_OFF_DURATION)): _duration_selector(),
             vol.Optional(CONF_OUTDOOR_TEMPERATURE_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
@@ -128,7 +169,11 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "eco_must_be_below_comfort"
             else:
                 title = f"Dynamische Heizung – {climate_entity}"
-                return self.async_create_entry(title=title, data=user_input)
+                data = dict(user_input)
+                for key in _DURATION_OPTIONS:
+                    if key in data:
+                        data[key] = _duration_to_seconds(data[key])
+                return self.async_create_entry(title=title, data=data)
 
         return self.async_show_form(
             step_id="user", data_schema=_user_schema(), errors=errors
@@ -180,12 +225,12 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                     min=15, max=240, step=5, mode="slider"
                 )
             ),
-            vol.Optional(CONF_ENTER_HOME_DURATION, default=int(current.get(CONF_ENTER_HOME_DURATION, DEFAULT_ENTER_HOME_DURATION))): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=900, step=30, mode="box", unit_of_measurement="s")),
-            vol.Optional(CONF_LEAVING_HOME_DURATION, default=int(current.get(CONF_LEAVING_HOME_DURATION, DEFAULT_LEAVING_HOME_DURATION))): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=900, step=30, mode="box", unit_of_measurement="s")),
-            vol.Optional(CONF_PROXIMITY_DURATION, default=int(current.get(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION))): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=1800, step=30, mode="box", unit_of_measurement="s")),
+            vol.Optional(CONF_ENTER_HOME_DURATION, default=_seconds_to_duration(current.get(CONF_ENTER_HOME_DURATION, DEFAULT_ENTER_HOME_DURATION))): _duration_selector(),
+            vol.Optional(CONF_LEAVING_HOME_DURATION, default=_seconds_to_duration(current.get(CONF_LEAVING_HOME_DURATION, DEFAULT_LEAVING_HOME_DURATION))): _duration_selector(),
+            vol.Optional(CONF_PROXIMITY_DURATION, default=_seconds_to_duration(current.get(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION))): _duration_selector(),
             vol.Optional(CONF_PROXIMITY_DISTANCE, default=int(current.get(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE))): selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=100000, step=50, mode="box")),
-            vol.Optional(CONF_PRESENCE_ON_DURATION, default=int(current.get(CONF_PRESENCE_ON_DURATION, DEFAULT_PRESENCE_ON_DURATION))): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=3600, step=30, mode="box", unit_of_measurement="s")),
-            vol.Optional(CONF_PRESENCE_OFF_DURATION, default=int(current.get(CONF_PRESENCE_OFF_DURATION, DEFAULT_PRESENCE_OFF_DURATION))): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=3600, step=30, mode="box", unit_of_measurement="s")),
+            vol.Optional(CONF_PRESENCE_ON_DURATION, default=_seconds_to_duration(current.get(CONF_PRESENCE_ON_DURATION, DEFAULT_PRESENCE_ON_DURATION))): _duration_selector(),
+            vol.Optional(CONF_PRESENCE_OFF_DURATION, default=_seconds_to_duration(current.get(CONF_PRESENCE_OFF_DURATION, DEFAULT_PRESENCE_OFF_DURATION))): _duration_selector(),
         }
 
         optional_entities = (
@@ -230,6 +275,9 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 # Save all editable values as options. Empty optional entity IDs
                 # intentionally override old values so a sensor can be removed.
                 options = dict(user_input)
+                for key in _DURATION_OPTIONS:
+                    if key in options:
+                        options[key] = _duration_to_seconds(options[key])
                 for key in (
                     CONF_WINDOW_ENTITY,
                     CONF_PRESENCE_ENTITY,
