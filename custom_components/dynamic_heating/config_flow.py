@@ -136,7 +136,7 @@ def _user_schema() -> vol.Schema:
                 CONF_PROXIMITY_DISTANCE, default=DEFAULT_PROXIMITY_DISTANCE
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
-                    min=1, max=100000, step=50, mode="box"
+                    min=0, max=100000, step=50, mode="box"
                 )
             ),
             vol.Optional(CONF_PRESENCE_ENTITY): selector.EntitySelector(
