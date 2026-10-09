@@ -31,6 +31,97 @@ def _mock_room(hass, *, options=None):
     entry.add_to_hass(hass)
     return entry
 
+def _duration(seconds: int) -> dict[str, int]:
+    """Build a Home Assistant duration selector value."""
+    return {
+        "hours": seconds // 3600,
+        "minutes": (seconds % 3600) // 60,
+        "seconds": seconds % 60,
+    }
+
+
+async def _finish_editor_flow(
+    hass,
+    entry,
+    *,
+    basic=None,
+    presence=None,
+    geofencing=None,
+    environment=None,
+):
+    """Submit all editor pages, using current settings unless overridden."""
+    values = dict(entry.data)
+    values.update(dict(entry.options))
+    values.update(basic or {})
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    first = {
+        key: values[key]
+        for key in (
+            "climate_entity",
+            "room_temperature_entity",
+            "schedule_entity",
+            "comfort_temperature",
+            "eco_temperature",
+            "max_preheat_minutes",
+        )
+    }
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=first
+    )
+    assert result["step_id"] == "presence"
+
+    presence_keys = (
+        "person_entities", "guest_entity", "presence_entity",
+        "presence_schedule_entity",
+    )
+    presence_input = {
+        key: values[key] for key in presence_keys if values.get(key)
+    }
+    presence_input.update({
+        "enter_home_duration": _duration(values.get("enter_home_duration", 2)),
+        "leaving_home_duration": _duration(values.get("leaving_home_duration", 2)),
+        "presence_on_duration": _duration(values.get("presence_on_duration", 300)),
+        "presence_off_duration": _duration(values.get("presence_off_duration", 1200)),
+    })
+    for key, value in (presence or {}).items():
+        if value is None:
+            presence_input.pop(key, None)
+        else:
+            presence_input[key] = value
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=presence_input
+    )
+    assert result["step_id"] == "geofencing"
+
+    geo_keys = ("proximity_entity", "proximity_direction_entity")
+    geo_input = {key: values[key] for key in geo_keys if values.get(key)}
+    geo_input.update({
+        "proximity_distance": values.get("proximity_distance", 500),
+        "proximity_duration": _duration(values.get("proximity_duration", 120)),
+        "proximity_max_age": _duration(values.get("proximity_max_age", 900)),
+    })
+    for key, value in (geofencing or {}).items():
+        if value is None:
+            geo_input.pop(key, None)
+        else:
+            geo_input[key] = value
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=geo_input
+    )
+    assert result["step_id"] == "environment"
+
+    env_keys = ("window_entity", "outdoor_temperature_entity", "weather_entity")
+    env_input = {key: values[key] for key in env_keys if values.get(key)}
+    for key, value in (environment or {}).items():
+        if value is None:
+            env_input.pop(key, None)
+        else:
+            env_input[key] = value
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=env_input
+    )
+
 
 @pytest.mark.asyncio
 async def test_user_flow_creates_entry(hass, enable_custom_integrations):
