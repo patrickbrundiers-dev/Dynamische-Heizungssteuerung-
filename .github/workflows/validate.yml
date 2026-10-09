@@ -21,6 +21,10 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
+          # This repository is intended for manual custom-repository installation.
+          # The topics check is only a repository-metadata/discoverability check;
+          # it is not required for users to add this repository manually in HACS.
+          ignore: topics
 
   hassfest:
     name: Home Assistant integration validation
