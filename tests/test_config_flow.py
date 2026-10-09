@@ -217,8 +217,10 @@ async def test_editor_saves_presence_and_proximity_settings(
         "guest_entity": "input_boolean.guest_mode",
         "enter_home_duration": {"hours": 0, "minutes": 0, "seconds": 2},
         "leaving_home_duration": {"hours": 0, "minutes": 0, "seconds": 2},
-        "proximity_entity": "proximity.home",
+        "proximity_entity": "sensor.home_distance",
+        "proximity_direction_entity": "sensor.home_direction",
         "proximity_duration": {"hours": 0, "minutes": 2, "seconds": 0},
+        "proximity_max_age": {"hours": 0, "minutes": 15, "seconds": 0},
         "proximity_distance": 500,
         "presence_schedule_entity": "schedule.presence_active",
         "presence_on_duration": {"hours": 0, "minutes": 5, "seconds": 0},
@@ -231,7 +233,9 @@ async def test_editor_saves_presence_and_proximity_settings(
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["person_entities"] == ["person.patrick", "person.jenny"]
     assert entry.options["guest_entity"] == "input_boolean.guest_mode"
-    assert entry.options["proximity_entity"] == "proximity.home"
+    assert entry.options["proximity_entity"] == "sensor.home_distance"
+    assert entry.options["proximity_direction_entity"] == "sensor.home_direction"
+    assert entry.options["proximity_max_age"] == 900
     assert entry.options["presence_schedule_entity"] == "schedule.presence_active"
     assert entry.options["enter_home_duration"] == 2
     assert entry.options["leaving_home_duration"] == 2
