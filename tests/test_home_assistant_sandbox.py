@@ -547,3 +547,280 @@ async def test_diagnostics_redact_new_presence_and_location_entities(
     assert config["proximity_entity"] != "proximity.home"
     assert config["presence_schedule_entity"] != "schedule.presence_active"
 
+@pytest.mark.asyncio
+async def test_modern_proximity_sensors_normalize_distance_to_meters(
+    hass, enable_custom_integrations
+):
+    """Modern Proximity exposes separate distance/direction sensors and known units."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["proximity_entity"] = "sensor.home_distance"
+    coordinator.config["proximity_direction_entity"] = "sensor.home_direction"
+    coordinator.config["proximity_distance"] = 500
+    coordinator.config["proximity_duration"] = 0
+    coordinator.config["proximity_max_age"] = 900
+    hass.states.async_set(
+        "sensor.home_distance", "0.3", {"unit_of_measurement": "km"}
+    )
+    hass.states.async_set("sensor.home_direction", "towards")
+
+    await coordinator.async_refresh()
+
+    assert coordinator.data["present"] is True
+    assert coordinator.data["proximity_distance_m"] == pytest.approx(300.0)
+    assert coordinator.data["proximity_direction"] == "towards"
+    assert coordinator.data["proximity_status"] == "Anfahrt bestätigt"
+
+
+@pytest.mark.asyncio
+async def test_stale_proximity_data_prevents_a_new_heating_decision(
+    hass, enable_custom_integrations
+):
+    """Old GPS-derived distance readings fail closed when no local presence is known."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["proximity_entity"] = "sensor.home_distance"
+    coordinator.config["proximity_direction_entity"] = "sensor.home_direction"
+    coordinator.config["proximity_max_age"] = 900
+    hass.states.async_set(
+        "sensor.home_distance", "250", {"unit_of_measurement": "m"}
+    )
+    hass.states.async_set("sensor.home_direction", "towards")
+    future = dt_util.utcnow() + timedelta(minutes=20)
+
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=future,
+    ):
+        with _capture_climate_calls(hass) as calls:
+            coordinator.enabled = True
+            await coordinator.async_refresh()
+
+    assert calls == []
+    assert coordinator.data["mode"] == "waiting"
+    assert "Standortdaten veraltet" in coordinator.data["status"]
+
+
+@pytest.mark.asyncio
+async def test_home_person_tracker_overrides_stale_geofence_data(
+    hass, enable_custom_integrations
+):
+    """Fresh person state at home remains usable if GPS-derived distance went stale."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["person_entities"] = ["person.patrick"]
+    coordinator.config["enter_home_duration"] = 0
+    coordinator.config["proximity_entity"] = "sensor.home_distance"
+    coordinator.config["proximity_direction_entity"] = "sensor.home_direction"
+    coordinator.config["proximity_max_age"] = 900
+    hass.states.async_set("person.patrick", "home")
+    hass.states.async_set(
+        "sensor.home_distance", "0", {"unit_of_measurement": "m"}
+    )
+    hass.states.async_set("sensor.home_direction", "arrived")
+    future = dt_util.utcnow() + timedelta(minutes=20)
+
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=future,
+    ):
+        await coordinator.async_refresh()
+
+    assert coordinator.data["present"] is True
+    assert coordinator.data["mode"] != "waiting"
+    assert "bekannte Anwesenheit hat Vorrang" in coordinator.data["proximity_status"]
+
+
+@pytest.mark.asyncio
+async def test_proximity_direction_change_cancels_approach_timer(
+    hass, enable_custom_integrations
+):
+    """A direction change resets approach debounce even as distance stays in range."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["proximity_entity"] = "sensor.home_distance"
+    coordinator.config["proximity_direction_entity"] = "sensor.home_direction"
+    coordinator.config["proximity_distance"] = 500
+    coordinator.config["proximity_duration"] = 120
+    coordinator.config["proximity_max_age"] = 900
+    start = dt_util.utcnow()
+    hass.states.async_set(
+        "sensor.home_distance", "450", {"unit_of_measurement": "m"}
+    )
+    hass.states.async_set("sensor.home_direction", "towards")
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start,
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+    hass.states.async_set(
+        "sensor.home_distance", "400", {"unit_of_measurement": "m"}
+    )
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=60),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+    hass.states.async_set("sensor.home_direction", "away_from")
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=90),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+    hass.states.async_set("sensor.home_direction", "towards")
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=120),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+    hass.states.async_set(
+        "sensor.home_distance", "350", {"unit_of_measurement": "m"}
+    )
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=240),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+
+
+@pytest.mark.asyncio
+async def test_implausible_heating_sample_is_rejected_not_clamped(
+    hass, enable_custom_integrations
+):
+    """Large rate outliers increase the rejected count without poisoning the model."""
+    _set_up_test_entities(hass, room_temperature="18.0", climate_setpoint=18.0)
+    _, coordinator = await _setup_integration(hass)
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {
+            "temperature": 21.0,
+            "hvac_action": "heating",
+            "min_temp": 7,
+            "max_temp": 28,
+        },
+    )
+    climate = hass.states.get("climate.living_room")
+    start = dt_util.utcnow()
+
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start,
+    ):
+        await coordinator._learn(
+            18.0, climate, window_open=False, present=True,
+            schedule_active=False, eco_temperature=18.0
+        )
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=300),
+    ):
+        await coordinator._learn(
+            20.6, climate, window_open=False, present=True,
+            schedule_active=False, eco_temperature=18.0
+        )
+
+    assert coordinator.heating_rate == pytest.approx(1.0)
+    assert coordinator._heating_samples == 0
+    assert coordinator._rejected_samples == 1
+    assert "unplausibel" in coordinator._last_learning_status
+
+
+@pytest.mark.asyncio
+async def test_plausible_heating_sample_updates_model_and_quality_counters(
+    hass, enable_custom_integrations
+):
+    """Accepted heating observations are bounded, counted and inspectable."""
+    _set_up_test_entities(hass, room_temperature="18.0", climate_setpoint=18.0)
+    _, coordinator = await _setup_integration(hass)
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {
+            "temperature": 21.0,
+            "hvac_action": "heating",
+            "min_temp": 7,
+            "max_temp": 28,
+        },
+    )
+    climate = hass.states.get("climate.living_room")
+    start = dt_util.utcnow()
+
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start,
+    ):
+        await coordinator._learn(
+            18.0, climate, window_open=False, present=True,
+            schedule_active=False, eco_temperature=18.0
+        )
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(hours=1),
+    ):
+        await coordinator._learn(
+            18.5, climate, window_open=False, present=True,
+            schedule_active=False, eco_temperature=18.0
+        )
+
+    assert coordinator.heating_rate == pytest.approx(0.9)
+    assert coordinator._heating_samples == 1
+    assert coordinator._rejected_samples == 0
+    assert coordinator._last_observed_heating_rate == pytest.approx(0.5)
+    assert coordinator._last_learning_status == "Aufheizrate aktualisiert"
+
+
+@pytest.mark.asyncio
+async def test_schedule_forecast_error_and_running_mae_are_recorded(
+    hass, enable_custom_integrations
+):
+    """The model compares projected and actual room temperature at comfort start."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    start = dt_util.utcnow()
+    event = start + timedelta(minutes=30)
+    coordinator._pending_forecast_event = event
+    coordinator._pending_forecast_temperature = 19.0
+
+    await coordinator._evaluate_pending_forecast(
+        now=event + timedelta(seconds=10),
+        room_temperature=19.5,
+        schedule_active=True,
+        present=True,
+        window_open=False,
+    )
+
+    assert coordinator._forecast_evaluations == 1
+    assert coordinator._last_forecast_error_c == pytest.approx(0.5)
+    assert coordinator._forecast_mae_c == pytest.approx(0.5)
+    assert coordinator._last_forecast_predicted_temperature == pytest.approx(19.0)
+    assert coordinator._last_forecast_actual_temperature == pytest.approx(19.5)
+    assert coordinator._pending_forecast_event is None
+
+    coordinator._pending_forecast_event = event + timedelta(days=1)
+    coordinator._pending_forecast_temperature = 20.0
+    await coordinator._evaluate_pending_forecast(
+        now=event + timedelta(days=1, seconds=10),
+        room_temperature=19.0,
+        schedule_active=True,
+        present=True,
+        window_open=False,
+    )
+    assert coordinator._forecast_evaluations == 2
+    assert coordinator._last_forecast_error_c == pytest.approx(-1.0)
+    assert coordinator._forecast_mae_c == pytest.approx(0.75)
+
+
