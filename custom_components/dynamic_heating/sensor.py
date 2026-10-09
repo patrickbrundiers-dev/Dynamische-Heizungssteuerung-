@@ -160,6 +160,7 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "next_event",
             "window_open",
             "present",
+            "presence_status",
             "preheat_minutes",
             "heating_rate",
             "cooling_rate",

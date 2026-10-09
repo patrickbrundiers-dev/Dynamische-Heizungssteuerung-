@@ -10,6 +10,9 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.dynamic_heating.diagnostics import (
+    async_get_config_entry_diagnostics,
+)
 from custom_components.dynamic_heating.const import (
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
@@ -59,6 +62,12 @@ def _config_data():
         CONF_COMFORT_TEMPERATURE: 21.0,
         CONF_ECO_TEMPERATURE: 18.0,
         CONF_MAX_PREHEAT_MINUTES: 120,
+        # Keep legacy integration scenarios independent of debounce timing.
+        "enter_home_duration": 0,
+        "leaving_home_duration": 0,
+        "presence_on_duration": 0,
+        "presence_off_duration": 0,
+        "proximity_duration": 0,
     }
 
 
@@ -343,4 +352,198 @@ async def test_failed_temperature_write_is_reported_and_retried(
     assert climate_calls[1]["temperature"] == 21.0
     assert coordinator.data["control_error"] is False
     assert coordinator.data["status"] == "Vorausschauendes Vorheizen"
+
+
+
+
+@pytest.mark.asyncio
+async def test_person_presence_requires_someone_home_or_guest_mode(
+    hass, enable_custom_integrations
+):
+    """A household person at home or an active guest enables presence."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["person_entities"] = ["person.patrick", "person.jenny"]
+    coordinator.config["enter_home_duration"] = 0
+    coordinator.config["leaving_home_duration"] = 0
+    coordinator.config["presence_entity"] = None
+    hass.states.async_set("person.patrick", "not_home")
+    hass.states.async_set("person.jenny", "not_home")
+
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+    assert coordinator.data["mode"] == "away"
+
+    hass.states.async_set("person.patrick", "home")
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+
+    hass.states.async_set("person.patrick", "not_home")
+    coordinator.config["guest_entity"] = "input_boolean.guest_mode"
+    hass.states.async_set("input_boolean.guest_mode", "on")
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+
+
+@pytest.mark.asyncio
+async def test_proximity_can_trigger_presence_when_approaching_within_distance(
+    hass, enable_custom_integrations
+):
+    """Proximity only counts when the configured zone reports approaching nearby."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["proximity_entity"] = "proximity.home"
+    coordinator.config["proximity_distance"] = 500
+    coordinator.config["proximity_duration"] = 0
+    hass.states.async_set("proximity.home", "300", {"dir_of_travel": "towards"})
+
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+    assert coordinator.data["presence_status"] == "Anwesenheit erkannt"
+
+    hass.states.async_set("proximity.home", "800", {"dir_of_travel": "towards"})
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+
+@pytest.mark.asyncio
+async def test_unavailable_proximity_prevents_thermostat_control(
+    hass, enable_custom_integrations
+):
+    """A configured but unavailable proximity source must fail safe."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["proximity_entity"] = "proximity.home"
+    hass.states.async_set("proximity.home", "unavailable")
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert calls == []
+    assert coordinator.data["mode"] == "waiting"
+    assert "Proximity-Entität nicht verfügbar" in coordinator.data["status"]
+
+@pytest.mark.asyncio
+async def test_proximity_debounce_survives_changing_distance_states(
+    hass, enable_custom_integrations
+):
+    """Distance updates keep the timer; an unavailable gap restarts it."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["proximity_entity"] = "proximity.home"
+    coordinator.config["proximity_distance"] = 500
+    coordinator.config["proximity_duration"] = 120
+    start = dt_util.utcnow()
+
+    hass.states.async_set("proximity.home", "450", {"dir_of_travel": "towards"})
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start,
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+    hass.states.async_set("proximity.home", "380", {"dir_of_travel": "towards"})
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=60),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+    hass.states.async_set("proximity.home", "unavailable")
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=90),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["mode"] == "waiting"
+
+    hass.states.async_set("proximity.home", "320", {"dir_of_travel": "towards"})
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=180),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+    hass.states.async_set("proximity.home", "290", {"dir_of_travel": "towards"})
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=240),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+    hass.states.async_set("proximity.home", "250", {"dir_of_travel": "towards"})
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=300),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+
+    hass.states.async_set("proximity.home", "250", {"dir_of_travel": "away_from"})
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=310),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+@pytest.mark.asyncio
+async def test_presence_sensor_works_standalone_and_schedule_can_disable_it(
+    hass, enable_custom_integrations
+):
+    """A presence sensor can be the sole source; its schedule can suppress motion."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["person_entities"] = []
+    coordinator.config["guest_entity"] = None
+    coordinator.config["proximity_entity"] = None
+    coordinator.config["presence_on_duration"] = 0
+    coordinator.config["presence_off_duration"] = 1200
+    coordinator.config["presence_schedule_entity"] = "schedule.presence_active"
+    hass.states.async_set("schedule.presence_active", "off")
+    hass.states.async_set("binary_sensor.someone_home", "on")
+
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+    assert coordinator.data["mode"] == "away"
+
+    hass.states.async_set("schedule.presence_active", "on")
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+
+    hass.states.async_set("binary_sensor.someone_home", "off")
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+
+@pytest.mark.asyncio
+async def test_diagnostics_redact_new_presence_and_location_entities(
+    hass, enable_custom_integrations
+):
+    """Person, guest, Proximity and presence schedule IDs are sensitive diagnostics."""
+    entry, _ = await _setup_integration(hass)
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            "person_entities": ["person.patrick", "person.jenny"],
+            "guest_entity": "input_boolean.guest_mode",
+            "proximity_entity": "proximity.home",
+            "presence_schedule_entity": "schedule.presence_active",
+        },
+    )
+
+    diagnostics = await async_get_config_entry_diagnostics(hass, entry)
+    config = diagnostics["config"]
+
+    assert config["person_entities"] != ["person.patrick", "person.jenny"]
+    assert config["guest_entity"] != "input_boolean.guest_mode"
+    assert config["proximity_entity"] != "proximity.home"
+    assert config["presence_schedule_entity"] != "schedule.presence_active"
 
