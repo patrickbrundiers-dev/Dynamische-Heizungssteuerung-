@@ -22,3 +22,10 @@ DEFAULT_HEATING_RATE: Final = 1.0
 MIN_LEARNED_HEATING_RATE: Final = 0.2
 MAX_LEARNED_HEATING_RATE: Final = 4.0
 MIN_SAMPLE_SECONDS: Final = 300
+
+# The cooling-rate estimate is deliberately bounded and learned only during
+# stable, closed-window setback periods. It is a forecasting aid, not a promise.
+DEFAULT_COOLING_RATE: Final = 0.3
+MIN_LEARNED_COOLING_RATE: Final = 0.05
+MAX_LEARNED_COOLING_RATE: Final = 2.0
+MIN_COOLING_SAMPLE_SECONDS: Final = 900
