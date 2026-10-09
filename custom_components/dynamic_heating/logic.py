@@ -16,6 +16,7 @@ class HeatingDecision:
     mode: str
     target_temperature: float | None
     preheat_minutes: int
+    projected_temperature: float | None = None
 
 
 def calculate_lead_minutes(
@@ -56,6 +57,7 @@ def decide_heating_target(
     eco_temperature: float,
     heating_rate_c_per_hour: float,
     max_preheat_minutes: int,
+    cooling_rate_c_per_hour: float = 0.0,
     window_open: bool = False,
     present: bool = True,
 ) -> HeatingDecision:
@@ -75,19 +77,37 @@ def decide_heating_target(
             "Komfortbetrieb", "comfort", comfort_temperature, 0
         )
 
+    minutes_until_event: float | None = None
+    projected_temperature: float | None = None
+    if next_event is not None and next_event > now:
+        minutes_until_event = (next_event - now).total_seconds() / 60
+        bounded_cooling_rate = max(0.0, min(float(cooling_rate_c_per_hour), 2.0))
+        expected_cooling = bounded_cooling_rate * minutes_until_event / 60
+
+        # Do not project the room below its current value if it is already
+        # colder than setback, and do not project normal setback operation
+        # below the eco target. This keeps the forecast conservative.
+        lower_bound = min(room_temperature, eco_temperature)
+        projected_temperature = max(
+            lower_bound, room_temperature - expected_cooling
+        )
+
+    temperature_for_lead = (
+        projected_temperature
+        if projected_temperature is not None
+        else room_temperature
+    )
     lead = calculate_lead_minutes(
-        room_temperature,
+        temperature_for_lead,
         comfort_temperature,
         heating_rate_c_per_hour,
         outdoor_temperature,
         max_preheat_minutes,
     )
 
-    if next_event is not None:
-        seconds_until_event = (next_event - now).total_seconds()
-        minutes_until_event = max(0, seconds_until_event / 60)
+    if minutes_until_event is not None:
         should_preheat = (
-            seconds_until_event > 0
+            minutes_until_event > 0
             and minutes_until_event <= lead
             and room_temperature < comfort_temperature - 0.2
         )
@@ -97,8 +117,13 @@ def decide_heating_target(
                 "preheat",
                 comfort_temperature,
                 lead,
+                projected_temperature,
             )
 
     return HeatingDecision(
-        "Energiesparbetrieb", "eco", eco_temperature, lead
+        "Energiesparbetrieb",
+        "eco",
+        eco_temperature,
+        lead,
+        projected_temperature,
     )
