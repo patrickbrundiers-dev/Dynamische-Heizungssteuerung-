@@ -5,7 +5,6 @@ from __future__ import annotations
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
@@ -89,9 +88,3 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user", data_schema=_user_schema(), errors=errors
         )
-
-
-@callback
-def async_get_options_flow(config_entry):
-    """No options flow yet; core values are configured in the initial form."""
-    return config_entries.OptionsFlow(config_entry)
