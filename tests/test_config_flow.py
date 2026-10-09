@@ -54,3 +54,23 @@ async def test_user_flow_rejects_eco_temperature_at_or_above_comfort(
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "eco_must_be_below_comfort"}
     assert not hass.config_entries.async_entries(DOMAIN)
+
+
+
+@pytest.mark.asyncio
+async def test_user_flow_accepts_optional_weather_forecast_entity(
+    hass, enable_custom_integrations
+):
+    """The weather source can be configured without becoming a required input."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    user_input = _valid_input()
+    user_input["weather_entity"] = "weather.home_forecast"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input=user_input
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["weather_entity"] == "weather.home_forecast"
