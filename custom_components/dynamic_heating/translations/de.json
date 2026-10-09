@@ -14,7 +14,17 @@
           "comfort_temperature": "Komforttemperatur (°C)",
           "eco_temperature": "Absenktemperatur (°C)",
           "max_preheat_minutes": "Maximale Vorheizzeit (Minuten)",
-          "weather_entity": "Wettervorhersage-Entität (optional)"
+          "weather_entity": "Wettervorhersage-Entität (optional)",
+          "person_entities": "Personen / Geräte-Tracker (optional)",
+          "guest_entity": "Gastmodus (optional)",
+          "enter_home_duration": "Wartezeit nach Ankunft (Sekunden)",
+          "leaving_home_duration": "Wartezeit nach Verlassen (Sekunden)",
+          "proximity_entity": "Proximity / Geo-Fencing (optional)",
+          "proximity_duration": "Anfahrtsdauer (Sekunden)",
+          "proximity_distance": "Proximity-Entfernung (Einheit der Entität)",
+          "presence_schedule_entity": "Präsenzsensor-Zeitplan (optional)",
+          "presence_on_duration": "Präsenz-Reaktionszeit EIN (Sekunden)",
+          "presence_off_duration": "Präsenz-Reaktionszeit AUS (Sekunden)"
         }
       }
     },
@@ -40,7 +50,17 @@
           "weather_entity": "Wettervorhersage-Entität (optional)",
           "comfort_temperature": "Komforttemperatur (°C)",
           "eco_temperature": "Absenktemperatur (°C)",
-          "max_preheat_minutes": "Maximale Vorheizzeit (Minuten)"
+          "max_preheat_minutes": "Maximale Vorheizzeit (Minuten)",
+          "person_entities": "Personen / Geräte-Tracker (optional)",
+          "guest_entity": "Gastmodus (optional)",
+          "enter_home_duration": "Wartezeit nach Ankunft (Sekunden)",
+          "leaving_home_duration": "Wartezeit nach Verlassen (Sekunden)",
+          "proximity_entity": "Proximity / Geo-Fencing (optional)",
+          "proximity_duration": "Anfahrtsdauer (Sekunden)",
+          "proximity_distance": "Proximity-Entfernung (Einheit der Entität)",
+          "presence_schedule_entity": "Präsenzsensor-Zeitplan (optional)",
+          "presence_on_duration": "Präsenz-Reaktionszeit EIN (Sekunden)",
+          "presence_off_duration": "Präsenz-Reaktionszeit AUS (Sekunden)"
         }
       }
     },
