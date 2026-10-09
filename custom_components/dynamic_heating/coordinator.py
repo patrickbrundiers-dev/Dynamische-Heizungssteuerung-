@@ -422,6 +422,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if proximity_id:
             proximity = self.hass.states.get(proximity_id)
             if not self._valid(proximity):
+                # An unavailable gap breaks the requirement for a continuous approach.
+                self._proximity_approaching_since = None
                 return None, "Proximity-Entität nicht verfügbar – keine Sollwertänderung"
             proximity_home = self._proximity_is_active(proximity)
 
@@ -432,7 +434,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         use_presence = bool(presence_id)
         schedule_id = self.config.get(CONF_PRESENCE_SCHEDULE_ENTITY)
         presence_schedule_off = False
-        if schedule_id:
+        if schedule_id and presence_id:
             schedule = self.hass.states.get(schedule_id)
             if not self._valid(schedule):
                 return None, "Präsenzzeitplan nicht verfügbar – keine Sollwertänderung"
