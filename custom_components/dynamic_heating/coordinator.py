@@ -837,7 +837,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if self._proximity_approaching_since is None:
             self._proximity_approaching_since = now
-        self._record_proximity_category("approaching")
+            self._record_proximity_category("approaching")
         duration = max(
             0,
             int(self.config.get(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION)),
