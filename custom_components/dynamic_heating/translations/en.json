@@ -13,7 +13,8 @@
           "outdoor_temperature_entity": "Outdoor temperature sensor (optional)",
           "comfort_temperature": "Comfort temperature (°C)",
           "eco_temperature": "Setback temperature (°C)",
-          "max_preheat_minutes": "Maximum preheating time (minutes)"
+          "max_preheat_minutes": "Maximum preheating time (minutes)",
+          "weather_entity": "Weather forecast entity (optional)"
         }
       }
     },
@@ -22,6 +23,17 @@
     },
     "abort": {
       "already_configured": "A dynamic heating controller is already configured for this thermostat."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Weather forecast",
+        "description": "Optional: choose a weather entity. Sunny daytime forecasts may conservatively reduce preheating lead time, capped at 15 minutes.",
+        "data": {
+          "weather_entity": "Weather forecast entity (optional; leave empty to disable)"
+        }
+      }
     }
   }
 }
