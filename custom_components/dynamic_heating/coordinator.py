@@ -338,12 +338,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "enabled": self.enabled,
         }
 
-    def _presence_is_active(self, state: State, expected: bool, delay_seconds: int) -> bool:
+    def _presence_is_active(
+        self, state: State, expected: bool, delay_seconds: int
+    ) -> bool:
         """Apply a configurable stability delay to an on/off presence state."""
         current = state.state in ("on", "home")
         if current != expected:
             return False
-        return delay_seconds <= 0 or (dt_util.utcnow() - state.last_changed).total_seconds() >= delay_seconds
+        age = (dt_util.utcnow() - state.last_changed).total_seconds()
+        return delay_seconds <= 0 or age >= delay_seconds
 
     def _proximity_is_active(self, state: State) -> bool:
         """Count continuous approach time independently of changing distance state."""
@@ -356,9 +359,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         within_range = (
             distance is not None
-            and distance <= float(self.config.get(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE))
+            and distance <= float(
+                self.config.get(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE)
+            )
         )
-        approaching = direction in ("towards", "toward") and within_range
+        approaching = direction == "towards" and within_range
         if not approaching:
             self._proximity_approaching_since = None
             return False
@@ -366,7 +371,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now = dt_util.utcnow()
         if self._proximity_approaching_since is None:
             self._proximity_approaching_since = now
-        delay = max(0, int(self.config.get(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION)))
+        delay = max(
+            0,
+            int(self.config.get(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION)),
+        )
         return (now - self._proximity_approaching_since).total_seconds() >= delay
 
     def _evaluate_presence(self) -> tuple[bool | None, str]:
@@ -374,13 +382,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         people = self.config.get(CONF_PERSON_ENTITIES) or []
         if isinstance(people, str):
             people = [people]
+
         guest_id = self.config.get(CONF_GUEST_ENTITY)
         proximity_id = self.config.get(CONF_PROXIMITY_ENTITY)
         presence_id = self.config.get(CONF_PRESENCE_ENTITY)
-        # With no configured presence source, retain the legacy always-present
-        # behavior. Once a source is configured, an inactive signal means away.
-        has_presence_source = bool(people or guest_id or proximity_id or presence_id)
-        household_home = not has_presence_source
+        has_household_source = bool(people or guest_id or proximity_id)
+        has_any_source = has_household_source or bool(presence_id)
+
+        # Preserve old behavior only when no presence source has been configured.
+        household_home = not has_any_source
         invalid_people = False
         enter_delay = int(
             self.config.get(CONF_ENTER_HOME_DURATION, DEFAULT_ENTER_HOME_DURATION)
@@ -392,9 +402,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             state = self.hass.states.get(entity_id)
             if not self._valid(state):
                 invalid_people = True
-            elif state.state == "home" and self._presence_is_active(state, True, enter_delay):
+            elif state.state == "home" and self._presence_is_active(
+                state, True, enter_delay
+            ):
                 household_home = True
-            elif state.state == "not_home" and not self._presence_is_active(state, False, leave_delay):
+            elif state.state == "not_home" and not self._presence_is_active(
+                state, False, leave_delay
+            ):
+                # Keep the former home state during the configured leave grace.
                 household_home = True
 
         if guest_id:
@@ -409,31 +424,57 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if not self._valid(proximity):
                 return None, "Proximity-Entität nicht verfügbar – keine Sollwertänderung"
             proximity_home = self._proximity_is_active(proximity)
-        if invalid_people and not household_home and not proximity_home:
+
+        household_present = household_home or proximity_home
+        if invalid_people and not household_present:
             return None, "Personen-/Geräte-Tracker nicht verfügbar – keine Sollwertänderung"
 
-        present = household_home or proximity_home
         use_presence = bool(presence_id)
         schedule_id = self.config.get(CONF_PRESENCE_SCHEDULE_ENTITY)
+        presence_schedule_off = False
         if schedule_id:
             schedule = self.hass.states.get(schedule_id)
             if not self._valid(schedule):
                 return None, "Präsenzzeitplan nicht verfügbar – keine Sollwertänderung"
-            use_presence = use_presence and schedule.state == "on"
+            presence_schedule_off = schedule.state != "on"
+            use_presence = use_presence and not presence_schedule_off
+
         if use_presence:
             state = self.hass.states.get(presence_id)
             if not self._valid(state):
                 return None, "Anwesenheitssensor nicht verfügbar – keine Sollwertänderung"
-            on_delay = int(self.config.get(CONF_PRESENCE_ON_DURATION, DEFAULT_PRESENCE_ON_DURATION))
-            off_delay = int(self.config.get(CONF_PRESENCE_OFF_DURATION, DEFAULT_PRESENCE_OFF_DURATION))
+            on_delay = int(
+                self.config.get(
+                    CONF_PRESENCE_ON_DURATION, DEFAULT_PRESENCE_ON_DURATION
+                )
+            )
+            off_delay = int(
+                self.config.get(
+                    CONF_PRESENCE_OFF_DURATION, DEFAULT_PRESENCE_OFF_DURATION
+                )
+            )
             if state.state == "on":
                 sensor_present = self._presence_is_active(state, True, on_delay)
             elif state.state == "off":
+                # Keep presence true for the configured off-delay after motion stops.
                 sensor_present = not self._presence_is_active(state, False, off_delay)
             else:
                 return None, "Anwesenheitssensor liefert ungültigen Zustand – keine Sollwertänderung"
-            present = present and sensor_present
-        return present, "Anwesenheit erkannt" if present else "Keine Anwesenheit – abgesenkt"
+
+            present = (
+                household_present and sensor_present
+                if has_household_source
+                else sensor_present
+            )
+        elif presence_id and presence_schedule_off and not has_household_source:
+            # With no other source, a disabled presence schedule intentionally means eco.
+            present = False
+        else:
+            present = household_present
+
+        return present, (
+            "Anwesenheit erkannt" if present else "Keine Anwesenheit – abgesenkt"
+        )
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Read Home Assistant states, calculate a target and optionally apply it."""
