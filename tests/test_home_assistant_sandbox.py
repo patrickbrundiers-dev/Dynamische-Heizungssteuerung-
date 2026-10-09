@@ -188,3 +188,51 @@ async def test_unavailable_room_sensor_prevents_control(
     assert calls == []
     assert coordinator.data["target_temperature"] is None
     assert coordinator.data["mode"] == "waiting"
+
+
+
+@pytest.mark.asyncio
+async def test_unavailable_presence_sensor_prevents_control(
+    hass, enable_custom_integrations
+):
+    """An unavailable configured presence sensor must not be mistaken for absence."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    hass.states.async_set("binary_sensor.someone_home", "unavailable")
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert calls == []
+    assert coordinator.data["target_temperature"] is None
+    assert coordinator.data["mode"] == "waiting"
+
+
+@pytest.mark.asyncio
+async def test_target_is_clamped_to_thermostat_maximum(
+    hass, enable_custom_integrations
+):
+    """Never request a temperature beyond limits advertised by the climate entity."""
+    _set_up_test_entities(hass, climate_setpoint=18.0)
+    climate_state = hass.states.get("climate.living_room")
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {**climate_state.attributes, "temperature": 18.0, "max_temp": 20.5},
+    )
+    _, coordinator = await _setup_integration(hass)
+
+    assert coordinator.data["target_temperature"] == 20.5
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert calls == [
+        (
+            "climate",
+            "set_temperature",
+            {"entity_id": "climate.living_room", "temperature": 20.5},
+        )
+    ]
