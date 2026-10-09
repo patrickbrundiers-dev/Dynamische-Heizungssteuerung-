@@ -47,7 +47,7 @@ views:
           - entity: sensor.dynamische_heizungssteuerung_prognostizierte_raumtemperatur
             name: Projektion
       - type: entities
-        title: Geo-Fencing: Live-Kalibrierung
+        title: "Geo-Fencing: Live-Kalibrierung"
         show_header_toggle: false
         entities:
           - entity: sensor.dynamische_heizungssteuerung_geo_fencing_status
