@@ -55,46 +55,79 @@
   "options": {
     "step": {
       "init": {
-        "title": "Edit room",
-        "description": "After creating a room, you can change its thermostat, sensors, schedule, and temperatures. Leave optional sensors empty to disable them.",
+        "title": "1. Room and heating",
+        "description": "Set the thermostat, room-temperature sensor, comfort schedule and temperature targets. Comfort must be higher than setback.",
         "data": {
-          "climate_entity": "Thermostat",
+          "climate_entity": "Thermostat to control",
           "room_temperature_entity": "Room temperature sensor",
-          "schedule_entity": "Comfort schedule helper",
-          "window_entity": "Window contact (optional)",
-          "presence_entity": "Presence sensor (optional)",
-          "outdoor_temperature_entity": "Outdoor temperature sensor (optional)",
-          "weather_entity": "Weather forecast entity (optional)",
-          "comfort_temperature": "Comfort temperature (°C)",
-          "eco_temperature": "Setback temperature (°C)",
-          "max_preheat_minutes": "Maximum preheating time (minutes)",
-          "person_entities": "Persons / device trackers (optional)",
-          "guest_entity": "Guest mode (optional)",
-          "enter_home_duration": "Arrival delay (seconds)",
-          "leaving_home_duration": "Leaving-home delay (seconds)",
-          "proximity_entity": "Proximity distance sensor (optional)",
-          "proximity_duration": "Approach duration (seconds)",
+          "schedule_entity": "Comfort schedule",
+          "comfort_temperature": "Comfort target (°C)",
+          "eco_temperature": "Setback target (°C)",
+          "max_preheat_minutes": "Maximum preheating (minutes)"
+        },
+        "data_description": {
+          "climate_entity": "Select the climate entity this room controller may adjust. Avoid running another automation that writes targets to the same thermostat.",
+          "room_temperature_entity": "Use a room sensor in °C. The value is used to estimate heat-up and cool-down behaviour.",
+          "schedule_entity": "A Home Assistant schedule entity: ON means comfort time. Its next_event is used to plan preheating.",
+          "comfort_temperature": "Desired room temperature during active comfort periods.",
+          "eco_temperature": "Setback target outside comfort periods, during absence or when a window is open. It must be below the comfort target.",
+          "max_preheat_minutes": "Hard limit for how early preheating may start."
+        }
+      },
+      "presence": {
+        "title": "2. People and presence",
+        "description": "Configure who is home and optional indoor presence detection. A guest toggle counts as someone being home. Sensor reaction delays reduce short false triggers.",
+        "data": {
+          "person_entities": "People / device trackers (optional)",
+          "enter_home_duration": "Arrival confirmation delay",
+          "leaving_home_duration": "Departure grace period",
+          "guest_entity": "Guest mode toggle (optional)",
+          "presence_entity": "Indoor presence sensor (optional)",
+          "presence_schedule_entity": "Schedule for indoor presence (optional)",
+          "presence_on_duration": "Presence ON reaction delay",
+          "presence_off_duration": "Presence OFF grace period"
+        },
+        "data_description": {
+          "person_entities": "Comfort is allowed when at least one selected person or device tracker is home. Device trackers with simple home/not_home states are usually most predictable.",
+          "enter_home_duration": "The home state must remain stable this long before arrival is accepted.",
+          "leaving_home_duration": "Keep the previous home state for this grace period after a departure signal.",
+          "guest_entity": "An ON input_boolean or binary sensor counts as someone being home.",
+          "presence_entity": "Optional indoor presence or motion sensor. When used with people or proximity, both the household and this sensor must allow comfort heating.",
+          "presence_schedule_entity": "The indoor presence sensor is considered only while this schedule is ON. Leave blank to use the sensor all day.",
+          "presence_on_duration": "Presence must remain ON for this long before it is accepted.",
+          "presence_off_duration": "After OFF, retain the previous presence decision for this long to avoid quick setbacks."
+        }
+      },
+      "geofencing": {
+        "title": "3. Geo-fencing and location quality",
+        "description": "Choose the distance and direction sensors from the same Proximity zone. Distance is normalized to meters. Old location updates are ignored after the maximum age.",
+        "data": {
+          "proximity_entity": "Distance sensor from Proximity (optional)",
+          "proximity_direction_entity": "Direction-of-travel sensor (optional)",
           "proximity_distance": "Maximum approach distance (meters)",
-          "presence_schedule_entity": "Presence sensor schedule (optional)",
-          "presence_on_duration": "Presence reaction ON time (seconds)",
-          "presence_off_duration": "Presence reaction OFF time (seconds)",
-          "proximity_direction_entity": "Proximity direction-of-travel sensor (optional)",
+          "proximity_duration": "Continuous approach confirmation time",
           "proximity_max_age": "Maximum age of location data"
         },
         "data_description": {
-          "person_entities": "Comfort heating is allowed when at least one selected person or device tracker is home. Device trackers are recommended for simple home/not-home states.",
-          "enter_home_duration": "The home state must remain stable for this long before comfort heating is allowed.",
-          "leaving_home_duration": "After the last selected person leaves, wait this long before switching to setback temperature.",
-          "guest_entity": "An active guest toggle counts as someone being home.",
-          "proximity_entity": "Choose the Home Assistant Proximity distance sensor, for example the distance-to-zone or nearest-distance sensor. Older combined proximity entities remain supported.",
-          "proximity_duration": "The direction must continuously point towards home within the configured range for this long before comfort heating is allowed. Changing distance readings do not restart the timer; a direction change or unavailable reading does.",
-          "proximity_distance": "Maximum approach distance in meters. Distance values in m, km, miles, feet or yards are normalized to meters before comparison.",
-          "presence_entity": "Comfort heating is allowed only while this sensor reports presence and the configured household presence source also allows heating.",
-          "presence_schedule_entity": "The presence sensor is used only while this schedule is on. When off, sensor motion is ignored.",
-          "presence_on_duration": "Presence must remain on for this long before it is accepted.",
-          "presence_off_duration": "After the sensor turns off, keep presence accepted for this long before switching to setback.",
-          "proximity_direction_entity": "Choose the matching direction-of-travel sensor. The states towards, arrived, away_from and stationary are understood. For new Proximity entities, select the distance and direction sensors separately.",
-          "proximity_max_age": "If the distance sensor has not updated within this duration, its position is considered stale. No new heating decision is made from stale proximity data; a person/guest tracker that already confirms home still takes precedence."
+          "proximity_entity": "Select the distance sensor (for example dist_to_zone or nearest_dist_to_zone). Legacy combined entities are still supported.",
+          "proximity_direction_entity": "Select the matching direction sensor from the same Proximity zone. Expected states: towards, arrived, away_from, stationary.",
+          "proximity_distance": "The upper distance for an approaching-to-home signal. Comparisons are normalized to meters.",
+          "proximity_duration": "Direction must stay towards home and within range for this long. Changing distance readings do not restart the timer; direction/range changes and outages do.",
+          "proximity_max_age": "If the distance sensor has not updated within this duration, the location is stale and cannot trigger a new heating decision."
+        }
+      },
+      "environment": {
+        "title": "4. Window, outdoor temperature and weather",
+        "description": "Optional sensors refine safe setback and preheating. A configured window sensor must be available; otherwise no new thermostat target is written.",
+        "data": {
+          "window_entity": "Window contact (optional)",
+          "outdoor_temperature_entity": "Outdoor temperature sensor (optional)",
+          "weather_entity": "Weather forecast entity (optional)"
+        },
+        "data_description": {
+          "window_entity": "When ON, setback is enforced. If configured but unavailable, the controller avoids writing a new target.",
+          "outdoor_temperature_entity": "Optional outdoor sensor used to refine the conservative preheat estimate.",
+          "weather_entity": "Optional hourly weather forecast. Sunny daytime conditions can reduce the estimated preheat lead by at most 15 minutes."
         }
       }
     },
