@@ -1,0 +1,114 @@
+"""Diagnostic sensors for the dynamic heating controller."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorEntityDescription,
+    SensorStateClass,
+)
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfTemperature
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import DOMAIN
+from .coordinator import DynamicHeatingCoordinator
+
+
+@dataclass(frozen=True, kw_only=True)
+class HeatingSensorDescription(SensorEntityDescription):
+    """Describe a coordinator-backed sensor."""
+
+    key: str
+
+
+SENSORS = (
+    HeatingSensorDescription(
+        key="status",
+        name="Status",
+        icon="mdi:home-thermometer",
+    ),
+    HeatingSensorDescription(
+        key="room_temperature",
+        name="Raumtemperatur",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="outdoor_temperature",
+        name="Außentemperatur",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="target_temperature",
+        name="Berechnete Solltemperatur",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="heating_rate",
+        name="Gelernte Aufheizrate",
+        icon="mdi:chart-line",
+        native_unit_of_measurement="°C/h",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="preheat_minutes",
+        name="Geschätzte Vorheizzeit",
+        icon="mdi:timer-outline",
+        native_unit_of_measurement="min",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Create controller sensors."""
+    coordinator: DynamicHeatingCoordinator = entry.runtime_data
+    async_add_entities(
+        HeatingSensor(coordinator, entry, description) for description in SENSORS
+    )
+
+
+class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
+    """Present a value calculated by the coordinator."""
+
+    entity_description: HeatingSensorDescription
+
+    def __init__(
+        self,
+        coordinator: DynamicHeatingCoordinator,
+        entry: ConfigEntry,
+        description: HeatingSensorDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+        self._attr_has_entity_name = True
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dynamische Heizungssteuerung",
+            manufacturer="Community",
+            model="Adaptive Heating Controller",
+        )
+
+    @property
+    def native_value(self) -> str | float | int | None:
+        """Return the latest controller value."""
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.data.get(self.entity_description.key)
