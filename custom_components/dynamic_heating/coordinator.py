@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -44,7 +45,7 @@ def _as_float(state: State | None) -> float | None:
         value = float(state.state)
     except (TypeError, ValueError):
         return None
-    return value if value == value else None  # reject NaN
+    return value if math.isfinite(value) else None
 
 
 class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -202,7 +203,18 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         presence_id = self.config.get(CONF_PRESENCE_ENTITY)
         if presence_id:
             presence_state = self.hass.states.get(presence_id)
-            present = self._valid(presence_state) and presence_state.state == "on"
+            if not self._valid(presence_state):
+                return {
+                    "status": "Anwesenheitssensor nicht verfügbar – keine Sollwertänderung",
+                    "mode": "waiting",
+                    "target_temperature": None,
+                    "room_temperature": room_temperature,
+                    "outdoor_temperature": outdoor_temperature,
+                    "heating_rate": self.heating_rate,
+                    "preheat_minutes": 0,
+                    "enabled": self.enabled,
+                }
+            present = presence_state.state == "on"
 
         await self._learn(room_temperature, climate_state)
 
@@ -232,10 +244,24 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             present=present,
         )
 
+        target_temperature = decision.target_temperature
+        if target_temperature is not None and self._valid(climate_state):
+            climate_min = _as_float(
+                State("climate", "unused", climate_state.attributes)
+                if False else None
+            )
+            # Clamp computed targets to the capability range exposed by the thermostat.
+            try:
+                min_temp = float(climate_state.attributes.get("min_temp", target_temperature))
+                max_temp = float(climate_state.attributes.get("max_temp", target_temperature))
+                target_temperature = max(min_temp, min(target_temperature, max_temp))
+            except (TypeError, ValueError):
+                pass
+
         result: dict[str, Any] = {
             "status": decision.status,
             "mode": decision.mode,
-            "target_temperature": decision.target_temperature,
+            "target_temperature": target_temperature,
             "room_temperature": room_temperature,
             "outdoor_temperature": outdoor_temperature,
             "heating_rate": self.heating_rate,
@@ -249,7 +275,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if (
             self.enabled
-            and decision.target_temperature is not None
+            and target_temperature is not None
             and self._valid(climate_state)
         ):
             current_setpoint = climate_state.attributes.get("temperature")
@@ -259,14 +285,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 current_setpoint_value = None
             if (
                 current_setpoint_value is None
-                or abs(current_setpoint_value - decision.target_temperature) >= 0.2
+                or abs(current_setpoint_value - target_temperature) >= 0.2
             ):
                 await self.hass.services.async_call(
                     "climate",
                     "set_temperature",
                     {
                         "entity_id": self.config[CONF_CLIMATE_ENTITY],
-                        "temperature": round(decision.target_temperature, 1),
+                        "temperature": round(target_temperature, 1),
                     },
                     blocking=True,
                 )
