@@ -190,7 +190,6 @@ async def test_unavailable_room_sensor_prevents_control(
     assert coordinator.data["mode"] == "waiting"
 
 
-
 @pytest.mark.asyncio
 async def test_unavailable_presence_sensor_prevents_control(
     hass, enable_custom_integrations
@@ -236,3 +235,67 @@ async def test_target_is_clamped_to_thermostat_maximum(
             {"entity_id": "climate.living_room", "temperature": 20.5},
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_unavailable_thermostat_prevents_control(
+    hass, enable_custom_integrations
+):
+    """An unavailable climate entity must stop control and expose a clear status."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    hass.states.async_set("climate.living_room", "unavailable")
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert calls == []
+    assert coordinator.data["target_temperature"] is None
+    assert coordinator.data["mode"] == "waiting"
+    assert "Thermostat nicht verfügbar" in coordinator.data["status"]
+
+
+@pytest.mark.asyncio
+async def test_cooling_rate_is_learned_from_a_stable_setback_period(
+    hass, enable_custom_integrations
+):
+    """Bounded cooling learning updates the persisted estimate when the room cools."""
+    _set_up_test_entities(
+        hass, room_temperature="19.0", climate_setpoint=17.0
+    )
+    _, coordinator = await _setup_integration(hass)
+    climate_state = hass.states.get("climate.living_room")
+
+    # Replace the first setup sample to use deterministic test timestamps.
+    coordinator._cooling_sample_temperature = None
+    coordinator._cooling_sample_time = None
+    start = dt_util.utcnow()
+
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start,
+    ):
+        await coordinator._learn(
+            19.0,
+            climate_state,
+            window_open=False,
+            present=True,
+            schedule_active=False,
+            eco_temperature=18.0,
+        )
+
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(minutes=30),
+    ):
+        await coordinator._learn(
+            18.7,
+            climate_state,
+            window_open=False,
+            present=True,
+            schedule_active=False,
+            eco_temperature=18.0,
+        )
+
+    assert coordinator.cooling_rate == pytest.approx(0.36)
