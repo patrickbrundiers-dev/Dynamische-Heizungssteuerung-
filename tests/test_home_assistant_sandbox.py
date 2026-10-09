@@ -59,6 +59,12 @@ def _config_data():
         CONF_COMFORT_TEMPERATURE: 21.0,
         CONF_ECO_TEMPERATURE: 18.0,
         CONF_MAX_PREHEAT_MINUTES: 120,
+        # Keep legacy integration scenarios independent of debounce timing.
+        "enter_home_duration": 0,
+        "leaving_home_duration": 0,
+        "presence_on_duration": 0,
+        "presence_off_duration": 0,
+        "proximity_duration": 0,
     }
 
 
