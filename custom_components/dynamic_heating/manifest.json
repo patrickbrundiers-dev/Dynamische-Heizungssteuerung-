@@ -4,7 +4,7 @@
   "codeowners": ["@patrickbrundiers-dev"],
   "config_flow": true,
   "documentation": "https://github.com/patrickbrundiers-dev/Dynamische-Heizungssteuerung-",
-  "issue_tracker": "https://github.com/patrickbrundiers-dev/Dynamische-Heizungssteuerung-/issues",
   "iot_class": "calculated",
+  "issue_tracker": "https://github.com/patrickbrundiers-dev/Dynamische-Heizungssteuerung-/issues",
   "version": "0.1.0"
 }
