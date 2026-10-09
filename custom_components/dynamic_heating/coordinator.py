@@ -153,6 +153,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             setpoint_value = float(setpoint)
         except (TypeError, ValueError):
             setpoint_value = None
+        if setpoint_value is not None and not math.isfinite(setpoint_value):
+            setpoint_value = None
 
         now = dt_util.utcnow()
 
@@ -203,6 +205,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         can_learn_cooling = (
             setpoint_value is not None
             and room_temperature > setpoint_value + 0.2
+            and setpoint_value <= eco_temperature + 0.5
             and not schedule_active
         )
         if not can_learn_cooling:
