@@ -387,10 +387,13 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 current.update(user_input)
                 return await self.async_step_presence()
 
+        suggested = dict(current)
+        suggested.update(user_input or {})
+        # Keep the user's attempted values visible when validation fails.
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(
-                self._basic_schema(current), current
+                self._basic_schema(current), suggested
             ),
             errors=errors,
         )
