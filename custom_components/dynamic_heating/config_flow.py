@@ -16,6 +16,16 @@ from .const import (
     CONF_MAX_PREHEAT_MINUTES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PRESENCE_ENTITY,
+    CONF_PERSON_ENTITIES,
+    CONF_GUEST_ENTITY,
+    CONF_ENTER_HOME_DURATION,
+    CONF_LEAVING_HOME_DURATION,
+    CONF_PROXIMITY_ENTITY,
+    CONF_PROXIMITY_DURATION,
+    CONF_PROXIMITY_DISTANCE,
+    CONF_PRESENCE_SCHEDULE_ENTITY,
+    CONF_PRESENCE_ON_DURATION,
+    CONF_PRESENCE_OFF_DURATION,
     CONF_ROOM_TEMPERATURE_ENTITY,
     CONF_SCHEDULE_ENTITY,
     CONF_WEATHER_ENTITY,
@@ -23,6 +33,12 @@ from .const import (
     DEFAULT_COMFORT_TEMPERATURE,
     DEFAULT_ECO_TEMPERATURE,
     DEFAULT_MAX_PREHEAT_MINUTES,
+    DEFAULT_ENTER_HOME_DURATION,
+    DEFAULT_LEAVING_HOME_DURATION,
+    DEFAULT_PROXIMITY_DURATION,
+    DEFAULT_PROXIMITY_DISTANCE,
+    DEFAULT_PRESENCE_ON_DURATION,
+    DEFAULT_PRESENCE_OFF_DURATION,
     DOMAIN,
 )
 
@@ -53,8 +69,18 @@ def _user_schema() -> vol.Schema:
                 selector.EntitySelectorConfig(domain="binary_sensor")
             ),
             vol.Optional(CONF_PRESENCE_ENTITY): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="binary_sensor")
+                selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])
             ),
+            vol.Optional(CONF_PERSON_ENTITIES): selector.EntitySelector(selector.EntitySelectorConfig(domain=["person", "device_tracker"], multiple=True)),
+            vol.Optional(CONF_GUEST_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])),
+            vol.Optional(CONF_ENTER_HOME_DURATION, default=DEFAULT_ENTER_HOME_DURATION): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=900, step=30, mode="box", unit_of_measurement="s")),
+            vol.Optional(CONF_LEAVING_HOME_DURATION, default=DEFAULT_LEAVING_HOME_DURATION): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=900, step=30, mode="box", unit_of_measurement="s")),
+            vol.Optional(CONF_PROXIMITY_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="proximity")),
+            vol.Optional(CONF_PROXIMITY_DURATION, default=DEFAULT_PROXIMITY_DURATION): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=1800, step=30, mode="box", unit_of_measurement="s")),
+            vol.Optional(CONF_PROXIMITY_DISTANCE, default=DEFAULT_PROXIMITY_DISTANCE): selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=100000, step=50, mode="box")),
+            vol.Optional(CONF_PRESENCE_SCHEDULE_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="schedule")),
+            vol.Optional(CONF_PRESENCE_ON_DURATION, default=DEFAULT_PRESENCE_ON_DURATION): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=3600, step=30, mode="box", unit_of_measurement="s")),
+            vol.Optional(CONF_PRESENCE_OFF_DURATION, default=DEFAULT_PRESENCE_OFF_DURATION): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=3600, step=30, mode="box", unit_of_measurement="s")),
             vol.Optional(CONF_OUTDOOR_TEMPERATURE_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
@@ -154,13 +180,23 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                     min=15, max=240, step=5, mode="slider"
                 )
             ),
+            vol.Optional(CONF_ENTER_HOME_DURATION, default=int(current.get(CONF_ENTER_HOME_DURATION, DEFAULT_ENTER_HOME_DURATION))): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=900, step=30, mode="box", unit_of_measurement="s")),
+            vol.Optional(CONF_LEAVING_HOME_DURATION, default=int(current.get(CONF_LEAVING_HOME_DURATION, DEFAULT_LEAVING_HOME_DURATION))): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=900, step=30, mode="box", unit_of_measurement="s")),
+            vol.Optional(CONF_PROXIMITY_DURATION, default=int(current.get(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION))): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=1800, step=30, mode="box", unit_of_measurement="s")),
+            vol.Optional(CONF_PROXIMITY_DISTANCE, default=int(current.get(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE))): selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=100000, step=50, mode="box")),
+            vol.Optional(CONF_PRESENCE_ON_DURATION, default=int(current.get(CONF_PRESENCE_ON_DURATION, DEFAULT_PRESENCE_ON_DURATION))): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=3600, step=30, mode="box", unit_of_measurement="s")),
+            vol.Optional(CONF_PRESENCE_OFF_DURATION, default=int(current.get(CONF_PRESENCE_OFF_DURATION, DEFAULT_PRESENCE_OFF_DURATION))): selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=3600, step=30, mode="box", unit_of_measurement="s")),
         }
 
         optional_entities = (
             (CONF_WINDOW_ENTITY, "binary_sensor"),
-            (CONF_PRESENCE_ENTITY, "binary_sensor"),
+            (CONF_PRESENCE_ENTITY, ["binary_sensor", "input_boolean"]),
             (CONF_OUTDOOR_TEMPERATURE_ENTITY, "sensor"),
             (CONF_WEATHER_ENTITY, "weather"),
+            (CONF_PERSON_ENTITIES, ["person", "device_tracker"]),
+            (CONF_GUEST_ENTITY, ["binary_sensor", "input_boolean"]),
+            (CONF_PROXIMITY_ENTITY, "proximity"),
+            (CONF_PRESENCE_SCHEDULE_ENTITY, "schedule"),
         )
         for key, entity_domain in optional_entities:
             if current.get(key):
@@ -168,7 +204,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             else:
                 field = vol.Optional(key)
             schema[field] = selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=entity_domain)
+                selector.EntitySelectorConfig(domain=entity_domain, **({"multiple": True} if key == CONF_PERSON_ENTITIES else {}))
             )
         return vol.Schema(schema)
 
@@ -199,6 +235,10 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                     CONF_PRESENCE_ENTITY,
                     CONF_OUTDOOR_TEMPERATURE_ENTITY,
                     CONF_WEATHER_ENTITY,
+                    CONF_PERSON_ENTITIES,
+                    CONF_GUEST_ENTITY,
+                    CONF_PROXIMITY_ENTITY,
+                    CONF_PRESENCE_SCHEDULE_ENTITY,
                 ):
                     options[key] = user_input.get(key) or None
 
