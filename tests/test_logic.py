@@ -122,3 +122,42 @@ def test_no_preheat_too_early_or_when_target_already_reached() -> None:
     )
     assert too_early.mode == "eco"
     assert already_warm.mode == "eco"
+
+
+def test_learned_cooling_rate_is_used_for_preheat_forecast() -> None:
+    now = datetime.now(UTC)
+    decision = decide_heating_target(
+        now=now,
+        schedule_active=False,
+        next_event=now + timedelta(hours=1),
+        room_temperature=20.0,
+        outdoor_temperature=8.0,
+        comfort_temperature=21.0,
+        eco_temperature=18.0,
+        heating_rate_c_per_hour=1.0,
+        cooling_rate_c_per_hour=1.0,
+        max_preheat_minutes=120,
+    )
+
+    assert decision.projected_temperature == 19.0
+    assert decision.mode == "preheat"
+    assert decision.preheat_minutes == 120
+
+
+def test_forecast_does_not_project_room_below_existing_setback_floor() -> None:
+    now = datetime.now(UTC)
+    decision = decide_heating_target(
+        now=now,
+        schedule_active=False,
+        next_event=now + timedelta(hours=1),
+        room_temperature=17.0,
+        outdoor_temperature=8.0,
+        comfort_temperature=21.0,
+        eco_temperature=18.0,
+        heating_rate_c_per_hour=1.0,
+        cooling_rate_c_per_hour=2.0,
+        max_preheat_minutes=120,
+    )
+
+    assert decision.projected_temperature == 17.0
+    assert decision.mode == "preheat"
