@@ -424,7 +424,7 @@ async def test_unavailable_proximity_prevents_thermostat_control(
 
     assert calls == []
     assert coordinator.data["mode"] == "waiting"
-    assert "Proximity-Entität nicht verfügbar" in coordinator.data["status"]
+    assert "Proximity-Entfernung nicht verfügbar" in coordinator.data["status"]
 
 @pytest.mark.asyncio
 async def test_proximity_debounce_survives_changing_distance_states(
@@ -535,6 +535,7 @@ async def test_diagnostics_redact_new_presence_and_location_entities(
             "person_entities": ["person.patrick", "person.jenny"],
             "guest_entity": "input_boolean.guest_mode",
             "proximity_entity": "proximity.home",
+            "proximity_direction_entity": "sensor.home_direction",
             "presence_schedule_entity": "schedule.presence_active",
         },
     )
@@ -545,6 +546,7 @@ async def test_diagnostics_redact_new_presence_and_location_entities(
     assert config["person_entities"] != ["person.patrick", "person.jenny"]
     assert config["guest_entity"] != "input_boolean.guest_mode"
     assert config["proximity_entity"] != "proximity.home"
+    assert config["proximity_direction_entity"] != "sensor.home_direction"
     assert config["presence_schedule_entity"] != "schedule.presence_active"
 
 @pytest.mark.asyncio
