@@ -344,3 +344,70 @@ async def test_failed_temperature_write_is_reported_and_retried(
     assert coordinator.data["control_error"] is False
     assert coordinator.data["status"] == "Vorausschauendes Vorheizen"
 
+
+
+
+@pytest.mark.asyncio
+async def test_person_presence_requires_someone_home_or_guest_mode(
+    hass, enable_custom_integrations
+):
+    """A household person at home or an active guest enables presence."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["person_entities"] = ["person.patrick", "person.jenny"]
+    coordinator.config["enter_home_duration"] = 0
+    coordinator.config["leaving_home_duration"] = 0
+    coordinator.config["presence_entity"] = None
+    hass.states.async_set("person.patrick", "not_home")
+    hass.states.async_set("person.jenny", "not_home")
+
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+    assert coordinator.data["mode"] == "away"
+
+    coordinator.config["guest_entity"] = "input_boolean.guest_mode"
+    hass.states.async_set("input_boolean.guest_mode", "on")
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+
+
+@pytest.mark.asyncio
+async def test_proximity_can_trigger_presence_when_approaching_within_distance(
+    hass, enable_custom_integrations
+):
+    """Proximity only counts when the configured zone reports approaching nearby."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["proximity_entity"] = "proximity.home"
+    coordinator.config["proximity_distance"] = 500
+    coordinator.config["proximity_duration"] = 0
+    hass.states.async_set("proximity.home", "300", {"dir_of_travel": "towards"})
+
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+    assert coordinator.data["presence_status"] == "Anwesenheit erkannt"
+
+    hass.states.async_set("proximity.home", "800", {"dir_of_travel": "towards"})
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+
+@pytest.mark.asyncio
+async def test_unavailable_proximity_prevents_thermostat_control(
+    hass, enable_custom_integrations
+):
+    """A configured but unavailable proximity source must fail safe."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["proximity_entity"] = "proximity.home"
+    hass.states.async_set("proximity.home", "unavailable")
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert calls == []
+    assert coordinator.data["mode"] == "waiting"
+    assert "Proximity-Entität nicht verfügbar" in coordinator.data["status"]
