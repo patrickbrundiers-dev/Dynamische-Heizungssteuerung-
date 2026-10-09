@@ -105,8 +105,25 @@ Das ist bewusst eine konservative Heuristik und keine echte Strahlungs- oder Rau
 - **Personen / Geräte-Tracker:** Komfortbetrieb gilt, wenn mindestens eine konfigurierte Person bzw. ein Tracker zu Hause ist. Ankunfts- und Abwesenheitswartezeit schützen vor kurzen Statuswechseln.
 - **Gastmodus:** Eine eingeschaltete Gast-Entität zählt als Anwesenheit.
 - **Präsenzsensor:** Optional mit eigenem Zeitplan sowie getrennten Reaktionszeiten für EIN und AUS. Ist der Präsenzzeitplan ausgeschaltet, wird der Präsenzsensor für die Entscheidung ignoriert.
-- **Proximity:** Eine Proximity-Entität kann als alternative Anwesenheitsquelle dienen, wenn sie „home“ meldet oder sich in Richtung Zuhause innerhalb der eingestellten Entfernung bewegt. Die Entfernung wird in der Einheit der Proximity-Entität angegeben.
+- **Proximity / Geo-Fencing:** In aktuellen Home-Assistant-Versionen wählst du den Entfernungssensor und den zugehörigen Richtungssensor separat (z. B. Distanz zur Zone und Richtung der Bewegung). Ältere kombinierte Proximity-Entitäten werden weiter unterstützt. Die Grenzentfernung wird in Metern angegeben; bekannte Entfernungs-Einheiten werden normalisiert. Nur die Richtung `towards` innerhalb der Grenze startet die Anfahrtszeit. Richtungswechsel, ungültige Messwerte oder fehlende Entitäten setzen den Timer zurück. Standortdaten, die älter als die einstellbare Maximaldauer sind, lösen keine neue Heizentscheidung aus. Bestätigt ein Personen- oder Gast-Tracker bereits Zuhause, hat dieser lokale Status Vorrang vor veralteten Geodaten.
 - **Sicherheit:** Ist eine konfigurierte erforderliche Entität nicht verfügbar, wird kein neuer Thermostat-Sollwert gesetzt. Alle neuen Entitätsfelder sind optional. Standardmäßig gelten 2 Sekunden für Ankunft und Verlassen, 2 Minuten für die Anfahrt sowie 5 Minuten EIN- und 20 Minuten AUS-Reaktionszeit am Präsenzsensor. Diese Sensor-Verzögerungen greifen nur, wenn ein entsprechender Präsenzsensor konfiguriert ist.
 
 
 Die Zeitfelder verwenden im Raum-Editor den nativen Home-Assistant-Dauerauswähler mit Stunden, Minuten und Sekunden. Die Anfahrtszeit wird intern vom ersten stabilen Proximity-Messpunkt in Richtung Zuhause gemessen; spätere Änderungen der Entfernung setzen den Timer nicht zurück, solange Richtung und Distanzbedingung weiter erfüllt sind.
+
+
+### Geo-Fencing: Datenqualität und Fehlerverhalten (Version 0.3.4)
+
+- Wähle **zwei Sensoren** der aktuellen Proximity-Integration: den Entfernungssensor und den passenden Richtungssensor. Die aktuelle Core-Integration stellt Entfernung und Bewegungsrichtung getrennt bereit. Ältere kombinierte Entitäten mit dem Attribut `dir_of_travel` bleiben kompatibel.
+- **Einheiten:** Entfernungen werden vor dem Vergleich in Meter umgerechnet (m, km, mi, ft und yd).
+- **Aktualität:** Das Alter des Entfernungssensors wird gegen die konfigurierte Maximaldauer geprüft (Standard: 15 Minuten). Bei veralteten GPS-Werten oder fehlender Richtung gibt es keine neue Sollwertänderung aus der unklaren Proximity-Situation. Ist gleichzeitig ein Personen-/Gast-Tracker bekannt zu Hause, gilt der lokale Zuhause-Status statt eines veralteten Geofence-Signals.
+- **Anfahrt:** Der Timer läuft nur, solange die Richtung `towards` meldet und die Entfernung innerhalb der Grenze liegt. Laufende Distanzänderungen starten ihn nicht neu; Richtungswechsel, überschrittene Entfernung und Verfügbarkeitspausen setzen ihn zurück.
+- **Wichtig zur Einrichtung:** Bei Geo-Fencing nur dann die Regelung auf Basis dieser Funktion aktivieren, wenn Entfernungssensor und Richtungssensor denselben Proximity-Tracker/dieselbe Zone darstellen. Ist das Handy lange offline, wird eine veraltete Entität sichtbar als Problem gemeldet statt alte Daten als aktuelle Anfahrt zu behandeln.
+
+### Qualität des adaptiven Lernmodells (Version 0.3.4)
+
+- **Plausibilitätsfilter:** Aufheiz- und Abkühlmessungen mit zu langem Zeitfenster, unerwarteter Temperaturänderung oder einer beobachteten Rate außerhalb der definierten Grenzen werden verworfen statt an eine Maximalrate geklemmt. Das verhindert, dass einzelne Messausreißer die gelernte Rate in eine falsche Richtung ziehen.
+- **Messzähler:** Die Integration speichert die Zahl akzeptierter Aufheiz- und Abkühlmessungen sowie verworfener Messungen. Der Statussensor enthält den letzten Lernstatus, die letzte beobachtete Rate und den Zeitstempel.
+- **Prognoseprüfung:** Wenn ein inaktiver Zeitplan in den Komfortzeitraum wechselt, wird die zuvor für diesen Zeitpunkt gespeicherte projizierte Raumtemperatur mit der tatsächlichen Raumtemperatur verglichen. Die Integration aktualisiert den letzten signierten Prognosefehler, Anzahl der ausgewerteten Prognosen und den mittleren absoluten Fehler (MAE) in °C.
+- **Persistenz und Datenschutz:** Raten, Zähler und zusammengefasste Fehlerkennzahlen werden lokal gespeichert. Es wird keine vollständige Temperatur-, Bewegungs- oder GPS-Historie gesammelt. Die einzelne noch offene Prognose für den nächsten Zeitplanwechsel liegt nur im Arbeitsspeicher und wird nach einem Neustart nicht nachträglich ausgewertet.
+- **Interpretation:** Der MAE wird erst aussagekräftig, wenn mehrere Komfortbeginn-Prognosen ausgewertet wurden und Raum, Fenster, Präsenz sowie Zeitplan stabil konfiguriert sind. Er ist eine Beobachtungskennzahl, keine Garantie für einen bestimmten Komfortzeitpunkt.
