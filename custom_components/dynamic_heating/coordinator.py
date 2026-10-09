@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant, State
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -22,6 +23,7 @@ from .const import (
     CONF_ROOM_TEMPERATURE_ENTITY,
     CONF_SCHEDULE_ENTITY,
     CONF_WINDOW_ENTITY,
+    CONF_WEATHER_ENTITY,
     DEFAULT_COMFORT_TEMPERATURE,
     DEFAULT_COOLING_RATE,
     DEFAULT_ECO_TEMPERATURE,
@@ -35,7 +37,7 @@ from .const import (
     MIN_LEARNED_HEATING_RATE,
     MIN_SAMPLE_SECONDS,
 )
-from .logic import decide_heating_target
+from .logic import decide_heating_target, select_forecast_condition
 
 _LOGGER = logging.getLogger(__name__)
 _INVALID_STATES = {"unknown", "unavailable", None}
@@ -73,6 +75,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._sample_time: datetime | None = None
         self._cooling_sample_temperature: float | None = None
         self._cooling_sample_time: datetime | None = None
+        self._forecast_items: list[dict[str, Any]] = []
+        self._forecast_fetched_at: datetime | None = None
 
     async def async_load_learning(self) -> None:
         """Restore learned rates, validating persisted values before using them."""
@@ -99,6 +103,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 MIN_LEARNED_COOLING_RATE,
                 min(cooling_rate, MAX_LEARNED_COOLING_RATE),
             )
+
+    @staticmethod
+    def _climate_setpoint(state: State | None) -> float | None:
+        """Read the thermostat setpoint if it is finite and numeric."""
+        if state is None:
+            return None
+        try:
+            value = float(state.attributes.get("temperature"))
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) else None
 
     def _state(self, key: str) -> State | None:
         entity_id = self.config.get(key)
@@ -238,6 +253,49 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cooling_sample_temperature = room_temperature
         self._cooling_sample_time = now
 
+
+
+    async def _async_get_forecast_items(self) -> list[dict[str, Any]]:
+        """Fetch hourly forecast at most every 30 minutes, if configured."""
+        entity_id = self.config.get(CONF_WEATHER_ENTITY)
+        if not entity_id:
+            return []
+
+        now = dt_util.utcnow()
+        if (
+            self._forecast_fetched_at is not None
+            and now - self._forecast_fetched_at < timedelta(minutes=30)
+        ):
+            return self._forecast_items
+
+        self._forecast_fetched_at = now
+        if not self._valid(self.hass.states.get(entity_id)):
+            self._forecast_items = []
+            return []
+
+        try:
+            response = await self.hass.services.async_call(
+                "weather",
+                "get_forecasts",
+                {"entity_id": entity_id, "type": "hourly"},
+                blocking=True,
+                return_response=True,
+            )
+            entity_result = response.get(entity_id, {}) if isinstance(response, dict) else {}
+            items = entity_result.get("forecast", []) if isinstance(entity_result, dict) else []
+            self._forecast_items = (
+                [item for item in items if isinstance(item, dict)]
+                if isinstance(items, list)
+                else []
+            )
+        except (HomeAssistantError, TypeError, ValueError, AttributeError) as err:
+            _LOGGER.warning(
+                "Hourly weather forecast unavailable for %s: %s", entity_id, err
+            )
+            self._forecast_items = []
+
+        return self._forecast_items
+
     def _waiting_result(
         self,
         status: str,
@@ -249,12 +307,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "status": status,
             "mode": "waiting",
             "target_temperature": None,
+            "current_setpoint": None,
             "room_temperature": room_temperature,
             "outdoor_temperature": outdoor_temperature,
             "heating_rate": self.heating_rate,
             "cooling_rate": self.cooling_rate,
             "preheat_minutes": 0,
             "projected_temperature": None,
+            "forecast_condition": None,
+            "solar_adjustment_minutes": 0,
             "enabled": self.enabled,
         }
 
@@ -328,6 +389,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         next_event = self._parse_next_event(schedule_state)
+        forecast_items = await self._async_get_forecast_items()
+        forecast_condition = select_forecast_condition(
+            forecast_items, next_event, dt_util.now()
+        )
         decision = decide_heating_target(
             now=dt_util.now(),
             schedule_active=schedule_active,
@@ -338,6 +403,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             eco_temperature=eco_temperature,
             heating_rate_c_per_hour=self.heating_rate,
             cooling_rate_c_per_hour=self.cooling_rate,
+            forecast_condition=forecast_condition,
             max_preheat_minutes=int(
                 self.config.get(
                     CONF_MAX_PREHEAT_MINUTES, DEFAULT_MAX_PREHEAT_MINUTES
@@ -363,12 +429,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "status": decision.status,
             "mode": decision.mode,
             "target_temperature": target_temperature,
+            "current_setpoint": self._climate_setpoint(climate_state),
             "room_temperature": room_temperature,
             "outdoor_temperature": outdoor_temperature,
             "heating_rate": self.heating_rate,
             "cooling_rate": self.cooling_rate,
             "preheat_minutes": decision.preheat_minutes,
             "projected_temperature": decision.projected_temperature,
+            "forecast_condition": forecast_condition,
+            "solar_adjustment_minutes": decision.solar_adjustment_minutes,
             "schedule_active": schedule_active,
             "next_event": next_event.isoformat() if next_event else None,
             "window_open": window_open,
