@@ -356,10 +356,15 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         return vol.Schema(schema)
 
     def _show_step(self, step_id: str, schema: vol.Schema, current: dict):
-        """Render one editor page while preserving values from previous steps."""
+        """Render one editor page while preserving and formatting saved values."""
+        suggested = dict(current)
+        # Native duration selectors require a structured duration, not seconds.
+        for key in _DURATION_OPTIONS:
+            if key in suggested and not isinstance(suggested[key], dict):
+                suggested[key] = _seconds_to_duration(suggested[key])
         return self.async_show_form(
             step_id=step_id,
-            data_schema=self.add_suggested_values_to_schema(schema, current),
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
         )
 
     async def async_step_init(self, user_input=None):
