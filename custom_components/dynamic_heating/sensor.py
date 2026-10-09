@@ -57,10 +57,29 @@ SENSORS = (
         state_class=SensorStateClass.MEASUREMENT,
     ),
     HeatingSensorDescription(
+        key="current_setpoint",
+        name="Aktueller Thermostat-Sollwert",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
         key="projected_temperature",
         name="Prognostizierte Raumtemperatur",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="forecast_condition",
+        name="Wetterprognose",
+        icon="mdi:weather-partly-cloudy",
+    ),
+    HeatingSensorDescription(
+        key="solar_adjustment_minutes",
+        name="Sonnenkorrektur Vorheizzeit",
+        icon="mdi:weather-sunny",
+        native_unit_of_measurement="min",
         state_class=SensorStateClass.MEASUREMENT,
     ),
     HeatingSensorDescription(
@@ -146,6 +165,9 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "cooling_rate",
             "projected_temperature",
             "target_temperature",
+            "current_setpoint",
+            "forecast_condition",
+            "solar_adjustment_minutes",
         )
         return {
             key: self.coordinator.data[key]
