@@ -47,3 +47,14 @@ DEFAULT_PROXIMITY_DURATION: Final = 120
 DEFAULT_PROXIMITY_DISTANCE: Final = 500
 DEFAULT_PRESENCE_ON_DURATION: Final = 300
 DEFAULT_PRESENCE_OFF_DURATION: Final = 1200
+
+CONF_PROXIMITY_DIRECTION_ENTITY: Final = "proximity_direction_entity"
+CONF_PROXIMITY_MAX_AGE: Final = "proximity_max_age"
+
+# GPS-derived values older than this are never used to infer a new arrival.
+DEFAULT_PROXIMITY_MAX_AGE: Final = 900
+
+# Discard implausible sample windows instead of clipping them into plausible rates.
+MAX_HEATING_SAMPLE_SECONDS: Final = 21600
+MAX_COOLING_SAMPLE_SECONDS: Final = 21600
+FORECAST_EVALUATION_GRACE_SECONDS: Final = 1800
