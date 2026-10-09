@@ -62,13 +62,13 @@ views:
             name: Durchschnittliches Update-Intervall
           - entity: sensor.dynamische_heizungssteuerung_veraltete_standortereignisse
             name: Veraltete Standortphasen
-          - entity: sensor.dynamische_heizungssteuerung_ungueltige_standortereignisse
+          - entity: sensor.dynamische_heizungssteuerung_ungultige_standortereignisse
             name: Ungültige Standortphasen
           - entity: sensor.dynamische_heizungssteuerung_ausserhalb_der_anfahrtsentfernung
             name: Außerhalb des Anfahrtsradius
           - entity: sensor.dynamische_heizungssteuerung_erkannte_anfahrten
             name: Erkannte Anfahrten
-          - entity: sensor.dynamische_heizungssteuerung_bestaetigte_anfahrten
+          - entity: sensor.dynamische_heizungssteuerung_bestatigte_anfahrten
             name: Bestätigte Anfahrten
       - type: history-graph
         title: Standortaktualität und Update-Intervall (7 Tage)
