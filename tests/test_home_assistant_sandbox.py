@@ -421,7 +421,7 @@ async def test_unavailable_proximity_prevents_thermostat_control(
 async def test_proximity_debounce_survives_changing_distance_states(
     hass, enable_custom_integrations
 ):
-    """Changing distance values must not restart the configured approach timer."""
+    """Distance updates keep the timer; an unavailable gap restarts it."""
     _set_up_test_entities(hass)
     _, coordinator = await _setup_integration(hass)
     coordinator.config["presence_entity"] = None
@@ -446,10 +446,34 @@ async def test_proximity_debounce_survives_changing_distance_states(
         await coordinator.async_refresh()
     assert coordinator.data["present"] is False
 
+    hass.states.async_set("proximity.home", "unavailable")
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=90),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["mode"] == "waiting"
+
+    hass.states.async_set("proximity.home", "320", {"dir_of_travel": "towards"})
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=180),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
     hass.states.async_set("proximity.home", "290", {"dir_of_travel": "towards"})
     with patch(
         "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
-        return_value=start + timedelta(seconds=120),
+        return_value=start + timedelta(seconds=240),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+    hass.states.async_set("proximity.home", "250", {"dir_of_travel": "towards"})
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=300),
     ):
         await coordinator.async_refresh()
     assert coordinator.data["present"] is True
@@ -457,7 +481,7 @@ async def test_proximity_debounce_survives_changing_distance_states(
     hass.states.async_set("proximity.home", "250", {"dir_of_travel": "away_from"})
     with patch(
         "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
-        return_value=start + timedelta(seconds=130),
+        return_value=start + timedelta(seconds=310),
     ):
         await coordinator.async_refresh()
     assert coordinator.data["present"] is False
