@@ -1,0 +1,27 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Dynamic Heating Control",
+        "description": "Choose the thermostat, room temperature sensor and schedule helper. Control stays disabled after setup.",
+        "data": {
+          "climate_entity": "Thermostat",
+          "room_temperature_entity": "Room temperature sensor",
+          "schedule_entity": "Comfort schedule helper",
+          "window_entity": "Window contact (optional)",
+          "presence_entity": "Presence sensor (optional)",
+          "outdoor_temperature_entity": "Outdoor temperature sensor (optional)",
+          "comfort_temperature": "Comfort temperature (°C)",
+          "eco_temperature": "Setback temperature (°C)",
+          "max_preheat_minutes": "Maximum preheating time (minutes)"
+        }
+      }
+    },
+    "error": {
+      "eco_must_be_below_comfort": "The setback temperature must be lower than the comfort temperature."
+    },
+    "abort": {
+      "already_configured": "A dynamic heating controller is already configured for this thermostat."
+    }
+  }
+}
