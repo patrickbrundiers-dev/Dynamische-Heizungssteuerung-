@@ -109,19 +109,50 @@ def _user_schema() -> vol.Schema:
             vol.Optional(CONF_WINDOW_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="binary_sensor")
             ),
+            vol.Optional(CONF_PERSON_ENTITIES): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["person", "device_tracker"], multiple=True
+                )
+            ),
+            vol.Optional(
+                CONF_ENTER_HOME_DURATION,
+                default=_seconds_to_duration(DEFAULT_ENTER_HOME_DURATION),
+            ): _duration_selector(),
+            vol.Optional(
+                CONF_LEAVING_HOME_DURATION,
+                default=_seconds_to_duration(DEFAULT_LEAVING_HOME_DURATION),
+            ): _duration_selector(),
+            vol.Optional(CONF_GUEST_ENTITY): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])
+            ),
+            vol.Optional(CONF_PROXIMITY_ENTITY): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="proximity")
+            ),
+            vol.Optional(
+                CONF_PROXIMITY_DURATION,
+                default=_seconds_to_duration(DEFAULT_PROXIMITY_DURATION),
+            ): _duration_selector(),
+            vol.Optional(
+                CONF_PROXIMITY_DISTANCE, default=DEFAULT_PROXIMITY_DISTANCE
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1, max=100000, step=50, mode="box"
+                )
+            ),
             vol.Optional(CONF_PRESENCE_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])
             ),
-            vol.Optional(CONF_PERSON_ENTITIES): selector.EntitySelector(selector.EntitySelectorConfig(domain=["person", "device_tracker"], multiple=True)),
-            vol.Optional(CONF_GUEST_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])),
-            vol.Optional(CONF_ENTER_HOME_DURATION, default=_seconds_to_duration(DEFAULT_ENTER_HOME_DURATION)): _duration_selector(),
-            vol.Optional(CONF_LEAVING_HOME_DURATION, default=_seconds_to_duration(DEFAULT_LEAVING_HOME_DURATION)): _duration_selector(),
-            vol.Optional(CONF_PROXIMITY_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="proximity")),
-            vol.Optional(CONF_PROXIMITY_DURATION, default=_seconds_to_duration(DEFAULT_PROXIMITY_DURATION)): _duration_selector(),
-            vol.Optional(CONF_PROXIMITY_DISTANCE, default=DEFAULT_PROXIMITY_DISTANCE): selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=100000, step=50, mode="box")),
-            vol.Optional(CONF_PRESENCE_SCHEDULE_ENTITY): selector.EntitySelector(selector.EntitySelectorConfig(domain="schedule")),
-            vol.Optional(CONF_PRESENCE_ON_DURATION, default=_seconds_to_duration(DEFAULT_PRESENCE_ON_DURATION)): _duration_selector(),
-            vol.Optional(CONF_PRESENCE_OFF_DURATION, default=_seconds_to_duration(DEFAULT_PRESENCE_OFF_DURATION)): _duration_selector(),
+            vol.Optional(CONF_PRESENCE_SCHEDULE_ENTITY): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="schedule")
+            ),
+            vol.Optional(
+                CONF_PRESENCE_ON_DURATION,
+                default=_seconds_to_duration(DEFAULT_PRESENCE_ON_DURATION),
+            ): _duration_selector(),
+            vol.Optional(
+                CONF_PRESENCE_OFF_DURATION,
+                default=_seconds_to_duration(DEFAULT_PRESENCE_OFF_DURATION),
+            ): _duration_selector(),
             vol.Optional(CONF_OUTDOOR_TEMPERATURE_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
@@ -193,7 +224,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         return values
 
     def _options_schema(self, current: dict) -> vol.Schema:
-        """Build the editor with the saved room configuration as defaults."""
+        """Build the editor with saved values and screenshot-style duration controls."""
         schema: dict = {
             vol.Required(
                 CONF_CLIMATE_ENTITY, default=current[CONF_CLIMATE_ENTITY]
@@ -203,7 +234,9 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             vol.Required(
                 CONF_ROOM_TEMPERATURE_ENTITY,
                 default=current[CONF_ROOM_TEMPERATURE_ENTITY],
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
             vol.Required(
                 CONF_SCHEDULE_ENTITY, default=current[CONF_SCHEDULE_ENTITY]
             ): selector.EntitySelector(
@@ -225,32 +258,71 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                     min=15, max=240, step=5, mode="slider"
                 )
             ),
-            vol.Optional(CONF_ENTER_HOME_DURATION, default=_seconds_to_duration(current.get(CONF_ENTER_HOME_DURATION, DEFAULT_ENTER_HOME_DURATION))): _duration_selector(),
-            vol.Optional(CONF_LEAVING_HOME_DURATION, default=_seconds_to_duration(current.get(CONF_LEAVING_HOME_DURATION, DEFAULT_LEAVING_HOME_DURATION))): _duration_selector(),
-            vol.Optional(CONF_PROXIMITY_DURATION, default=_seconds_to_duration(current.get(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION))): _duration_selector(),
-            vol.Optional(CONF_PROXIMITY_DISTANCE, default=int(current.get(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE))): selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=100000, step=50, mode="box")),
-            vol.Optional(CONF_PRESENCE_ON_DURATION, default=_seconds_to_duration(current.get(CONF_PRESENCE_ON_DURATION, DEFAULT_PRESENCE_ON_DURATION))): _duration_selector(),
-            vol.Optional(CONF_PRESENCE_OFF_DURATION, default=_seconds_to_duration(current.get(CONF_PRESENCE_OFF_DURATION, DEFAULT_PRESENCE_OFF_DURATION))): _duration_selector(),
         }
 
         optional_entities = (
             (CONF_WINDOW_ENTITY, "binary_sensor"),
-            (CONF_PRESENCE_ENTITY, ["binary_sensor", "input_boolean"]),
-            (CONF_OUTDOOR_TEMPERATURE_ENTITY, "sensor"),
-            (CONF_WEATHER_ENTITY, "weather"),
             (CONF_PERSON_ENTITIES, ["person", "device_tracker"]),
             (CONF_GUEST_ENTITY, ["binary_sensor", "input_boolean"]),
             (CONF_PROXIMITY_ENTITY, "proximity"),
+            (CONF_PRESENCE_ENTITY, ["binary_sensor", "input_boolean"]),
             (CONF_PRESENCE_SCHEDULE_ENTITY, "schedule"),
+            (CONF_OUTDOOR_TEMPERATURE_ENTITY, "sensor"),
+            (CONF_WEATHER_ENTITY, "weather"),
         )
+
+        def add_duration(key: str, default: int) -> None:
+            """Insert a duration field, displaying hours, minutes and seconds."""
+            schema[
+                vol.Optional(
+                    key,
+                    default=_seconds_to_duration(current.get(key, default)),
+                )
+            ] = _duration_selector()
+
         for key, entity_domain in optional_entities:
             if current.get(key):
                 field = vol.Optional(key, default=current[key])
             else:
                 field = vol.Optional(key)
             schema[field] = selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=entity_domain, **({"multiple": True} if key == CONF_PERSON_ENTITIES else {}))
+                selector.EntitySelectorConfig(
+                    domain=entity_domain,
+                    **({"multiple": True} if key == CONF_PERSON_ENTITIES else {}),
+                )
             )
+
+            if key == CONF_PERSON_ENTITIES:
+                add_duration(
+                    CONF_ENTER_HOME_DURATION, DEFAULT_ENTER_HOME_DURATION
+                )
+                add_duration(
+                    CONF_LEAVING_HOME_DURATION, DEFAULT_LEAVING_HOME_DURATION
+                )
+            elif key == CONF_PROXIMITY_ENTITY:
+                add_duration(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION)
+                schema[
+                    vol.Optional(
+                        CONF_PROXIMITY_DISTANCE,
+                        default=int(
+                            current.get(
+                                CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE
+                            )
+                        ),
+                    )
+                ] = selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=1, max=100000, step=50, mode="box"
+                    )
+                )
+            elif key == CONF_PRESENCE_SCHEDULE_ENTITY:
+                add_duration(
+                    CONF_PRESENCE_ON_DURATION, DEFAULT_PRESENCE_ON_DURATION
+                )
+                add_duration(
+                    CONF_PRESENCE_OFF_DURATION, DEFAULT_PRESENCE_OFF_DURATION
+                )
+
         return vol.Schema(schema)
 
     async def async_step_init(self, user_input=None):
