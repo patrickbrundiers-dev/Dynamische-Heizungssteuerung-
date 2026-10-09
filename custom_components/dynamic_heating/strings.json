@@ -28,10 +28,25 @@
   "options": {
     "step": {
       "init": {
-        "title": "Wetterprognose",
-        "description": "Optional: Wähle eine Wetter-Entität. Sonnige Tagesprognosen können die Vorheizzeit vorsichtig reduzieren; der Einfluss ist auf 15 Minuten begrenzt.",
+        "title": "Raum bearbeiten",
+        "description": "Du kannst Thermostat, Sensoren, Zeitplan und Temperaturen nach dem Erstellen des Raums ändern. Leere optionale Sensoren deaktivieren diese Funktion.",
         "data": {
-          "weather_entity": "Wettervorhersage-Entität (optional; leer lassen zum Deaktivieren)"
+          "climate_entity": "Thermostat",
+          "room_temperature_entity": "Raumtemperatursensor",
+          "schedule_entity": "Zeitplan für Komfortzeiten",
+          "window_entity": "Fensterkontakt (optional)",
+          "presence_entity": "Anwesenheitssensor (optional)",
+          "outdoor_temperature_entity": "Außentemperatursensor (optional)",
+          "weather_entity": "Wettervorhersage-Entität (optional)",
+          "comfort_temperature": "Komforttemperatur (°C)",
+          "eco_temperature": "Absenktemperatur (°C)",
+          "max_preheat_minutes": "Maximale Vorheizzeit (Minuten)"
+        },
+        "errors": {
+          "eco_must_be_below_comfort": "Die Absenktemperatur muss unter der Komforttemperatur liegen."
+        },
+        "abort": {
+          "already_configured": "Dieses Thermostat wird bereits von einer anderen Heizungsregelung verwendet."
         }
       }
     }
