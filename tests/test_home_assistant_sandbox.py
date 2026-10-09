@@ -365,6 +365,11 @@ async def test_person_presence_requires_someone_home_or_guest_mode(
     assert coordinator.data["present"] is False
     assert coordinator.data["mode"] == "away"
 
+    hass.states.async_set("person.patrick", "home")
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+
+    hass.states.async_set("person.patrick", "not_home")
     coordinator.config["guest_entity"] = "input_boolean.guest_mode"
     hass.states.async_set("input_boolean.guest_mode", "on")
     await coordinator.async_refresh()
@@ -456,4 +461,32 @@ async def test_proximity_debounce_survives_changing_distance_states(
     ):
         await coordinator.async_refresh()
     assert coordinator.data["present"] is False
+
+@pytest.mark.asyncio
+async def test_presence_sensor_works_standalone_and_schedule_can_disable_it(
+    hass, enable_custom_integrations
+):
+    """A presence sensor can be the sole source; its schedule can suppress motion."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["person_entities"] = []
+    coordinator.config["guest_entity"] = None
+    coordinator.config["proximity_entity"] = None
+    coordinator.config["presence_on_duration"] = 0
+    coordinator.config["presence_off_duration"] = 1200
+    coordinator.config["presence_schedule_entity"] = "schedule.presence_active"
+    hass.states.async_set("schedule.presence_active", "off")
+    hass.states.async_set("binary_sensor.someone_home", "on")
+
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+    assert coordinator.data["mode"] == "away"
+
+    hass.states.async_set("schedule.presence_active", "on")
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+
+    hass.states.async_set("binary_sensor.someone_home", "off")
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
 
