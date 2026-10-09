@@ -5,6 +5,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: dynamic-heating-tests-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
