@@ -161,3 +161,44 @@ def test_forecast_does_not_project_room_below_existing_setback_floor() -> None:
 
     assert decision.projected_temperature == 17.0
     assert decision.mode == "preheat"
+
+
+
+def test_sunny_daytime_forecast_conservatively_reduces_preheat_lead() -> None:
+    from custom_components.dynamic_heating.logic import apply_forecast_solar_adjustment
+
+    target = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
+    adjusted, reduction = apply_forecast_solar_adjustment(120, "sunny", target)
+    assert adjusted == 105
+    assert reduction == 15
+
+
+def test_cloudy_or_night_forecast_does_not_adjust_preheat() -> None:
+    from custom_components.dynamic_heating.logic import apply_forecast_solar_adjustment
+
+    daytime = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
+    night = datetime(2026, 10, 10, 23, 0, tzinfo=UTC)
+    assert apply_forecast_solar_adjustment(80, "cloudy", daytime) == (80, 0)
+    assert apply_forecast_solar_adjustment(80, "sunny", night) == (80, 0)
+    assert apply_forecast_solar_adjustment(80, None, daytime) == (80, 0)
+
+
+def test_partial_clouds_use_smaller_bounded_adjustment() -> None:
+    from custom_components.dynamic_heating.logic import apply_forecast_solar_adjustment
+
+    target = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
+    adjusted, reduction = apply_forecast_solar_adjustment(60, "partlycloudy", target)
+    assert reduction == 5
+    assert adjusted == 55
+
+
+def test_select_forecast_condition_chooses_nearest_hour_and_rejects_stale() -> None:
+    from custom_components.dynamic_heating.logic import select_forecast_condition
+
+    now = datetime(2026, 10, 10, 8, 0, tzinfo=UTC)
+    forecast = [
+        {"datetime": "2026-10-10T09:00:00+00:00", "condition": "cloudy"},
+        {"datetime": "2026-10-10T10:00:00+00:00", "condition": "sunny"},
+    ]
+    assert select_forecast_condition(forecast, now + timedelta(minutes=55), now) == "cloudy"
+    assert select_forecast_condition(forecast, now + timedelta(hours=6), now) is None
