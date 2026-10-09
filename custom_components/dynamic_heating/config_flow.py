@@ -312,7 +312,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                     )
                 ] = selector.NumberSelector(
                     selector.NumberSelectorConfig(
-                        min=1, max=100000, step=50, mode="box"
+                        min=0, max=100000, step=50, mode="box"
                     )
                 )
             elif key == CONF_PRESENCE_SCHEDULE_ENTITY:
