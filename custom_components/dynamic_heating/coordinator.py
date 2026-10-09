@@ -23,11 +23,15 @@ from .const import (
     CONF_SCHEDULE_ENTITY,
     CONF_WINDOW_ENTITY,
     DEFAULT_COMFORT_TEMPERATURE,
+    DEFAULT_COOLING_RATE,
     DEFAULT_ECO_TEMPERATURE,
     DEFAULT_HEATING_RATE,
     DEFAULT_MAX_PREHEAT_MINUTES,
     DOMAIN,
+    MAX_LEARNED_COOLING_RATE,
     MAX_LEARNED_HEATING_RATE,
+    MIN_COOLING_SAMPLE_SECONDS,
+    MIN_LEARNED_COOLING_RATE,
     MIN_LEARNED_HEATING_RATE,
     MIN_SAMPLE_SECONDS,
 )
@@ -63,22 +67,38 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry_id = entry_id
         self.enabled = False
         self.heating_rate = DEFAULT_HEATING_RATE
+        self.cooling_rate = DEFAULT_COOLING_RATE
         self._store = Store(hass, 1, f"{DOMAIN}_{entry_id}_learning")
         self._sample_temperature: float | None = None
         self._sample_time: datetime | None = None
+        self._cooling_sample_temperature: float | None = None
+        self._cooling_sample_time: datetime | None = None
 
     async def async_load_learning(self) -> None:
-        """Restore the learned heating rate after a Home Assistant restart."""
+        """Restore learned rates, validating persisted values before using them."""
         stored = await self._store.async_load()
         if not isinstance(stored, dict):
             return
+
         try:
-            rate = float(stored.get("heating_rate", DEFAULT_HEATING_RATE))
+            heating_rate = float(stored.get("heating_rate", DEFAULT_HEATING_RATE))
         except (TypeError, ValueError):
-            return
-        self.heating_rate = max(
-            MIN_LEARNED_HEATING_RATE, min(rate, MAX_LEARNED_HEATING_RATE)
-        )
+            heating_rate = DEFAULT_HEATING_RATE
+        if math.isfinite(heating_rate):
+            self.heating_rate = max(
+                MIN_LEARNED_HEATING_RATE,
+                min(heating_rate, MAX_LEARNED_HEATING_RATE),
+            )
+
+        try:
+            cooling_rate = float(stored.get("cooling_rate", DEFAULT_COOLING_RATE))
+        except (TypeError, ValueError):
+            cooling_rate = DEFAULT_COOLING_RATE
+        if math.isfinite(cooling_rate):
+            self.cooling_rate = max(
+                MIN_LEARNED_COOLING_RATE,
+                min(cooling_rate, MAX_LEARNED_COOLING_RATE),
+            )
 
     def _state(self, key: str) -> State | None:
         entity_id = self.config.get(key)
@@ -106,8 +126,26 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             event = event.replace(tzinfo=timezone)
         return event
 
-    async def _learn(self, room_temperature: float, climate_state: State | None) -> None:
-        """Update the heating-rate estimate only during an observed heating phase."""
+    async def _save_learning(self) -> None:
+        """Persist both bounded learning estimates together."""
+        await self._store.async_save(
+            {
+                "heating_rate": self.heating_rate,
+                "cooling_rate": self.cooling_rate,
+            }
+        )
+
+    async def _learn(
+        self,
+        room_temperature: float,
+        climate_state: State | None,
+        *,
+        window_open: bool,
+        present: bool,
+        schedule_active: bool,
+        eco_temperature: float,
+    ) -> None:
+        """Learn only from bounded, stable heating or setback observations."""
         attributes = climate_state.attributes if climate_state else {}
         setpoint = attributes.get("temperature")
         is_heating = attributes.get("hvac_action") == "heating"
@@ -116,87 +154,145 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (TypeError, ValueError):
             setpoint_value = None
 
-        if (
-            not is_heating
-            or setpoint_value is None
-            or room_temperature >= setpoint_value - 0.1
-        ):
+        now = dt_util.utcnow()
+
+        # Do not learn during open-window or away periods, as those observations
+        # are not representative of normal room behaviour.
+        if window_open or not present:
             self._sample_temperature = None
             self._sample_time = None
+            self._cooling_sample_temperature = None
+            self._cooling_sample_time = None
             return
 
-        now = dt_util.utcnow()
-        if self._sample_temperature is None or self._sample_time is None:
+        if is_heating:
+            self._cooling_sample_temperature = None
+            self._cooling_sample_time = None
+            if setpoint_value is None or room_temperature >= setpoint_value - 0.1:
+                self._sample_temperature = None
+                self._sample_time = None
+                return
+
+            if self._sample_temperature is None or self._sample_time is None:
+                self._sample_temperature = room_temperature
+                self._sample_time = now
+                return
+
+            elapsed = (now - self._sample_time).total_seconds()
+            if elapsed < MIN_SAMPLE_SECONDS:
+                return
+
+            delta = room_temperature - self._sample_temperature
+            if 0.05 <= delta <= 2.5:
+                observed_rate = delta / (elapsed / 3600)
+                observed_rate = max(
+                    MIN_LEARNED_HEATING_RATE,
+                    min(observed_rate, MAX_LEARNED_HEATING_RATE),
+                )
+                self.heating_rate = round(
+                    0.8 * self.heating_rate + 0.2 * observed_rate, 3
+                )
+                await self._save_learning()
+
             self._sample_temperature = room_temperature
             self._sample_time = now
             return
 
-        elapsed = (now - self._sample_time).total_seconds()
-        if elapsed < MIN_SAMPLE_SECONDS:
+        self._sample_temperature = None
+        self._sample_time = None
+        can_learn_cooling = (
+            setpoint_value is not None
+            and room_temperature > setpoint_value + 0.2
+            and not schedule_active
+        )
+        if not can_learn_cooling:
+            self._cooling_sample_temperature = None
+            self._cooling_sample_time = None
             return
 
-        delta = room_temperature - self._sample_temperature
-        if 0.05 <= delta <= 2.5:
-            observed_rate = delta / (elapsed / 3600)
-            observed_rate = max(
-                MIN_LEARNED_HEATING_RATE,
-                min(observed_rate, MAX_LEARNED_HEATING_RATE),
-            )
-            self.heating_rate = round(
-                0.8 * self.heating_rate + 0.2 * observed_rate, 3
-            )
-            await self._store.async_save({"heating_rate": self.heating_rate})
+        if (
+            self._cooling_sample_temperature is None
+            or self._cooling_sample_time is None
+        ):
+            self._cooling_sample_temperature = room_temperature
+            self._cooling_sample_time = now
+            return
 
-        self._sample_temperature = room_temperature
-        self._sample_time = now
+        elapsed = (now - self._cooling_sample_time).total_seconds()
+        if elapsed < MIN_COOLING_SAMPLE_SECONDS:
+            return
+
+        delta = room_temperature - self._cooling_sample_temperature
+        if -2.0 <= delta <= -0.05:
+            observed_rate = -delta / (elapsed / 3600)
+            observed_rate = max(
+                MIN_LEARNED_COOLING_RATE,
+                min(observed_rate, MAX_LEARNED_COOLING_RATE),
+            )
+            self.cooling_rate = round(0.8 * self.cooling_rate + 0.2 * observed_rate, 3)
+            await self._save_learning()
+
+        self._cooling_sample_temperature = room_temperature
+        self._cooling_sample_time = now
+
+    def _waiting_result(
+        self,
+        status: str,
+        room_temperature: float | None,
+        outdoor_temperature: float | None,
+    ) -> dict[str, Any]:
+        """Return a consistent no-control result for unavailable prerequisites."""
+        return {
+            "status": status,
+            "mode": "waiting",
+            "target_temperature": None,
+            "room_temperature": room_temperature,
+            "outdoor_temperature": outdoor_temperature,
+            "heating_rate": self.heating_rate,
+            "cooling_rate": self.cooling_rate,
+            "preheat_minutes": 0,
+            "projected_temperature": None,
+            "enabled": self.enabled,
+        }
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Read Home Assistant states, calculate a target and optionally apply it."""
-        room_state = self._state(CONF_ROOM_TEMPERATURE_ENTITY)
-        room_temperature = _as_float(room_state)
+        room_temperature = _as_float(self._state(CONF_ROOM_TEMPERATURE_ENTITY))
         schedule_state = self._state(CONF_SCHEDULE_ENTITY)
         climate_state = self._state(CONF_CLIMATE_ENTITY)
         outdoor_temperature = _as_float(self._state(CONF_OUTDOOR_TEMPERATURE_ENTITY))
 
         if room_temperature is None:
-            return {
-                "status": "Temperatursensor nicht verfügbar",
-                "mode": "waiting",
-                "target_temperature": None,
-                "room_temperature": None,
-                "outdoor_temperature": outdoor_temperature,
-                "heating_rate": self.heating_rate,
-                "preheat_minutes": 0,
-                "enabled": self.enabled,
-            }
+            return self._waiting_result(
+                "Temperatursensor nicht verfügbar – keine Sollwertänderung",
+                None,
+                outdoor_temperature,
+            )
+
+        if not self._valid(climate_state):
+            return self._waiting_result(
+                "Thermostat nicht verfügbar – keine Sollwertänderung",
+                room_temperature,
+                outdoor_temperature,
+            )
 
         if not self._valid(schedule_state):
-            return {
-                "status": "Zeitplan nicht verfügbar – keine Sollwertänderung",
-                "mode": "waiting",
-                "target_temperature": None,
-                "room_temperature": room_temperature,
-                "outdoor_temperature": outdoor_temperature,
-                "heating_rate": self.heating_rate,
-                "preheat_minutes": 0,
-                "enabled": self.enabled,
-            }
+            return self._waiting_result(
+                "Zeitplan nicht verfügbar – keine Sollwertänderung",
+                room_temperature,
+                outdoor_temperature,
+            )
 
         window_open = False
         window_id = self.config.get(CONF_WINDOW_ENTITY)
         if window_id:
             window_state = self.hass.states.get(window_id)
             if not self._valid(window_state):
-                return {
-                    "status": "Fensterkontakt nicht verfügbar – keine Sollwertänderung",
-                    "mode": "waiting",
-                    "target_temperature": None,
-                    "room_temperature": room_temperature,
-                    "outdoor_temperature": outdoor_temperature,
-                    "heating_rate": self.heating_rate,
-                    "preheat_minutes": 0,
-                    "enabled": self.enabled,
-                }
+                return self._waiting_result(
+                    "Fensterkontakt nicht verfügbar – keine Sollwertänderung",
+                    room_temperature,
+                    outdoor_temperature,
+                )
             window_open = window_state.state == "on"
 
         present = True
@@ -204,37 +300,41 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if presence_id:
             presence_state = self.hass.states.get(presence_id)
             if not self._valid(presence_state):
-                return {
-                    "status": "Anwesenheitssensor nicht verfügbar – keine Sollwertänderung",
-                    "mode": "waiting",
-                    "target_temperature": None,
-                    "room_temperature": room_temperature,
-                    "outdoor_temperature": outdoor_temperature,
-                    "heating_rate": self.heating_rate,
-                    "preheat_minutes": 0,
-                    "enabled": self.enabled,
-                }
+                return self._waiting_result(
+                    "Anwesenheitssensor nicht verfügbar – keine Sollwertänderung",
+                    room_temperature,
+                    outdoor_temperature,
+                )
             present = presence_state.state == "on"
 
-        await self._learn(room_temperature, climate_state)
+        comfort_temperature = float(
+            self.config.get(CONF_COMFORT_TEMPERATURE, DEFAULT_COMFORT_TEMPERATURE)
+        )
+        eco_temperature = float(
+            self.config.get(CONF_ECO_TEMPERATURE, DEFAULT_ECO_TEMPERATURE)
+        )
+        schedule_active = schedule_state.state == "on"
+
+        await self._learn(
+            room_temperature,
+            climate_state,
+            window_open=window_open,
+            present=present,
+            schedule_active=schedule_active,
+            eco_temperature=eco_temperature,
+        )
 
         next_event = self._parse_next_event(schedule_state)
-        now = dt_util.now()
         decision = decide_heating_target(
-            now=now,
-            schedule_active=schedule_state.state == "on",
+            now=dt_util.now(),
+            schedule_active=schedule_active,
             next_event=next_event,
             room_temperature=room_temperature,
             outdoor_temperature=outdoor_temperature,
-            comfort_temperature=float(
-                self.config.get(
-                    CONF_COMFORT_TEMPERATURE, DEFAULT_COMFORT_TEMPERATURE
-                )
-            ),
-            eco_temperature=float(
-                self.config.get(CONF_ECO_TEMPERATURE, DEFAULT_ECO_TEMPERATURE)
-            ),
+            comfort_temperature=comfort_temperature,
+            eco_temperature=eco_temperature,
             heating_rate_c_per_hour=self.heating_rate,
+            cooling_rate_c_per_hour=self.cooling_rate,
             max_preheat_minutes=int(
                 self.config.get(
                     CONF_MAX_PREHEAT_MINUTES, DEFAULT_MAX_PREHEAT_MINUTES
@@ -245,21 +345,16 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         target_temperature = decision.target_temperature
-        if target_temperature is not None and self._valid(climate_state):
-            # Respect the temperature limits advertised by the thermostat.
-            try:
-                min_temp = float(
-                    climate_state.attributes.get("min_temp", target_temperature)
+        # Respect the temperature limits advertised by the thermostat.
+        try:
+            min_temp = float(climate_state.attributes.get("min_temp", target_temperature))
+            max_temp = float(climate_state.attributes.get("max_temp", target_temperature))
+            if min_temp <= max_temp:
+                target_temperature = max(
+                    min_temp, min(target_temperature, max_temp)
                 )
-                max_temp = float(
-                    climate_state.attributes.get("max_temp", target_temperature)
-                )
-                if min_temp <= max_temp:
-                    target_temperature = max(
-                        min_temp, min(target_temperature, max_temp)
-                    )
-            except (TypeError, ValueError):
-                pass
+        except (TypeError, ValueError):
+            pass
 
         result: dict[str, Any] = {
             "status": decision.status,
@@ -268,8 +363,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "room_temperature": room_temperature,
             "outdoor_temperature": outdoor_temperature,
             "heating_rate": self.heating_rate,
+            "cooling_rate": self.cooling_rate,
             "preheat_minutes": decision.preheat_minutes,
-            "schedule_active": schedule_state.state == "on",
+            "projected_temperature": decision.projected_temperature,
+            "schedule_active": schedule_active,
             "next_event": next_event.isoformat() if next_event else None,
             "window_open": window_open,
             "present": present,
