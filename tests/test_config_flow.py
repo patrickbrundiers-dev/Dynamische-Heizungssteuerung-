@@ -31,6 +31,97 @@ def _mock_room(hass, *, options=None):
     entry.add_to_hass(hass)
     return entry
 
+def _duration(seconds: int) -> dict[str, int]:
+    """Build a Home Assistant duration selector value."""
+    return {
+        "hours": seconds // 3600,
+        "minutes": (seconds % 3600) // 60,
+        "seconds": seconds % 60,
+    }
+
+
+async def _finish_editor_flow(
+    hass,
+    entry,
+    *,
+    basic=None,
+    presence=None,
+    geofencing=None,
+    environment=None,
+):
+    """Submit all editor pages, using current settings unless overridden."""
+    values = dict(entry.data)
+    values.update(dict(entry.options))
+    values.update(basic or {})
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    first = {
+        key: values[key]
+        for key in (
+            "climate_entity",
+            "room_temperature_entity",
+            "schedule_entity",
+            "comfort_temperature",
+            "eco_temperature",
+            "max_preheat_minutes",
+        )
+    }
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=first
+    )
+    assert result["step_id"] == "presence"
+
+    presence_keys = (
+        "person_entities", "guest_entity", "presence_entity",
+        "presence_schedule_entity",
+    )
+    presence_input = {
+        key: values[key] for key in presence_keys if values.get(key)
+    }
+    presence_input.update({
+        "enter_home_duration": _duration(values.get("enter_home_duration", 2)),
+        "leaving_home_duration": _duration(values.get("leaving_home_duration", 2)),
+        "presence_on_duration": _duration(values.get("presence_on_duration", 300)),
+        "presence_off_duration": _duration(values.get("presence_off_duration", 1200)),
+    })
+    for key, value in (presence or {}).items():
+        if value is None:
+            presence_input.pop(key, None)
+        else:
+            presence_input[key] = value
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=presence_input
+    )
+    assert result["step_id"] == "geofencing"
+
+    geo_keys = ("proximity_entity", "proximity_direction_entity")
+    geo_input = {key: values[key] for key in geo_keys if values.get(key)}
+    geo_input.update({
+        "proximity_distance": values.get("proximity_distance", 500),
+        "proximity_duration": _duration(values.get("proximity_duration", 120)),
+        "proximity_max_age": _duration(values.get("proximity_max_age", 900)),
+    })
+    for key, value in (geofencing or {}).items():
+        if value is None:
+            geo_input.pop(key, None)
+        else:
+            geo_input[key] = value
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=geo_input
+    )
+    assert result["step_id"] == "environment"
+
+    env_keys = ("window_entity", "outdoor_temperature_entity", "weather_entity")
+    env_input = {key: values[key] for key in env_keys if values.get(key)}
+    for key, value in (environment or {}).items():
+        if value is None:
+            env_input.pop(key, None)
+        else:
+            env_input[key] = value
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=env_input
+    )
+
 
 @pytest.mark.asyncio
 async def test_user_flow_creates_entry(hass, enable_custom_integrations):
@@ -114,20 +205,14 @@ async def test_editor_saves_room_temperature_and_schedule_changes(
 ):
     """An existing room's sensor, schedule and target temperatures can be edited."""
     entry = _mock_room(hass)
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["type"] is FlowResultType.FORM
-
     edited = {
         **_valid_input(),
         "room_temperature_entity": "sensor.bedroom_temperature",
         "schedule_entity": "schedule.bedroom_comfort",
         "comfort_temperature": 22.0,
         "eco_temperature": 17.0,
-        # Empty optional selectors are omitted by Home Assistant's form.
     }
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], user_input=edited
-    )
+    result = await _finish_editor_flow(hass, entry, basic=edited)
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["room_temperature_entity"] == "sensor.bedroom_temperature"
@@ -165,11 +250,8 @@ async def test_editor_allows_changing_thermostat_when_not_already_used(
 ):
     """Editing the target thermostat updates the config entry's unique ID."""
     entry = _mock_room(hass)
-    result = await hass.config_entries.options.async_init(entry.entry_id)
     edited = {**_valid_input(), "climate_entity": "climate.bedroom"}
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], user_input=edited
-    )
+    result = await _finish_editor_flow(hass, entry, basic=edited)
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.unique_id == "climate.bedroom"
@@ -209,37 +291,38 @@ async def test_editor_rejects_thermostat_already_used_by_another_room(
 async def test_editor_saves_presence_and_proximity_settings(
     hass, enable_custom_integrations
 ):
-    """The room editor exposes person, guest, proximity and debounce fields."""
+    """Each grouped editor page saves its entity settings and durations."""
     entry = _mock_room(hass)
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    edited = {
-        **_valid_input(),
-        "person_entities": ["person.patrick", "person.jenny"],
-        "guest_entity": "input_boolean.guest_mode",
-        "enter_home_duration": {"hours": 0, "minutes": 0, "seconds": 2},
-        "leaving_home_duration": {"hours": 0, "minutes": 0, "seconds": 2},
-        "proximity_entity": "sensor.home_distance",
-        "proximity_direction_entity": "sensor.home_direction",
-        "proximity_duration": {"hours": 0, "minutes": 2, "seconds": 0},
-        "proximity_max_age": {"hours": 0, "minutes": 15, "seconds": 0},
-        "proximity_distance": 500,
-        "presence_schedule_entity": "schedule.presence_active",
-        "presence_on_duration": {"hours": 0, "minutes": 5, "seconds": 0},
-        "presence_off_duration": {"hours": 0, "minutes": 20, "seconds": 0},
-    }
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], user_input=edited
+    result = await _finish_editor_flow(
+        hass,
+        entry,
+        presence={
+            "person_entities": ["person.patrick", "person.jenny"],
+            "guest_entity": "input_boolean.guest_mode",
+            "enter_home_duration": _duration(120),
+            "leaving_home_duration": _duration(180),
+            "presence_schedule_entity": "schedule.presence_active",
+            "presence_on_duration": _duration(300),
+            "presence_off_duration": _duration(1200),
+        },
+        geofencing={
+            "proximity_entity": "sensor.home_distance",
+            "proximity_direction_entity": "sensor.home_direction",
+            "proximity_duration": _duration(120),
+            "proximity_max_age": _duration(900),
+            "proximity_distance": 500,
+        },
     )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["person_entities"] == ["person.patrick", "person.jenny"]
     assert entry.options["guest_entity"] == "input_boolean.guest_mode"
+    assert entry.options["presence_schedule_entity"] == "schedule.presence_active"
     assert entry.options["proximity_entity"] == "sensor.home_distance"
     assert entry.options["proximity_direction_entity"] == "sensor.home_direction"
     assert entry.options["proximity_max_age"] == 900
-    assert entry.options["presence_schedule_entity"] == "schedule.presence_active"
-    assert entry.options["enter_home_duration"] == 2
-    assert entry.options["leaving_home_duration"] == 2
+    assert entry.options["enter_home_duration"] == 120
+    assert entry.options["leaving_home_duration"] == 180
     assert entry.options["proximity_duration"] == 120
     assert entry.options["presence_on_duration"] == 300
     assert entry.options["presence_off_duration"] == 1200

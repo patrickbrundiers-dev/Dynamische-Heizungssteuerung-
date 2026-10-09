@@ -127,3 +127,42 @@ Die Zeitfelder verwenden im Raum-Editor den nativen Home-Assistant-Dauerauswähl
 - **Prognoseprüfung:** Wenn ein inaktiver Zeitplan in den Komfortzeitraum wechselt, wird die zuvor für diesen Zeitpunkt gespeicherte projizierte Raumtemperatur mit der tatsächlichen Raumtemperatur verglichen. Die Integration aktualisiert den letzten signierten Prognosefehler, Anzahl der ausgewerteten Prognosen und den mittleren absoluten Fehler (MAE) in °C.
 - **Persistenz und Datenschutz:** Raten, Zähler und zusammengefasste Fehlerkennzahlen werden lokal gespeichert. Es wird keine vollständige Temperatur-, Bewegungs- oder GPS-Historie gesammelt. Die einzelne noch offene Prognose für den nächsten Zeitplanwechsel liegt nur im Arbeitsspeicher und wird nach einem Neustart nicht nachträglich ausgewertet.
 - **Interpretation:** Der MAE wird erst aussagekräftig, wenn mehrere Komfortbeginn-Prognosen ausgewertet wurden und Raum, Fenster, Präsenz sowie Zeitplan stabil konfiguriert sind. Er ist eine Beobachtungskennzahl, keine Garantie für einen bestimmten Komfortzeitpunkt.
+
+
+## Version 0.3.5: Editor, Geo-Fencing-Kalibrierung und Modell-Dashboard
+
+### Neuer geführter Raum-Editor
+
+Der Dialog **Konfigurieren** ist in vier kurze Seiten gegliedert:
+
+1. **Raum und Heizverhalten:** Thermostat, Raumtemperatur, Komfortzeitplan, Komfort- und Absenktemperatur, maximale Vorheizzeit.
+2. **Personen und Anwesenheit:** Personen/Geräte-Tracker, Ankunftsbestätigung, Abwesenheits-Nachlauf, Gastmodus, Präsenzsensor und dessen Zeitplan sowie EIN-/AUS-Reaktionszeiten.
+3. **Geo-Fencing und Standortqualität:** Entfernungssensor, zugehöriger Richtungssensor, maximaler Radius, Anfahrtsbestätigung und maximales Alter der Standortdaten.
+4. **Fenster, Außentemperatur und Wetter:** optionale Sensoren mit Erklärung, wie sie die Regelung beeinflussen.
+
+Jede Seite hat eine eigene Überschrift, eine kurze Einführung und ausführliche Feldbeschreibungen. Bereits gespeicherte Einstellungen bleiben beim Weiterklicken erhalten. Die endgültige Speicherung erfolgt erst auf der letzten Seite.
+
+### Geo-Fencing über echte Updates kalibrieren
+
+Das Dashboard unter `dashboards/dynamic_heating.yaml` enthält jetzt eine eigene Geo-Fencing-Ansicht für:
+- aktueller Status, Entfernung in Metern und Alter der zuletzt empfangenen Entfernungsmessung
+- Anzahl empfangener Standortupdates und durchschnittliches Update-Intervall
+- Phasen mit veralteten oder ungültigen Standortdaten
+- Ereignisse außerhalb des Radius sowie begonnene und bestätigte Anfahrten
+
+Die Messung wird aus den Zeitstempeln tatsächlicher Zustandsänderungen berechnet; wiederholtes Abfragen des gleichen alten Wertes zählt nicht als neues Standortupdate. Aggregierte Kennzahlen werden gespeichert, eine Rohhistorie der GPS-Positionen wird nicht angelegt. Stimmen Update-Intervall und Grenzwert für das Datenalter nicht zusammen, passe den Grenzwert anhand realer Beobachtungen an.
+
+### Lernmodell über mehrere Wochen bewerten
+
+Die Statussensoren und die zweite Dashboard-Ansicht zeigen:
+- gelernte und zuletzt gemessene Aufheiz-/Abkühlrate
+- akzeptierte und verworfene Lernmessungen
+- Anzahl ausgewerteter Komfortbeginn-Prognosen
+- letzten signierten Temperaturfehler und den mittleren absoluten Prognosefehler (MAE)
+- Verlauf der Raten und Prognosewerte über sieben Tage
+
+Für eine brauchbare Aussage sollte der Raum mehrere Komfortwechsel mit verfügbaren Sensoren, geschlossenen Fenstern und stabiler Anwesenheit durchlaufen. Der MAE wird nur an einer auswertbaren Zeitplan-Umschaltung aktualisiert. Die Steuerung verändert ihre Lernstrategie nicht automatisch nur aufgrund eines einzelnen hohen Fehlers; zuerst sollten Sensorposition, Zeitplan und Thermostatverhalten geprüft werden.
+
+### Sicherheit und Datenhaltung
+
+Alle neuen Kalibrierungswerte sind aggregierte Kennzahlen. Die Integration speichert weder eine fortlaufende GPS-Koordinaten-Historie noch Rohverläufe sämtlicher Temperaturmessungen. Die Regelung bleibt standardmäßig ausgeschaltet.

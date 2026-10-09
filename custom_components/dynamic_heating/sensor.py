@@ -12,7 +12,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import UnitOfLength, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -137,6 +137,104 @@ SENSORS = (
         state_class=SensorStateClass.MEASUREMENT,
     ),
     HeatingSensorDescription(
+        key="learning_status",
+        name="Lernmodell Status",
+        icon="mdi:brain",
+    ),
+    HeatingSensorDescription(
+        key="last_observed_heating_rate",
+        name="Letzte beobachtete Aufheizrate",
+        icon="mdi:chart-line",
+        native_unit_of_measurement="°C/h",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="last_observed_cooling_rate",
+        name="Letzte beobachtete Abkühlrate",
+        icon="mdi:chart-bell-curve",
+        native_unit_of_measurement="°C/h",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="last_forecast_predicted_temperature",
+        name="Letzte prognostizierte Temperatur",
+        icon="mdi:thermometer-chevron-up",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="last_forecast_actual_temperature",
+        name="Letzte tatsächliche Komforttemperatur",
+        icon="mdi:thermometer-check",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="proximity_status",
+        name="Geo-Fencing Status",
+        icon="mdi:map-marker-check",
+    ),
+    HeatingSensorDescription(
+        key="proximity_distance_m",
+        name="Geo-Fencing Entfernung",
+        icon="mdi:map-marker-distance",
+        device_class=SensorDeviceClass.DISTANCE,
+        native_unit_of_measurement=UnitOfLength.METERS,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="proximity_age_seconds",
+        name="Alter der Standortdaten",
+        icon="mdi:clock-alert-outline",
+        native_unit_of_measurement="s",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="proximity_updates_seen",
+        name="Empfangene Standortupdates",
+        icon="mdi:counter",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    HeatingSensorDescription(
+        key="proximity_average_update_interval_s",
+        name="Mittleres Standortupdate-Intervall",
+        icon="mdi:timer-sand",
+        native_unit_of_measurement="s",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="proximity_stale_events",
+        name="Veraltete Standortereignisse",
+        icon="mdi:map-marker-alert-outline",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    HeatingSensorDescription(
+        key="proximity_invalid_events",
+        name="Ungültige Standortereignisse",
+        icon="mdi:alert-circle-outline",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    HeatingSensorDescription(
+        key="proximity_out_of_range_events",
+        name="Außerhalb der Anfahrtsentfernung",
+        icon="mdi:map-marker-off-outline",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    HeatingSensorDescription(
+        key="proximity_approach_attempts",
+        name="Erkannte Anfahrten",
+        icon="mdi:car-arrow-left",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    HeatingSensorDescription(
+        key="proximity_confirmed_approaches",
+        name="Bestätigte Anfahrten",
+        icon="mdi:check-circle-outline",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    HeatingSensorDescription(
         key="preheat_minutes",
         name="Geschätzte Vorheizzeit",
         icon="mdi:timer-outline",
@@ -230,6 +328,15 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "last_forecast_actual_temperature",
             "last_forecast_event",
             "last_forecast_error_at",
+            "proximity_updates_seen",
+            "proximity_update_interval_count",
+            "proximity_average_update_interval_s",
+            "proximity_stale_events",
+            "proximity_invalid_events",
+            "proximity_out_of_range_events",
+            "proximity_approach_attempts",
+            "proximity_confirmed_approaches",
+            "proximity_last_update_at",
         )
         return {
             key: self.coordinator.data[key]

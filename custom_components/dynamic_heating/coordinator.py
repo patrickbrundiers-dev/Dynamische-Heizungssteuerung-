@@ -106,6 +106,18 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._proximity_direction: str | None = None
         self._proximity_age_seconds: float | None = None
         self._proximity_status = "Proximity nicht konfiguriert"
+        self._proximity_status_category = "unconfigured"
+        self._proximity_metrics_dirty = False
+        self._proximity_last_state_update: datetime | None = None
+        self._proximity_last_update_at: str | None = None
+        self._proximity_updates_seen = 0
+        self._proximity_update_interval_count = 0
+        self._proximity_average_update_interval_s: float | None = None
+        self._proximity_stale_events = 0
+        self._proximity_invalid_events = 0
+        self._proximity_out_of_range_events = 0
+        self._proximity_approach_attempts = 0
+        self._proximity_confirmed_approaches = 0
 
         # The model retains only compact quality metrics, not raw location or
         # temperature histories. The pending forecast is ephemeral per event.
@@ -189,6 +201,39 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             stored.get("last_learning_sample_at")
         )
 
+        self._proximity_updates_seen = self._stored_count(
+            stored.get("proximity_updates_seen")
+        )
+        self._proximity_update_interval_count = self._stored_count(
+            stored.get("proximity_update_interval_count")
+        )
+        self._proximity_average_update_interval_s = self._stored_float(
+            stored.get("proximity_average_update_interval_s")
+        )
+        self._proximity_stale_events = self._stored_count(
+            stored.get("proximity_stale_events")
+        )
+        self._proximity_invalid_events = self._stored_count(
+            stored.get("proximity_invalid_events")
+        )
+        self._proximity_out_of_range_events = self._stored_count(
+            stored.get("proximity_out_of_range_events")
+        )
+        self._proximity_approach_attempts = self._stored_count(
+            stored.get("proximity_approach_attempts")
+        )
+        self._proximity_confirmed_approaches = self._stored_count(
+            stored.get("proximity_confirmed_approaches")
+        )
+        raw_update = self._stored_string(stored.get("proximity_last_state_update"))
+        parsed_update = dt_util.parse_datetime(raw_update) if raw_update else None
+        self._proximity_last_state_update = (
+            dt_util.as_utc(parsed_update) if parsed_update else None
+        )
+        self._proximity_last_update_at = self._stored_string(
+            stored.get("proximity_last_update_at")
+        )
+
     @staticmethod
     def _climate_setpoint(state: State | None) -> float | None:
         """Read the thermostat setpoint if it is finite and numeric."""
@@ -268,6 +313,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "last_forecast_actual_temperature": self._last_forecast_actual_temperature,
             "last_forecast_event": self._last_forecast_event,
             "last_forecast_error_at": self._last_forecast_error_at,
+            "proximity_updates_seen": self._proximity_updates_seen,
+            "proximity_update_interval_count": self._proximity_update_interval_count,
+            "proximity_average_update_interval_s": self._proximity_average_update_interval_s,
+            "proximity_stale_events": self._proximity_stale_events,
+            "proximity_invalid_events": self._proximity_invalid_events,
+            "proximity_out_of_range_events": self._proximity_out_of_range_events,
+            "proximity_approach_attempts": self._proximity_approach_attempts,
+            "proximity_confirmed_approaches": self._proximity_confirmed_approaches,
+            "proximity_last_update_at": self._proximity_last_update_at,
         }
 
     async def _save_learning(self) -> None:
@@ -295,6 +349,19 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ),
                 "last_forecast_event": self._last_forecast_event,
                 "last_forecast_error_at": self._last_forecast_error_at,
+                "proximity_updates_seen": self._proximity_updates_seen,
+                "proximity_update_interval_count": self._proximity_update_interval_count,
+                "proximity_average_update_interval_s": self._proximity_average_update_interval_s,
+                "proximity_stale_events": self._proximity_stale_events,
+                "proximity_invalid_events": self._proximity_invalid_events,
+                "proximity_out_of_range_events": self._proximity_out_of_range_events,
+                "proximity_approach_attempts": self._proximity_approach_attempts,
+                "proximity_confirmed_approaches": self._proximity_confirmed_approaches,
+                "proximity_last_state_update": (
+                    self._proximity_last_state_update.isoformat()
+                    if self._proximity_last_state_update else None
+                ),
+                "proximity_last_update_at": self._proximity_last_update_at,
             }
         )
 
@@ -632,6 +699,47 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result = value * factor
         return result if math.isfinite(result) and result >= 0 else None
 
+    def _record_proximity_category(self, category: str) -> None:
+        """Count only changes between meaningful geofence states."""
+        if category == self._proximity_status_category:
+            return
+        self._proximity_status_category = category
+        if category == "stale":
+            self._proximity_stale_events += 1
+            self._proximity_metrics_dirty = True
+        elif category == "invalid":
+            self._proximity_invalid_events += 1
+            self._proximity_metrics_dirty = True
+        elif category == "out_of_range":
+            self._proximity_out_of_range_events += 1
+            self._proximity_metrics_dirty = True
+        elif category == "approaching":
+            self._proximity_approach_attempts += 1
+            self._proximity_metrics_dirty = True
+        elif category == "confirmed":
+            self._proximity_confirmed_approaches += 1
+            self._proximity_metrics_dirty = True
+
+    def _observe_proximity_update(self, distance_state: State) -> None:
+        """Measure actual device update cadence without storing location history."""
+        updated_at = dt_util.as_utc(distance_state.last_updated)
+        if self._proximity_last_state_update == updated_at:
+            return
+        if self._proximity_last_state_update is not None:
+            interval = (updated_at - self._proximity_last_state_update).total_seconds()
+            if 0 < interval <= 7 * 24 * 60 * 60:
+                count = self._proximity_update_interval_count
+                average = self._proximity_average_update_interval_s
+                self._proximity_update_interval_count += 1
+                self._proximity_average_update_interval_s = (
+                    interval if average is None
+                    else average + (interval - average) / (count + 1)
+                )
+        self._proximity_last_state_update = updated_at
+        self._proximity_last_update_at = updated_at.isoformat()
+        self._proximity_updates_seen += 1
+        self._proximity_metrics_dirty = True
+
     def _proximity_is_active(
         self,
         distance_state: State | None,
@@ -644,7 +752,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if not self._valid(distance_state):
             self._proximity_approaching_since = None
+            self._record_proximity_category("invalid")
             return None, "Proximity-Entfernung nicht verfügbar"
+
+        self._observe_proximity_update(distance_state)
 
         now = dt_util.utcnow()
         age = (now - dt_util.as_utc(distance_state.last_updated)).total_seconds()
@@ -655,6 +766,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         if age < -60 or age > max_age:
             self._proximity_approaching_since = None
+            self._record_proximity_category("stale")
             return (
                 None,
                 f"Standortdaten veraltet ({round(max(age, 0) / 60)} min) – "
@@ -668,20 +780,24 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raw_direction = direction_state.state
         elif self.config.get(CONF_PROXIMITY_DIRECTION_ENTITY):
             self._proximity_approaching_since = None
+            self._record_proximity_category("invalid")
             return None, "Proximity-Richtung nicht verfügbar"
         else:
             self._proximity_approaching_since = None
+            self._record_proximity_category("invalid")
             return None, "Proximity-Richtung fehlt: bitte Richtungssensor auswählen"
 
         direction = str(raw_direction or "").strip().lower()
         self._proximity_direction = direction or None
         if direction == "unknown" or direction in _INVALID_STATES or not direction:
             self._proximity_approaching_since = None
+            self._record_proximity_category("invalid")
             return None, "Proximity-Richtung ist unbekannt"
 
         raw_distance = _as_float(distance_state)
         if raw_distance is None:
             self._proximity_approaching_since = None
+            self._record_proximity_category("invalid")
             return None, "Proximity-Entfernung ist kein gültiger Zahlenwert"
 
         distance_m = self._distance_to_meters(
@@ -690,6 +806,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         if distance_m is None:
             self._proximity_approaching_since = None
+            self._record_proximity_category("invalid")
             return None, "Proximity-Einheit nicht unterstützt"
         self._proximity_distance_m = round(distance_m, 1)
 
@@ -699,23 +816,28 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         if direction == "arrived" or distance_m <= 0:
             self._proximity_approaching_since = None
+            self._record_proximity_category("confirmed")
             return True, "Proximity meldet Ankunft"
         if direction in ("away_from", "stationary"):
             self._proximity_approaching_since = None
+            self._record_proximity_category("not_approaching")
             return False, (
                 "Bewegung weg vom Zuhause" if direction == "away_from"
                 else "Standort stationär – keine Anfahrt"
             )
         if direction != "towards":
             self._proximity_approaching_since = None
+            self._record_proximity_category("invalid")
             return None, f"Unbekannte Bewegungsrichtung: {direction}"
 
         if distance_m > maximum_distance:
             self._proximity_approaching_since = None
+            self._record_proximity_category("out_of_range")
             return False, "Noch außerhalb der Anfahrtsentfernung"
 
         if self._proximity_approaching_since is None:
             self._proximity_approaching_since = now
+            self._record_proximity_category("approaching")
         duration = max(
             0,
             int(self.config.get(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION)),
@@ -725,6 +847,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False, (
                 f"Anfahrt erkannt – Wartezeit {round(duration - elapsed)} s"
             )
+        self._record_proximity_category("confirmed")
         return True, "Anfahrt bestätigt"
 
     def _evaluate_presence(self) -> tuple[bool | None, str]:
@@ -880,6 +1003,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             window_open = window_state.state == "on"
 
         present, presence_status = self._evaluate_presence()
+        if self._proximity_metrics_dirty:
+            self._proximity_metrics_dirty = False
+            await self._save_learning()
         if present is None:
             return self._waiting_result(presence_status, room_temperature, outdoor_temperature)
 

@@ -825,4 +825,91 @@ async def test_schedule_forecast_error_and_running_mae_are_recorded(
     assert coordinator._last_forecast_error_c == pytest.approx(-1.0)
     assert coordinator._forecast_mae_c == pytest.approx(0.75)
 
+@pytest.mark.asyncio
+async def test_proximity_calibration_counts_actual_sensor_updates_and_stale_periods(
+    hass, enable_custom_integrations
+):
+    """Only sensor-state changes count as updates; stale periods count once."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["proximity_entity"] = "sensor.home_distance"
+    coordinator.config["proximity_direction_entity"] = "sensor.home_direction"
+    coordinator.config["proximity_distance"] = 500
+    coordinator.config["proximity_duration"] = 0
+    coordinator.config["proximity_max_age"] = 900
+
+    hass.states.async_set(
+        "sensor.home_distance", "450", {"unit_of_measurement": "m"}
+    )
+    hass.states.async_set("sensor.home_direction", "towards")
+    await coordinator.async_refresh()
+    assert coordinator.data["proximity_updates_seen"] == 1
+    assert coordinator.data["proximity_approach_attempts"] == 1
+    assert coordinator.data["proximity_confirmed_approaches"] == 1
+
+    hass.states.async_set(
+        "sensor.home_distance", "420", {"unit_of_measurement": "m"}
+    )
+    await coordinator.async_refresh()
+    assert coordinator.data["proximity_updates_seen"] == 2
+    assert coordinator.data["proximity_average_update_interval_s"] is not None
+
+    future = dt_util.utcnow() + timedelta(minutes=20)
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=future,
+    ):
+        await coordinator.async_refresh()
+        assert coordinator.data["proximity_stale_events"] == 1
+        await coordinator.async_refresh()
+        assert coordinator.data["proximity_stale_events"] == 1
+
+    stored = await coordinator._store.async_load()
+    assert stored["proximity_updates_seen"] == 2
+    assert stored["proximity_stale_events"] == 1
+
+
+@pytest.mark.asyncio
+async def test_geofence_stationary_direction_resets_approach_timer(
+    hass, enable_custom_integrations
+):
+    """A stationary state cancels an unfinished arrival debounce."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["proximity_entity"] = "sensor.home_distance"
+    coordinator.config["proximity_direction_entity"] = "sensor.home_direction"
+    coordinator.config["proximity_distance"] = 500
+    coordinator.config["proximity_duration"] = 120
+    coordinator.config["proximity_max_age"] = 900
+    start = dt_util.utcnow()
+
+    hass.states.async_set(
+        "sensor.home_distance", "450", {"unit_of_measurement": "m"}
+    )
+    hass.states.async_set("sensor.home_direction", "towards")
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start,
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+    hass.states.async_set("sensor.home_direction", "stationary")
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=60),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+    hass.states.async_set("sensor.home_direction", "towards")
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=120),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+    assert coordinator.data["proximity_approach_attempts"] == 2
 

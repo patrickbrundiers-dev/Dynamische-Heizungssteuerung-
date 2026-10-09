@@ -1,32 +1,40 @@
 title: Dynamische Heizungssteuerung
 views:
-  - title: Heizungsregelung
+  - title: Übersicht
     path: dynamic-heating
     icon: mdi:home-thermometer
     cards:
       - type: markdown
         title: Raumregelung
         content: >-
-          Beispielansicht: Ersetze die Entity-IDs unten durch die in deinem Home
-          Assistant tatsächlich angelegten Entitäten. Vergleiche zuerst die
-          berechnete Solltemperatur mit dem aktuellen Thermostat-Sollwert,
-          während die dynamische Regelung noch ausgeschaltet ist.
+          **Zuerst beobachten, dann aktivieren.** Vergleiche die berechnete
+          Solltemperatur und den aktuellen Thermostat-Sollwert, während die
+          dynamische Regelung ausgeschaltet ist. Pro Raum darf nur eine
+          Automation den Thermostat-Sollwert steuern.
       - type: entities
-        title: Status und Diagnose
+        title: Status und Heizentscheidung
         show_header_toggle: false
         entities:
           - entity: switch.dynamische_heizungssteuerung_regelung_aktiv
             name: Regelung aktiv
           - entity: sensor.dynamische_heizungssteuerung_status
-            name: Entscheidungsstatus
+            name: Letzte Heizentscheidung und Diagnosedetails
+          - entity: sensor.dynamische_heizungssteuerung_raumtemperatur
+            name: Raumtemperatur
+          - entity: sensor.dynamische_heizungssteuerung_berechnete_solltemperatur
+            name: Berechnete Solltemperatur
+          - entity: sensor.dynamische_heizungssteuerung_aktueller_thermostat_sollwert
+            name: Thermostat-Sollwert (Referenz)
+          - entity: sensor.dynamische_heizungssteuerung_geschatzte_vorheizzeit
+            name: Geschätzte Vorheizzeit
+          - entity: sensor.dynamische_heizungssteuerung_prognostizierte_raumtemperatur
+            name: Prognostizierte Raumtemperatur
           - entity: sensor.dynamische_heizungssteuerung_wetterprognose
             name: Wetterprognose zum Komfortzeitpunkt
           - entity: sensor.dynamische_heizungssteuerung_sonnenkorrektur_vorheizzeit
-            name: Verkürzung der Vorheizzeit durch Sonne
-          - entity: sensor.dynamische_heizungssteuerung_geschatzte_vorheizzeit
-            name: Berechnete Vorheizzeit
+            name: Verkürzung durch Sonne
       - type: history-graph
-        title: Sollwertvergleich und Raumverlauf (24 Stunden)
+        title: Temperatur- und Sollwertverlauf (24 Stunden)
         hours_to_show: 24
         refresh_interval: 60
         entities:
@@ -35,15 +43,148 @@ views:
           - entity: sensor.dynamische_heizungssteuerung_berechnete_solltemperatur
             name: Berechneter Sollwert
           - entity: sensor.dynamische_heizungssteuerung_aktueller_thermostat_sollwert
-            name: Aktueller Thermostat-Sollwert (Referenz)
+            name: Aktueller Thermostat-Sollwert
           - entity: sensor.dynamische_heizungssteuerung_prognostizierte_raumtemperatur
-            name: Prognostizierte Raumtemperatur
+            name: Projektion
+      - type: entities
+        title: "Geo-Fencing: Live-Kalibrierung"
+        show_header_toggle: false
+        entities:
+          - entity: sensor.dynamische_heizungssteuerung_geo_fencing_status
+            name: Ergebnis der Standortprüfung
+          - entity: sensor.dynamische_heizungssteuerung_geo_fencing_entfernung
+            name: Aktuelle Entfernung (normalisiert auf Meter)
+          - entity: sensor.dynamische_heizungssteuerung_alter_der_standortdaten
+            name: Alter des letzten Standortupdates
+          - entity: sensor.dynamische_heizungssteuerung_empfangene_standortupdates
+            name: Empfangene Standortupdates
+          - entity: sensor.dynamische_heizungssteuerung_mittleres_standortupdate_intervall
+            name: Durchschnittliches Update-Intervall
+          - entity: sensor.dynamische_heizungssteuerung_veraltete_standortereignisse
+            name: Veraltete Standortphasen
+          - entity: sensor.dynamische_heizungssteuerung_ungultige_standortereignisse
+            name: Ungültige Standortphasen
+          - entity: sensor.dynamische_heizungssteuerung_ausserhalb_der_anfahrtsentfernung
+            name: Außerhalb des Anfahrtsradius
+          - entity: sensor.dynamische_heizungssteuerung_erkannte_anfahrten
+            name: Erkannte Anfahrten
+          - entity: sensor.dynamische_heizungssteuerung_bestatigte_anfahrten
+            name: Bestätigte Anfahrten
       - type: history-graph
-        title: Lernkurve (7 Tage)
+        title: Standortaktualität und Update-Intervall (7 Tage)
+        hours_to_show: 168
+        refresh_interval: 300
+        entities:
+          - entity: sensor.dynamische_heizungssteuerung_alter_der_standortdaten
+            name: Alter des aktuellen Werts (s)
+          - entity: sensor.dynamische_heizungssteuerung_mittleres_standortupdate_intervall
+            name: Durchschnittliches Update-Intervall (s)
+      - type: markdown
+        title: Geo-Fencing richtig einstellen
+        content: >-
+          Prüfe zuerst, wie oft dein Handy tatsächlich Standortupdates liefert.
+          Das durchschnittliche Update-Intervall sollte deutlich unter dem
+          eingestellten maximalen Datenalter liegen. Wenn der Status veraltete
+          Daten oder eine fehlende Richtung meldet, löst Geo-Fencing keine
+          neue Anfahrt aus. Der Entfernungs- und Richtungssensor müssen zur
+          selben Proximity-Zone gehören.
+
+  - title: Lernmodell
+    path: learning-model
+    icon: mdi:chart-bell-curve-cumulative
+    cards:
+      - type: markdown
+        title: Lernqualität verstehen
+        content: >-
+          Die Integration lernt aus plausiblen Aufheiz- und Abkühlphasen.
+          Messungen mit Ausreißern werden verworfen. Der mittlere absolute
+          Prognosefehler (MAE) zeigt in °C, wie weit die prognostizierte
+          Raumtemperatur beim Komfortbeginn im Durchschnitt von der Messung
+          abwich. Einzelne Ereignisse sind wenig aussagekräftig; bewerte den
+          Verlauf erst nach mehreren Wochen und mehreren Komfortwechseln.
+      - type: entities
+        title: Lernstatus und Qualität
+        show_header_toggle: false
+        entities:
+          - entity: sensor.dynamische_heizungssteuerung_lernmodell_status
+            name: Aktueller Lernstatus
+          - entity: sensor.dynamische_heizungssteuerung_gelernte_aufheizrate
+            name: Gelernte Aufheizrate
+          - entity: sensor.dynamische_heizungssteuerung_letzte_beobachtete_aufheizrate
+            name: Letzte beobachtete Aufheizrate
+          - entity: sensor.dynamische_heizungssteuerung_gelernte_abkuhlrate
+            name: Gelernte Abkühlrate
+          - entity: sensor.dynamische_heizungssteuerung_letzte_beobachtete_abkuhlrate
+            name: Letzte beobachtete Abkühlrate
+          - entity: sensor.dynamische_heizungssteuerung_akzeptierte_aufheizmessungen
+            name: Akzeptierte Aufheizmessungen
+          - entity: sensor.dynamische_heizungssteuerung_akzeptierte_abkuhlmessungen
+            name: Akzeptierte Abkühlmessungen
+          - entity: sensor.dynamische_heizungssteuerung_verworfene_lernmessungen
+            name: Verworfene Lernmessungen
+          - entity: sensor.dynamische_heizungssteuerung_ausgewertete_temperaturprognosen
+            name: Ausgewertete Komfortprognosen
+          - entity: sensor.dynamische_heizungssteuerung_mittlerer_prognosefehler
+            name: Mittlerer absoluter Prognosefehler (MAE)
+          - entity: sensor.dynamische_heizungssteuerung_letzter_prognosefehler
+            name: Letzter Prognosefehler (Ist minus Prognose)
+          - entity: sensor.dynamische_heizungssteuerung_letzte_prognostizierte_temperatur
+            name: Prognostizierte Temperatur beim letzten Komfortbeginn
+          - entity: sensor.dynamische_heizungssteuerung_letzte_tatsachliche_komforttemperatur
+            name: Tatsächliche Temperatur beim letzten Komfortbeginn
+      - type: history-graph
+        title: Lernraten im Verlauf (7 Tage)
         hours_to_show: 168
         refresh_interval: 300
         entities:
           - entity: sensor.dynamische_heizungssteuerung_gelernte_aufheizrate
-            name: Aufheizrate °C/h
+            name: Aufheizrate (°C/h)
           - entity: sensor.dynamische_heizungssteuerung_gelernte_abkuhlrate
-            name: Abkühlrate °C/h
+            name: Abkühlrate (°C/h)
+      - type: history-graph
+        title: Prognosequalität (7 Tage)
+        hours_to_show: 168
+        refresh_interval: 300
+        entities:
+          - entity: sensor.dynamische_heizungssteuerung_mittlerer_prognosefehler
+            name: MAE (°C)
+          - entity: sensor.dynamische_heizungssteuerung_letzter_prognosefehler
+            name: Letzter Fehler (°C)
+          - entity: sensor.dynamische_heizungssteuerung_letzte_prognostizierte_temperatur
+            name: Prognose
+          - entity: sensor.dynamische_heizungssteuerung_letzte_tatsachliche_komforttemperatur
+            name: Tatsächlich
+      - type: statistics-graph
+        title: Lernraten im Verlauf (30 Tage)
+        chart_type: line
+        period: day
+        days_to_show: 30
+        stat_types:
+          - mean
+        entities:
+          - entity: sensor.dynamische_heizungssteuerung_gelernte_aufheizrate
+            name: Aufheizrate (°C/h)
+          - entity: sensor.dynamische_heizungssteuerung_gelernte_abkuhlrate
+            name: Abkühlrate (°C/h)
+      - type: statistics-graph
+        title: Prognosequalität im Verlauf (30 Tage)
+        chart_type: line
+        period: day
+        days_to_show: 30
+        stat_types:
+          - mean
+        entities:
+          - entity: sensor.dynamische_heizungssteuerung_mittlerer_prognosefehler
+            name: MAE (°C)
+          - entity: sensor.dynamische_heizungssteuerung_letzter_prognosefehler
+            name: Letzter Fehler (°C)
+      - type: markdown
+        title: Wann die Lernqualität bewerten?
+        content: >-
+          Warte auf mehrere geplante Komfortwechsel mit geschlossenem Fenster,
+          stabiler Anwesenheit und zuverlässig verfügbaren Sensoren. Der MAE
+          wird nur dann aktualisiert, wenn ein geplanter Komfortbeginn unter
+          gültigen Bedingungen ausgewertet werden konnte. Ein hoher Wert sollte
+          zunächst zu einer Prüfung von Sensorposition, Schedule und
+          Thermostatverhalten führen, nicht zu einer automatischen aggressiven
+          Änderung der Heizungsregelung.

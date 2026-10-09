@@ -226,7 +226,7 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
-    """Allow an existing room's configuration to be edited and saved."""
+    """Editable, multi-step room editor with clear functional groups."""
 
     def _current_values(self) -> dict:
         """Return effective values, with saved options taking precedence."""
@@ -235,27 +235,62 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         values.setdefault(CONF_COMFORT_TEMPERATURE, DEFAULT_COMFORT_TEMPERATURE)
         values.setdefault(CONF_ECO_TEMPERATURE, DEFAULT_ECO_TEMPERATURE)
         values.setdefault(CONF_MAX_PREHEAT_MINUTES, DEFAULT_MAX_PREHEAT_MINUTES)
+        values.setdefault(CONF_ENTER_HOME_DURATION, DEFAULT_ENTER_HOME_DURATION)
+        values.setdefault(CONF_LEAVING_HOME_DURATION, DEFAULT_LEAVING_HOME_DURATION)
+        values.setdefault(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION)
+        values.setdefault(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE)
+        values.setdefault(CONF_PROXIMITY_MAX_AGE, DEFAULT_PROXIMITY_MAX_AGE)
+        values.setdefault(CONF_PRESENCE_ON_DURATION, DEFAULT_PRESENCE_ON_DURATION)
+        values.setdefault(CONF_PRESENCE_OFF_DURATION, DEFAULT_PRESENCE_OFF_DURATION)
         return values
 
-    def _options_schema(self, current: dict) -> vol.Schema:
-        """Build the editor with saved values and screenshot-style duration controls."""
-        schema: dict = {
+    def _values(self) -> dict:
+        """Keep pending edits across all editor steps."""
+        if not hasattr(self, "_working_values"):
+            self._working_values = self._current_values()
+        return self._working_values
+
+    @staticmethod
+    def _entity_field(key: str, domain: str | list[str], current: dict, *, multiple=False):
+        """Create an optional selector with a readable saved-value default."""
+        if current.get(key):
+            field = vol.Optional(key, default=current[key])
+        else:
+            field = vol.Optional(key)
+        return (
+            field,
+            selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=domain,
+                    **({"multiple": True} if multiple else {}),
+                )
+            ),
+        )
+
+    @staticmethod
+    def _duration_field(key: str, current: dict, default: int):
+        """Create a duration field shown as hours, minutes and seconds."""
+        return (
+            vol.Optional(
+                key,
+                default=_seconds_to_duration(current.get(key, default)),
+            ),
+            _duration_selector(),
+        )
+
+    def _basic_schema(self, current: dict) -> vol.Schema:
+        """Room identity and heating target settings."""
+        return vol.Schema({
             vol.Required(
                 CONF_CLIMATE_ENTITY, default=current[CONF_CLIMATE_ENTITY]
-            ): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="climate")
-            ),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="climate")),
             vol.Required(
                 CONF_ROOM_TEMPERATURE_ENTITY,
                 default=current[CONF_ROOM_TEMPERATURE_ENTITY],
-            ): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="sensor")
-            ),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Required(
                 CONF_SCHEDULE_ENTITY, default=current[CONF_SCHEDULE_ENTITY]
-            ): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="schedule")
-            ),
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="schedule")),
             vol.Required(
                 CONF_COMFORT_TEMPERATURE,
                 default=float(current[CONF_COMFORT_TEMPERATURE]),
@@ -268,136 +303,152 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 CONF_MAX_PREHEAT_MINUTES,
                 default=int(current[CONF_MAX_PREHEAT_MINUTES]),
             ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=15, max=240, step=5, mode="slider"
-                )
+                selector.NumberSelectorConfig(min=15, max=240, step=5, mode="slider")
             ),
-        }
+        })
 
-        optional_entities = (
-            (CONF_WINDOW_ENTITY, "binary_sensor"),
-            (CONF_PERSON_ENTITIES, ["person", "device_tracker"]),
-            (CONF_GUEST_ENTITY, ["binary_sensor", "input_boolean"]),
-            (CONF_PROXIMITY_ENTITY, ["sensor", "proximity"]),
-            (CONF_PROXIMITY_DIRECTION_ENTITY, "sensor"),
-            (CONF_PRESENCE_ENTITY, ["binary_sensor", "input_boolean"]),
-            (CONF_PRESENCE_SCHEDULE_ENTITY, "schedule"),
-            (CONF_OUTDOOR_TEMPERATURE_ENTITY, "sensor"),
-            (CONF_WEATHER_ENTITY, "weather"),
-        )
-
-        def add_duration(key: str, default: int) -> None:
-            """Insert a duration field, displaying hours, minutes and seconds."""
-            schema[
-                vol.Optional(
-                    key,
-                    default=_seconds_to_duration(current.get(key, default)),
-                )
-            ] = _duration_selector()
-
-        for key, entity_domain in optional_entities:
-            if current.get(key):
-                field = vol.Optional(key, default=current[key])
-            else:
-                field = vol.Optional(key)
-            schema[field] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain=entity_domain,
-                    **({"multiple": True} if key == CONF_PERSON_ENTITIES else {}),
-                )
-            )
-
-            if key == CONF_PERSON_ENTITIES:
-                add_duration(
-                    CONF_ENTER_HOME_DURATION, DEFAULT_ENTER_HOME_DURATION
-                )
-                add_duration(
-                    CONF_LEAVING_HOME_DURATION, DEFAULT_LEAVING_HOME_DURATION
-                )
-            elif key == CONF_PROXIMITY_DIRECTION_ENTITY:
-                schema[
-                    vol.Optional(
-                        CONF_PROXIMITY_DISTANCE,
-                        default=int(
-                            current.get(
-                                CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE
-                            )
-                        ),
-                    )
-                ] = selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=0, max=100000, step=50, mode="box"
-                    )
-                )
-                add_duration(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION)
-                add_duration(CONF_PROXIMITY_MAX_AGE, DEFAULT_PROXIMITY_MAX_AGE)
-            elif key == CONF_PRESENCE_SCHEDULE_ENTITY:
-                add_duration(
-                    CONF_PRESENCE_ON_DURATION, DEFAULT_PRESENCE_ON_DURATION
-                )
-                add_duration(
-                    CONF_PRESENCE_OFF_DURATION, DEFAULT_PRESENCE_OFF_DURATION
-                )
-
+    def _presence_schema(self, current: dict) -> vol.Schema:
+        """Household people, guests and indoor presence settings."""
+        schema = {}
+        for item in (
+            self._entity_field(CONF_PERSON_ENTITIES, ["person", "device_tracker"], current, multiple=True),
+            self._duration_field(CONF_ENTER_HOME_DURATION, current, DEFAULT_ENTER_HOME_DURATION),
+            self._duration_field(CONF_LEAVING_HOME_DURATION, current, DEFAULT_LEAVING_HOME_DURATION),
+            self._entity_field(CONF_GUEST_ENTITY, ["binary_sensor", "input_boolean"], current),
+            self._entity_field(CONF_PRESENCE_ENTITY, ["binary_sensor", "input_boolean"], current),
+            self._entity_field(CONF_PRESENCE_SCHEDULE_ENTITY, "schedule", current),
+            self._duration_field(CONF_PRESENCE_ON_DURATION, current, DEFAULT_PRESENCE_ON_DURATION),
+            self._duration_field(CONF_PRESENCE_OFF_DURATION, current, DEFAULT_PRESENCE_OFF_DURATION),
+        ):
+            schema[item[0]] = item[1]
         return vol.Schema(schema)
 
-    async def async_step_init(self, user_input=None):
-        """Manage room settings after the room was created."""
-        current = self._current_values()
-        errors: dict[str, str] = {}
+    def _proximity_schema(self, current: dict) -> vol.Schema:
+        """Geo-fencing sensors, distance limit and data freshness."""
+        schema = {}
+        for item in (
+            self._entity_field(CONF_PROXIMITY_ENTITY, ["sensor", "proximity"], current),
+            self._entity_field(CONF_PROXIMITY_DIRECTION_ENTITY, "sensor", current),
+        ):
+            schema[item[0]] = item[1]
+        schema[vol.Optional(
+            CONF_PROXIMITY_DISTANCE,
+            default=int(current.get(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE)),
+        )] = selector.NumberSelector(
+            selector.NumberSelectorConfig(min=0, max=100000, step=50, mode="box")
+        )
+        for item in (
+            self._duration_field(CONF_PROXIMITY_DURATION, current, DEFAULT_PROXIMITY_DURATION),
+            self._duration_field(CONF_PROXIMITY_MAX_AGE, current, DEFAULT_PROXIMITY_MAX_AGE),
+        ):
+            schema[item[0]] = item[1]
+        return vol.Schema(schema)
 
-        if user_input is not None:
-            comfort = float(user_input[CONF_COMFORT_TEMPERATURE])
-            eco = float(user_input[CONF_ECO_TEMPERATURE])
-            if eco >= comfort:
-                errors["base"] = "eco_must_be_below_comfort"
-            else:
-                climate_entity = user_input[CONF_CLIMATE_ENTITY]
-                if any(
-                    entry.entry_id != self.config_entry.entry_id
-                    and entry.unique_id == climate_entity
-                    for entry in self.hass.config_entries.async_entries(DOMAIN)
-                ):
-                    return self.async_abort(reason="already_configured")
+    def _environment_schema(self, current: dict) -> vol.Schema:
+        """Window, outdoor temperature and weather options."""
+        schema = {}
+        for item in (
+            self._entity_field(CONF_WINDOW_ENTITY, "binary_sensor", current),
+            self._entity_field(CONF_OUTDOOR_TEMPERATURE_ENTITY, "sensor", current),
+            self._entity_field(CONF_WEATHER_ENTITY, "weather", current),
+        ):
+            schema[item[0]] = item[1]
+        return vol.Schema(schema)
 
-                # Save all editable values as options. Empty optional entity IDs
-                # intentionally override old values so a sensor can be removed.
-                options = dict(user_input)
-                for key in _DURATION_OPTIONS:
-                    if key in options:
-                        options[key] = _duration_to_seconds(options[key])
-                for key in (
-                    CONF_WINDOW_ENTITY,
-                    CONF_PRESENCE_ENTITY,
-                    CONF_OUTDOOR_TEMPERATURE_ENTITY,
-                    CONF_WEATHER_ENTITY,
-                    CONF_PERSON_ENTITIES,
-                    CONF_GUEST_ENTITY,
-                    CONF_PROXIMITY_ENTITY,
-                    CONF_PROXIMITY_DIRECTION_ENTITY,
-                    CONF_PRESENCE_SCHEDULE_ENTITY,
-                ):
-                    options[key] = user_input.get(key) or None
-
-                if climate_entity != self.config_entry.unique_id:
-                    self.hass.config_entries.async_update_entry(
-                        self.config_entry,
-                        unique_id=climate_entity,
-                        title=f"Dynamische Heizung – {climate_entity}",
-                    )
-                return self.async_create_entry(title="", data=options)
-
-        # Use values already entered on a failed submission as suggested values.
-        schema = self._options_schema(current)
-        suggested = dict(user_input or current)
-        # Config entries store durations as seconds, while the form's native
-        # DurationSelector expects {hours, minutes, seconds} dictionaries.
-        # Convert stored values before suggesting them to the frontend.
+    def _show_step(self, step_id: str, schema: vol.Schema, current: dict):
+        """Render one editor page while preserving and formatting saved values."""
+        suggested = dict(current)
+        # Native duration selectors require a structured duration, not seconds.
         for key in _DURATION_OPTIONS:
             if key in suggested and not isinstance(suggested[key], dict):
                 suggested[key] = _seconds_to_duration(suggested[key])
         return self.async_show_form(
-            step_id="init",
+            step_id=step_id,
             data_schema=self.add_suggested_values_to_schema(schema, suggested),
+        )
+
+    async def async_step_init(self, user_input=None):
+        """Step 1: room entities and desired temperatures."""
+        current = self._values()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            comfort = float(user_input[CONF_COMFORT_TEMPERATURE])
+            eco = float(user_input[CONF_ECO_TEMPERATURE])
+            climate_entity = user_input[CONF_CLIMATE_ENTITY]
+            if eco >= comfort:
+                errors["base"] = "eco_must_be_below_comfort"
+            elif any(
+                entry.entry_id != self.config_entry.entry_id
+                and entry.unique_id == climate_entity
+                for entry in self.hass.config_entries.async_entries(DOMAIN)
+            ):
+                return self.async_abort(reason="already_configured")
+            else:
+                current.update(user_input)
+                return await self.async_step_presence()
+
+        suggested = dict(current)
+        suggested.update(user_input or {})
+        # Keep the user's attempted values visible when validation fails.
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(
+                self._basic_schema(current), suggested
+            ),
             errors=errors,
+        )
+
+    async def async_step_presence(self, user_input=None):
+        """Step 2: occupancy, people and guest mode."""
+        current = self._values()
+        if user_input is not None:
+            current.update(user_input)
+            for key in (CONF_PERSON_ENTITIES, CONF_GUEST_ENTITY, CONF_PRESENCE_ENTITY,
+                        CONF_PRESENCE_SCHEDULE_ENTITY):
+                current[key] = user_input.get(key) or None
+            for key in (CONF_ENTER_HOME_DURATION, CONF_LEAVING_HOME_DURATION,
+                        CONF_PRESENCE_ON_DURATION, CONF_PRESENCE_OFF_DURATION):
+                current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
+            return await self.async_step_geofencing()
+
+        return self._show_step("presence", self._presence_schema(current), current)
+
+    async def async_step_geofencing(self, user_input=None):
+        """Step 3: proximity source, arrival radius and location freshness."""
+        current = self._values()
+        if user_input is not None:
+            current.update(user_input)
+            for key in (CONF_PROXIMITY_ENTITY, CONF_PROXIMITY_DIRECTION_ENTITY):
+                current[key] = user_input.get(key) or None
+            current[CONF_PROXIMITY_DISTANCE] = max(
+                0, int(user_input.get(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE))
+            )
+            for key in (CONF_PROXIMITY_DURATION, CONF_PROXIMITY_MAX_AGE):
+                current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
+            return await self.async_step_environment()
+
+        return self._show_step(
+            "geofencing", self._proximity_schema(current), current
+        )
+
+    async def async_step_environment(self, user_input=None):
+        """Step 4: optional window, outdoor temperature and weather sensors."""
+        current = self._values()
+        if user_input is not None:
+            current.update(user_input)
+            for key in (CONF_WINDOW_ENTITY, CONF_OUTDOOR_TEMPERATURE_ENTITY, CONF_WEATHER_ENTITY):
+                current[key] = user_input.get(key) or None
+
+            climate_entity = current[CONF_CLIMATE_ENTITY]
+            options = dict(current)
+            if climate_entity != self.config_entry.unique_id:
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    unique_id=climate_entity,
+                    title=f"Dynamische Heizung – {climate_entity}",
+                )
+            return self.async_create_entry(title="", data=options)
+
+        return self._show_step(
+            "environment", self._environment_schema(current), current
         )
