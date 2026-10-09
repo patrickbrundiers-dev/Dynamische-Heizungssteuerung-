@@ -13,7 +13,8 @@
           "outdoor_temperature_entity": "Außentemperatursensor (optional)",
           "comfort_temperature": "Komforttemperatur (°C)",
           "eco_temperature": "Absenktemperatur (°C)",
-          "max_preheat_minutes": "Maximale Vorheizzeit (Minuten)"
+          "max_preheat_minutes": "Maximale Vorheizzeit (Minuten)",
+          "weather_entity": "Wettervorhersage-Entität (optional)"
         }
       }
     },
@@ -22,6 +23,17 @@
     },
     "abort": {
       "already_configured": "Für dieses Thermostat ist bereits eine dynamische Heizungssteuerung eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Wetterprognose",
+        "description": "Optional: Wähle eine Wetter-Entität. Sonnige Tagesprognosen können die Vorheizzeit vorsichtig reduzieren; der Einfluss ist auf 15 Minuten begrenzt.",
+        "data": {
+          "weather_entity": "Wettervorhersage-Entität (optional; leer lassen zum Deaktivieren)"
+        }
+      }
     }
   }
 }
