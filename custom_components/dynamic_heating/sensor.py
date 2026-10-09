@@ -168,6 +168,8 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "current_setpoint",
             "forecast_condition",
             "solar_adjustment_minutes",
+            "decision_status",
+            "control_error",
         )
         return {
             key: self.coordinator.data[key]

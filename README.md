@@ -13,6 +13,7 @@ Eine vorausschauende, lernfähige Heizungsregelung als eigene Home-Assistant-Int
 - Stellt Status, Raum-/Außentemperatur, berechnete Solltemperatur, aktuellen Thermostat-Sollwert, prognostizierte Temperatur, Wetterbedingung, Sonnenkorrektur, Vorheizzeit sowie gelernte Aufheiz- und Abkühlraten als Sensoren bereit. Der Statussensor enthält Diagnoseattribute zur letzten Entscheidung.
 - Unterstützt Home-Assistant-Diagnosedaten; konfigurierte Entity-IDs werden beim Export redigiert.
 - Hat einen **separaten Aktivierungsschalter**. Nach der Installation bleibt die Regelung zunächst ausgeschaltet; solange sie ausgeschaltet ist, werden keine Thermostat-Sollwerte verändert.
+- Fängt fehlgeschlagene Thermostat-Sollwertaufrufe ab, zeigt einen klaren Fehlerstatus samt ursprünglicher Heizentscheidung an und versucht es beim nächsten Update erneut.
 
 > **Wichtig:** Advanced Heating Control (AHC) und diese Integration dürfen nicht gleichzeitig dasselbe Thermostat steuern. Teste zunächst mit ausgeschalteter Regelung. Vor dem Aktivieren muss AHC für das betreffende Thermostat deaktiviert sein.
 
@@ -57,7 +58,7 @@ Wenn etwas nicht plausibel aussieht, bitte nicht sofort den Regler aktivieren. D
 
 ## Tests in einer isolierten Home-Assistant-Instanz
 
-Das Repository enthält Integrationstests mit pytest-homeassistant-custom-component. Die Tests starten eine isolierte Home-Assistant-Testinstanz, legen simulierte Entitäten an und prüfen das echte Setup der Integration, die Vorheizentscheidung, Fenster-/Anwesenheitslogik, Sensorfehler, Thermostatgrenzen und ob Sollwerte nur nach Aktivierung gesetzt werden. Dafür wird weder Zugriff auf die echte Heizung noch ein Token aus deiner produktiven Installation benötigt.
+Das Repository enthält Integrationstests mit pytest-homeassistant-custom-component. Die Tests starten eine isolierte Home-Assistant-Testinstanz, legen simulierte Entitäten an und prüfen das echte Setup der Integration, die Vorheizentscheidung, Fenster-/Anwesenheitslogik, Sensorfehler, Thermostatgrenzen, fehlgeschlagene Thermostat-Serviceaufrufe samt Wiederholungsversuch und ob Sollwerte nur nach Aktivierung gesetzt werden. Dafür wird weder Zugriff auf die echte Heizung noch ein Token aus deiner produktiven Installation benötigt.
 
 Automatische Tests laufen bei Push, Pull Request und manuellem Start in GitHub Actions. Lokal:
 
@@ -80,10 +81,10 @@ ruff check .
 - Lernwerte bleiben lokal in Home Assistant; keine Cloud-Übertragung.
 - Änderungen an der Heizungslogik müssen von Tests begleitet werden.
 
-## Weitere geplante Ausbaustufen
+## Nächste Ausbaustufen
 
-1. Wetterprognose und Sonneneinstrahlung zur weiteren Verbesserung der Vorheizprognose.
-2. Dashboard-Ansicht mit Historie und Vergleich zur bisherigen Referenzregelung.
+1. Nach dem sicheren Praxistest in einem Raum das Lernmodell anhand realer Status- und Temperaturverläufe bewerten, bevor aggressivere Regelstrategien aktiviert werden.
+2. Danach die Dashboard-Beispiele für mehrere Räume übersichtlicher strukturieren und die Inbetriebnahme-/Fehlerdiagnose weiter vereinfachen.
 
 Lizenz: MIT.
 

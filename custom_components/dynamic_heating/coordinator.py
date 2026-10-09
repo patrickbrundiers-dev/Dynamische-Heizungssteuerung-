@@ -443,6 +443,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "window_open": window_open,
             "present": present,
             "enabled": self.enabled,
+            "decision_status": decision.status,
+            "control_error": False,
         }
 
         if (
@@ -459,14 +461,28 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 current_setpoint_value is None
                 or abs(current_setpoint_value - target_temperature) >= 0.2
             ):
-                await self.hass.services.async_call(
-                    "climate",
-                    "set_temperature",
-                    {
-                        "entity_id": self.config[CONF_CLIMATE_ENTITY],
-                        "temperature": round(target_temperature, 1),
-                    },
-                    blocking=True,
-                )
+                try:
+                    await self.hass.services.async_call(
+                        "climate",
+                        "set_temperature",
+                        {
+                            "entity_id": self.config[CONF_CLIMATE_ENTITY],
+                            "temperature": round(target_temperature, 1),
+                        },
+                        blocking=True,
+                    )
+                except HomeAssistantError as err:
+                    # Keep the coordinator healthy and retry on the next update.
+                    _LOGGER.warning(
+                        "Could not set target temperature %.1f for %s: %s",
+                        target_temperature,
+                        self.config[CONF_CLIMATE_ENTITY],
+                        err,
+                    )
+                    result["control_error"] = True
+                    result["status"] = (
+                        "Thermostat konnte Sollwert nicht übernehmen – "
+                        "erneuter Versuch beim nächsten Update"
+                    )
 
         return result

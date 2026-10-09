@@ -5,6 +5,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -301,3 +302,45 @@ async def test_cooling_rate_is_learned_from_a_stable_setback_period(
         )
 
     assert coordinator.cooling_rate == pytest.approx(0.36)
+
+
+@pytest.mark.asyncio
+async def test_failed_temperature_write_is_reported_and_retried(
+    hass, enable_custom_integrations
+):
+    """A climate service failure is visible but does not break the coordinator."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.enabled = True
+
+    service_registry_type = type(hass.services)
+    original_call = service_registry_type.async_call
+    climate_calls = []
+
+    async def fail_once_then_accept(
+        service_registry, domain, service, service_data=None, *args, **kwargs
+    ):
+        if domain == "climate" and service == "set_temperature":
+            climate_calls.append(service_data)
+            if len(climate_calls) == 1:
+                raise HomeAssistantError("simulated thermostat service failure")
+            return None
+        return await original_call(
+            service_registry, domain, service, service_data, *args, **kwargs
+        )
+
+    with patch.object(service_registry_type, "async_call", fail_once_then_accept):
+        await coordinator.async_refresh()
+
+        assert coordinator.data["control_error"] is True
+        assert coordinator.data["decision_status"] == "Vorausschauendes Vorheizen"
+        assert "erneuter Versuch" in coordinator.data["status"]
+
+        await coordinator.async_refresh()
+
+    assert len(climate_calls) == 2
+    assert climate_calls[0]["entity_id"] == "climate.living_room"
+    assert climate_calls[1]["temperature"] == 21.0
+    assert coordinator.data["control_error"] is False
+    assert coordinator.data["status"] == "Vorausschauendes Vorheizen"
+
