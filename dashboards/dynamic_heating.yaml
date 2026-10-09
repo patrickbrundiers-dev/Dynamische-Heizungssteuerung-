@@ -1,0 +1,49 @@
+title: Dynamische Heizungssteuerung
+views:
+  - title: Heizungsregelung
+    path: dynamic-heating
+    icon: mdi:home-thermometer
+    cards:
+      - type: markdown
+        title: Raumregelung
+        content: >-
+          Beispielansicht: Ersetze die Entity-IDs unten durch die in deinem Home
+          Assistant tatsächlich angelegten Entitäten. Vergleiche zuerst die
+          berechnete Solltemperatur mit dem aktuellen Thermostat-Sollwert,
+          während die dynamische Regelung noch ausgeschaltet ist.
+      - type: entities
+        title: Status und Diagnose
+        show_header_toggle: false
+        entities:
+          - entity: switch.dynamische_heizungssteuerung_regelung_aktiv
+            name: Regelung aktiv
+          - entity: sensor.dynamische_heizungssteuerung_status
+            name: Entscheidungsstatus
+          - entity: sensor.dynamische_heizungssteuerung_wetterprognose
+            name: Wetterprognose zum Komfortzeitpunkt
+          - entity: sensor.dynamische_heizungssteuerung_sonnenkorrektur_vorheizzeit
+            name: Verkürzung der Vorheizzeit durch Sonne
+          - entity: sensor.dynamische_heizungssteuerung_geschatzte_vorheizzeit
+            name: Berechnete Vorheizzeit
+      - type: history-graph
+        title: Sollwertvergleich und Raumverlauf (24 Stunden)
+        hours_to_show: 24
+        refresh_interval: 60
+        entities:
+          - entity: sensor.dynamische_heizungssteuerung_raumtemperatur
+            name: Ist-Raumtemperatur
+          - entity: sensor.dynamische_heizungssteuerung_berechnete_solltemperatur
+            name: Berechneter Sollwert
+          - entity: sensor.dynamische_heizungssteuerung_aktueller_thermostat_sollwert
+            name: Aktueller Thermostat-Sollwert (Referenz)
+          - entity: sensor.dynamische_heizungssteuerung_prognostizierte_raumtemperatur
+            name: Prognostizierte Raumtemperatur
+      - type: history-graph
+        title: Lernkurve (7 Tage)
+        hours_to_show: 168
+        refresh_interval: 300
+        entities:
+          - entity: sensor.dynamische_heizungssteuerung_gelernte_aufheizrate
+            name: Aufheizrate °C/h
+          - entity: sensor.dynamische_heizungssteuerung_gelernte_abkuhlrate
+            name: Abkühlrate °C/h
