@@ -55,46 +55,79 @@
   "options": {
     "step": {
       "init": {
-        "title": "Raum bearbeiten",
-        "description": "Du kannst Thermostat, Sensoren, Zeitplan und Temperaturen nach dem Erstellen des Raums ändern. Leere optionale Sensoren deaktivieren diese Funktion.",
+        "title": "1. Raum und Heizverhalten",
+        "description": "Lege Thermostat, Raumtemperatursensor, Komfortzeitplan und Solltemperaturen fest. Die Komforttemperatur muss über der Absenktemperatur liegen.",
         "data": {
-          "climate_entity": "Thermostat",
+          "climate_entity": "Zu steuerndes Thermostat",
           "room_temperature_entity": "Raumtemperatursensor",
-          "schedule_entity": "Zeitplan für Komfortzeiten",
-          "window_entity": "Fensterkontakt (optional)",
-          "presence_entity": "Anwesenheitssensor (optional)",
-          "outdoor_temperature_entity": "Außentemperatursensor (optional)",
-          "weather_entity": "Wettervorhersage-Entität (optional)",
+          "schedule_entity": "Komfortzeitplan",
           "comfort_temperature": "Komforttemperatur (°C)",
           "eco_temperature": "Absenktemperatur (°C)",
-          "max_preheat_minutes": "Maximale Vorheizzeit (Minuten)",
+          "max_preheat_minutes": "Maximale Vorheizzeit (Minuten)"
+        },
+        "data_description": {
+          "climate_entity": "Wähle die Climate-Entität, deren Sollwert dieser Raumregler verändern darf. Vermeide weitere Automationen, die gleichzeitig dasselbe Thermostat steuern.",
+          "room_temperature_entity": "Verwende einen Raumtemperatursensor in °C. Seine Werte dienen zum Lernen der Aufheiz- und Abkühlrate.",
+          "schedule_entity": "Eine Home-Assistant-Schedule-Entität: EIN bedeutet Komfortzeit. Das Attribut next_event wird für das Vorheizen genutzt.",
+          "comfort_temperature": "Gewünschte Raumtemperatur während aktiver Komfortzeiten.",
+          "eco_temperature": "Absenktemperatur außerhalb der Komfortzeit, bei Abwesenheit oder offenem Fenster. Sie muss unter der Komforttemperatur liegen.",
+          "max_preheat_minutes": "Harte Obergrenze, wie früh die Vorheizung starten darf."
+        }
+      },
+      "presence": {
+        "title": "2. Personen und Anwesenheit",
+        "description": "Hier stellst du ein, wer zu Hause sein muss und wie die optionale Innenraum-Präsenzerkennung arbeitet. Der Gastmodus zählt als Anwesenheit; Reaktionszeiten vermeiden kurze Fehlauslösungen.",
+        "data": {
           "person_entities": "Personen / Geräte-Tracker (optional)",
-          "guest_entity": "Gastmodus (optional)",
-          "enter_home_duration": "Wartezeit nach Ankunft (Sekunden)",
-          "leaving_home_duration": "Wartezeit nach Verlassen (Sekunden)",
-          "proximity_entity": "Proximity-Entfernungssensor (optional)",
-          "proximity_duration": "Anfahrtsdauer (Sekunden)",
+          "enter_home_duration": "Ankunft bestätigen nach",
+          "leaving_home_duration": "Wartezeit nach Verlassen",
+          "guest_entity": "Gastmodus-Schalter (optional)",
+          "presence_entity": "Innenraum-Präsenzsensor (optional)",
+          "presence_schedule_entity": "Zeitplan für Präsenzsensor (optional)",
+          "presence_on_duration": "Reaktionszeit bei Präsenz EIN",
+          "presence_off_duration": "Nachlaufzeit bei Präsenz AUS"
+        },
+        "data_description": {
+          "person_entities": "Komfortbetrieb ist erlaubt, wenn mindestens eine ausgewählte Person oder ein Geräte-Tracker zu Hause ist. Geräte-Tracker mit einfachem home/not_home-Status sind meist am zuverlässigsten.",
+          "enter_home_duration": "Der Zuhause-Status muss so lange stabil sein, bevor eine Ankunft anerkannt wird.",
+          "leaving_home_duration": "Nach einem Abwesenheitssignal wird der vorherige Zuhause-Status für diese Übergangszeit beibehalten.",
+          "guest_entity": "Ein eingeschalteter input_boolean- oder binary_sensor zählt als anwesende Person.",
+          "presence_entity": "Optionaler Präsenz- oder Bewegungssensor. Bei Kombination mit Personen oder Proximity müssen Haushaltsstatus und dieser Sensor Komfortheizung erlauben.",
+          "presence_schedule_entity": "Der Präsenzsensor wird nur verwendet, wenn dieser Zeitplan EIN ist. Leer lassen, um den Sensor ganztägig zu nutzen.",
+          "presence_on_duration": "Präsenz muss so lange EIN sein, bevor sie akzeptiert wird.",
+          "presence_off_duration": "Nach AUS bleibt die bisherige Präsenzentscheidung so lange erhalten, damit nicht zu schnell abgesenkt wird."
+        }
+      },
+      "geofencing": {
+        "title": "3. Geo-Fencing und Standortqualität",
+        "description": "Wähle Entfernungs- und Richtungssensor derselben Proximity-Zone. Entfernungen werden in Meter umgerechnet. Zu alte Standortupdates werden ignoriert.",
+        "data": {
+          "proximity_entity": "Entfernungssensor der Proximity-Zone (optional)",
+          "proximity_direction_entity": "Richtungssensor der Proximity-Zone (optional)",
           "proximity_distance": "Maximale Anfahrtsentfernung (Meter)",
-          "presence_schedule_entity": "Präsenzsensor-Zeitplan (optional)",
-          "presence_on_duration": "Präsenz-Reaktionszeit EIN (Sekunden)",
-          "presence_off_duration": "Präsenz-Reaktionszeit AUS (Sekunden)",
-          "proximity_direction_entity": "Proximity-Richtungssensor (optional)",
+          "proximity_duration": "Dauer der bestätigten Anfahrt",
           "proximity_max_age": "Maximales Alter der Standortdaten"
         },
         "data_description": {
-          "person_entities": "Komfortheizung ist erlaubt, wenn mindestens eine ausgewählte Person oder ein Geräte-Tracker zu Hause ist. Geräte-Tracker mit einfachem Zuhause/Nicht-zuhause-Status werden empfohlen.",
-          "enter_home_duration": "Der Zuhause-Status muss so lange stabil sein, bevor die Komfortheizung freigegeben wird.",
-          "leaving_home_duration": "Nachdem die letzte ausgewählte Person das Zuhause verlassen hat, wird so lange gewartet, bevor auf Absenktemperatur gewechselt wird.",
-          "guest_entity": "Ein eingeschalteter Gastmodus zählt als Anwesenheit.",
-          "proximity_entity": "Wähle den Entfernungssensor der Home-Assistant-Proximity-Integration, z. B. Distanz zur Zone oder nächste Entfernung. Ältere kombinierte Proximity-Entitäten werden weiterhin unterstützt.",
-          "proximity_duration": "Die Richtung muss so lange kontinuierlich nach Zuhause zeigen und innerhalb der Entfernung liegen. Laufende Entfernungsupdates setzen den Timer nicht zurück; Richtungswechsel oder ein nicht verfügbarer Messwert schon.",
-          "proximity_distance": "Maximale Anfahrtsentfernung in Metern. Werte in m, km, Meilen, Fuß oder Yards werden vor dem Vergleich in Meter umgerechnet.",
-          "presence_entity": "Die Komfortheizung ist nur erlaubt, wenn dieser Sensor Anwesenheit meldet und die konfigurierte Haushaltsanwesenheit ebenfalls Heizen erlaubt.",
-          "presence_schedule_entity": "Der Präsenzsensor wird nur verwendet, wenn dieser Zeitplan eingeschaltet ist. Bei ausgeschaltetem Zeitplan wird Bewegung ignoriert.",
-          "presence_on_duration": "Anwesenheit muss so lange eingeschaltet sein, bevor sie akzeptiert wird.",
-          "presence_off_duration": "Nach dem Ausschalten des Sensors bleibt Anwesenheit so lange gültig, bevor auf Absenkung gewechselt wird.",
-          "proximity_direction_entity": "Wähle den passenden Richtungssensor. Unterstützte Zustände sind towards, arrived, away_from und stationary. Neue Proximity-Entitäten werden über Entfernungs- und Richtungssensor getrennt ausgewählt.",
-          "proximity_max_age": "Hat sich der Entfernungssensor länger als diese Dauer nicht aktualisiert, gelten seine Standortdaten als veraltet. Daraus wird keine neue Heizentscheidung abgeleitet; ein Personen-/Gast-Tracker, der Zuhause bestätigt, hat weiterhin Vorrang."
+          "proximity_entity": "Wähle den Entfernungssensor (z. B. dist_to_zone oder nearest_dist_to_zone). Ältere kombinierte Entitäten werden weiterhin unterstützt.",
+          "proximity_direction_entity": "Wähle den passenden Richtungssensor derselben Proximity-Zone. Erwartete Zustände: towards, arrived, away_from, stationary.",
+          "proximity_distance": "Maximalentfernung für eine Anfahrt in Richtung Zuhause. Verglichen wird immer in Metern.",
+          "proximity_duration": "Die Richtung muss so lange auf Zuhause zeigen und innerhalb der Grenze liegen. Neue Distanzwerte starten den Timer nicht neu; Richtungs-/Entfernungswechsel und Ausfälle schon.",
+          "proximity_max_age": "Wenn der Entfernungssensor länger als diese Dauer nicht aktualisiert wurde, gelten die Standortdaten als veraltet und lösen keine neue Heizentscheidung aus."
+        }
+      },
+      "environment": {
+        "title": "4. Fenster, Außentemperatur und Wetter",
+        "description": "Diese optionalen Sensoren verbessern Absenkung und Vorheizschätzung. Ist ein konfigurierter Fensterkontakt nicht verfügbar, wird kein neuer Thermostat-Sollwert geschrieben.",
+        "data": {
+          "window_entity": "Fensterkontakt (optional)",
+          "outdoor_temperature_entity": "Außentemperatursensor (optional)",
+          "weather_entity": "Wettervorhersage-Entität (optional)"
+        },
+        "data_description": {
+          "window_entity": "EIN erzwingt Absenkung. Ist ein ausgewählter Fensterkontakt nicht verfügbar, wird kein neuer Sollwert geschrieben.",
+          "outdoor_temperature_entity": "Optionaler Außensensor verbessert die konservative Vorheizschätzung.",
+          "weather_entity": "Optionale stündliche Wetterprognose. Sonniges Wetter am Tag kann die Vorheizzeit um höchstens 15 Minuten verkürzen."
         }
       }
     },
