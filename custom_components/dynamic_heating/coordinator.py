@@ -37,6 +37,12 @@ from .const import (
     DEFAULT_COMFORT_TEMPERATURE,
     DEFAULT_COOLING_RATE,
     DEFAULT_ECO_TEMPERATURE,
+    DEFAULT_ENTER_HOME_DURATION,
+    DEFAULT_LEAVING_HOME_DURATION,
+    DEFAULT_PROXIMITY_DURATION,
+    DEFAULT_PROXIMITY_DISTANCE,
+    DEFAULT_PRESENCE_ON_DURATION,
+    DEFAULT_PRESENCE_OFF_DURATION,
     DEFAULT_HEATING_RATE,
     DEFAULT_MAX_PREHEAT_MINUTES,
     DOMAIN,
@@ -72,7 +78,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(minutes=1),
+            # Presence and geofencing use short debounce durations; poll often
+            # enough to honour them without creating unbounded service traffic.
+            update_interval=timedelta(seconds=10),
         )
         self.hass = hass
         self.config = config
@@ -348,7 +356,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         within_range = (
             distance is not None
-            and distance <= float(self.config.get(CONF_PROXIMITY_DISTANCE, 500))
+            and distance <= float(self.config.get(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE))
         )
         approaching = direction in ("towards", "toward") and within_range
         if not approaching:
@@ -358,7 +366,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now = dt_util.utcnow()
         if self._proximity_approaching_since is None:
             self._proximity_approaching_since = now
-        delay = max(0, int(self.config.get(CONF_PROXIMITY_DURATION, 120)))
+        delay = max(0, int(self.config.get(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION)))
         return (now - self._proximity_approaching_since).total_seconds() >= delay
 
     def _evaluate_presence(self) -> tuple[bool | None, str]:
@@ -374,8 +382,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         has_presence_source = bool(people or guest_id or proximity_id or presence_id)
         household_home = not has_presence_source
         invalid_people = False
-        enter_delay = int(self.config.get(CONF_ENTER_HOME_DURATION, 2))
-        leave_delay = int(self.config.get(CONF_LEAVING_HOME_DURATION, 2))
+        enter_delay = int(
+            self.config.get(CONF_ENTER_HOME_DURATION, DEFAULT_ENTER_HOME_DURATION)
+        )
+        leave_delay = int(
+            self.config.get(CONF_LEAVING_HOME_DURATION, DEFAULT_LEAVING_HOME_DURATION)
+        )
         for entity_id in people:
             state = self.hass.states.get(entity_id)
             if not self._valid(state):
@@ -412,8 +424,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             state = self.hass.states.get(presence_id)
             if not self._valid(state):
                 return None, "Anwesenheitssensor nicht verfügbar – keine Sollwertänderung"
-            on_delay = int(self.config.get(CONF_PRESENCE_ON_DURATION, 0))
-            off_delay = int(self.config.get(CONF_PRESENCE_OFF_DURATION, 0))
+            on_delay = int(self.config.get(CONF_PRESENCE_ON_DURATION, DEFAULT_PRESENCE_ON_DURATION))
+            off_delay = int(self.config.get(CONF_PRESENCE_OFF_DURATION, DEFAULT_PRESENCE_OFF_DURATION))
             if state.state == "on":
                 sensor_present = self._presence_is_active(state, True, on_delay)
             elif state.state == "off":
