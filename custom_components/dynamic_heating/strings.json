@@ -25,6 +25,19 @@
           "presence_schedule_entity": "Präsenzsensor-Zeitplan (optional)",
           "presence_on_duration": "Präsenz-Reaktionszeit EIN (Sekunden)",
           "presence_off_duration": "Präsenz-Reaktionszeit AUS (Sekunden)"
+        },
+        "data_description": {
+          "person_entities": "Komfortheizung ist erlaubt, wenn mindestens eine ausgewählte Person oder ein Geräte-Tracker zu Hause ist. Geräte-Tracker mit einfachem Zuhause/Nicht-zuhause-Status werden empfohlen.",
+          "enter_home_duration": "Der Zuhause-Status muss so lange stabil sein, bevor die Komfortheizung freigegeben wird.",
+          "leaving_home_duration": "Nachdem die letzte ausgewählte Person das Zuhause verlassen hat, wird so lange gewartet, bevor auf Absenktemperatur gewechselt wird.",
+          "guest_entity": "Ein eingeschalteter Gastmodus zählt als Anwesenheit.",
+          "proximity_entity": "Wähle die Proximity-Entität für die überwachte Zuhause-Zone. Eine Geo-Position muss verfügbar sein.",
+          "proximity_duration": "Die Richtung muss so lange kontinuierlich nach Hause zeigen und innerhalb der eingestellten Entfernung liegen, bevor die Komfortheizung freigegeben wird.",
+          "proximity_distance": "Maximale Anfahrtsentfernung in der Einheit, die von der ausgewählten Proximity-Entität gemeldet wird.",
+          "presence_entity": "Die Komfortheizung ist nur erlaubt, wenn dieser Sensor Anwesenheit meldet und die konfigurierte Haushaltsanwesenheit ebenfalls Heizen erlaubt.",
+          "presence_schedule_entity": "Der Präsenzsensor wird nur verwendet, wenn dieser Zeitplan eingeschaltet ist. Bei ausgeschaltetem Zeitplan wird Bewegung ignoriert.",
+          "presence_on_duration": "Anwesenheit muss so lange eingeschaltet sein, bevor sie akzeptiert wird.",
+          "presence_off_duration": "Nach dem Ausschalten des Sensors bleibt Anwesenheit so lange gültig, bevor auf Absenkung gewechselt wird."
         }
       }
     },
@@ -61,6 +74,19 @@
           "presence_schedule_entity": "Präsenzsensor-Zeitplan (optional)",
           "presence_on_duration": "Präsenz-Reaktionszeit EIN (Sekunden)",
           "presence_off_duration": "Präsenz-Reaktionszeit AUS (Sekunden)"
+        },
+        "data_description": {
+          "person_entities": "Komfortheizung ist erlaubt, wenn mindestens eine ausgewählte Person oder ein Geräte-Tracker zu Hause ist. Geräte-Tracker mit einfachem Zuhause/Nicht-zuhause-Status werden empfohlen.",
+          "enter_home_duration": "Der Zuhause-Status muss so lange stabil sein, bevor die Komfortheizung freigegeben wird.",
+          "leaving_home_duration": "Nachdem die letzte ausgewählte Person das Zuhause verlassen hat, wird so lange gewartet, bevor auf Absenktemperatur gewechselt wird.",
+          "guest_entity": "Ein eingeschalteter Gastmodus zählt als Anwesenheit.",
+          "proximity_entity": "Wähle die Proximity-Entität für die überwachte Zuhause-Zone. Eine Geo-Position muss verfügbar sein.",
+          "proximity_duration": "Die Richtung muss so lange kontinuierlich nach Hause zeigen und innerhalb der eingestellten Entfernung liegen, bevor die Komfortheizung freigegeben wird.",
+          "proximity_distance": "Maximale Anfahrtsentfernung in der Einheit, die von der ausgewählten Proximity-Entität gemeldet wird.",
+          "presence_entity": "Die Komfortheizung ist nur erlaubt, wenn dieser Sensor Anwesenheit meldet und die konfigurierte Haushaltsanwesenheit ebenfalls Heizen erlaubt.",
+          "presence_schedule_entity": "Der Präsenzsensor wird nur verwendet, wenn dieser Zeitplan eingeschaltet ist. Bei ausgeschaltetem Zeitplan wird Bewegung ignoriert.",
+          "presence_on_duration": "Anwesenheit muss so lange eingeschaltet sein, bevor sie akzeptiert wird.",
+          "presence_off_duration": "Nach dem Ausschalten des Sensors bleibt Anwesenheit so lange gültig, bevor auf Absenkung gewechselt wird."
         }
       }
     },
