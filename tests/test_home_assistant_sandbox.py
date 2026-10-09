@@ -1,7 +1,7 @@
 """Integration tests using an isolated Home Assistant test instance."""
 
 from datetime import timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.util import dt as dt_util
@@ -21,17 +21,26 @@ from custom_components.dynamic_heating.const import (
 )
 
 
-def _set_up_test_entities(hass, *, window_state="off", room_temperature="18"):
+def _set_up_test_entities(
+    hass, *, window_state="off", room_temperature="18", climate_setpoint=18.0
+):
     """Create mock states; no physical devices or production HA connection."""
     next_event = (dt_util.now() + timedelta(minutes=30)).isoformat()
     hass.states.async_set(
         "climate.living_room",
         "heat",
-        {"temperature": 18.0, "hvac_action": "idle", "min_temp": 7, "max_temp": 28},
+        {
+            "temperature": climate_setpoint,
+            "hvac_action": "idle",
+            "min_temp": 7,
+            "max_temp": 28,
+        },
     )
     hass.states.async_set("sensor.living_room_temperature", room_temperature)
     hass.states.async_set("sensor.outdoor_temperature", "3.0")
-    hass.states.async_set("schedule.living_room_comfort", "off", {"next_event": next_event})
+    hass.states.async_set(
+        "schedule.living_room_comfort", "off", {"next_event": next_event}
+    )
     hass.states.async_set("binary_sensor.living_room_window", window_state)
     hass.states.async_set("binary_sensor.someone_home", "on")
 
@@ -68,7 +77,7 @@ async def _setup_integration(hass):
 async def test_controller_calculates_preheat_but_does_not_control_by_default(
     hass, enable_custom_integrations
 ):
-    """The sandbox should calculate a recommendation but never write when disabled."""
+    """The sandbox calculates a recommendation but does not write when disabled."""
     _set_up_test_entities(hass)
     entry, coordinator = await _setup_integration(hass)
 
@@ -77,10 +86,8 @@ async def test_controller_calculates_preheat_but_does_not_control_by_default(
     assert coordinator.data["enabled"] is False
 
     service_call = AsyncMock()
-    coordinator.enabled = False
-    from unittest.mock import patch
-
     with patch.object(hass.services, "async_call", service_call):
+        coordinator.enabled = False
         await coordinator.async_refresh()
 
     service_call.assert_not_awaited()
@@ -91,13 +98,11 @@ async def test_controller_calculates_preheat_but_does_not_control_by_default(
 async def test_controller_applies_target_only_after_explicit_activation(
     hass, enable_custom_integrations
 ):
-    """The coordinator issues a real HA service call only when enabled."""
+    """The coordinator issues a Home Assistant service call only when enabled."""
     _set_up_test_entities(hass)
     _, coordinator = await _setup_integration(hass)
 
     service_call = AsyncMock()
-    from unittest.mock import patch
-
     with patch.object(hass.services, "async_call", service_call):
         coordinator.enabled = True
         await coordinator.async_refresh()
@@ -114,16 +119,14 @@ async def test_controller_applies_target_only_after_explicit_activation(
 async def test_open_window_overrides_schedule_preheat(
     hass, enable_custom_integrations
 ):
-    """An open window must force the eco target even shortly before comfort time."""
-    _set_up_test_entities(hass, window_state="on")
+    """An open window must force the eco target before comfort time."""
+    _set_up_test_entities(hass, window_state="on", climate_setpoint=21.0)
     _, coordinator = await _setup_integration(hass)
 
     assert coordinator.data["mode"] == "window"
     assert coordinator.data["target_temperature"] == 18.0
 
     service_call = AsyncMock()
-    from unittest.mock import patch
-
     with patch.object(hass.services, "async_call", service_call):
         coordinator.enabled = True
         await coordinator.async_refresh()
