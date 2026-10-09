@@ -87,6 +87,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cooling_sample_time: datetime | None = None
         self._forecast_items: list[dict[str, Any]] = []
         self._forecast_fetched_at: datetime | None = None
+        self._proximity_approaching_since: datetime | None = None
 
     async def async_load_learning(self) -> None:
         """Restore learned rates, validating persisted values before using them."""
@@ -337,24 +338,41 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return delay_seconds <= 0 or (dt_util.utcnow() - state.last_changed).total_seconds() >= delay_seconds
 
     def _proximity_is_active(self, state: State) -> bool:
-        """Treat proximity as present only when home or approaching within range."""
-        if state.state == "home":
-            return True
-        distance = _as_float(state)
+        """Count continuous approach time independently of changing distance state."""
         direction = str(state.attributes.get("dir_of_travel", "")).lower()
-        if distance is None or direction not in ("towards", "toward", "arrived"):
+        distance = _as_float(state)
+
+        if state.state == "home" or direction == "arrived" or distance == 0:
+            self._proximity_approaching_since = None
+            return True
+
+        within_range = (
+            distance is not None
+            and distance <= float(self.config.get(CONF_PROXIMITY_DISTANCE, 500))
+        )
+        approaching = direction in ("towards", "toward") and within_range
+        if not approaching:
+            self._proximity_approaching_since = None
             return False
-        if distance > float(self.config.get(CONF_PROXIMITY_DISTANCE, 500)):
-            return False
-        delay = int(self.config.get(CONF_PROXIMITY_DURATION, 120))
-        return delay <= 0 or (dt_util.utcnow() - state.last_changed).total_seconds() >= delay
+
+        now = dt_util.utcnow()
+        if self._proximity_approaching_since is None:
+            self._proximity_approaching_since = now
+        delay = max(0, int(self.config.get(CONF_PROXIMITY_DURATION, 120)))
+        return (now - self._proximity_approaching_since).total_seconds() >= delay
 
     def _evaluate_presence(self) -> tuple[bool | None, str]:
         """Combine household, guest, proximity and scheduled presence signals."""
         people = self.config.get(CONF_PERSON_ENTITIES) or []
         if isinstance(people, str):
             people = [people]
-        household_home = not people and not self.config.get(CONF_PROXIMITY_ENTITY)
+        guest_id = self.config.get(CONF_GUEST_ENTITY)
+        proximity_id = self.config.get(CONF_PROXIMITY_ENTITY)
+        presence_id = self.config.get(CONF_PRESENCE_ENTITY)
+        # With no configured presence source, retain the legacy always-present
+        # behavior. Once a source is configured, an inactive signal means away.
+        has_presence_source = bool(people or guest_id or proximity_id or presence_id)
+        household_home = not has_presence_source
         invalid_people = False
         enter_delay = int(self.config.get(CONF_ENTER_HOME_DURATION, 2))
         leave_delay = int(self.config.get(CONF_LEAVING_HOME_DURATION, 2))
@@ -367,7 +385,6 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             elif state.state == "not_home" and not self._presence_is_active(state, False, leave_delay):
                 household_home = True
 
-        guest_id = self.config.get(CONF_GUEST_ENTITY)
         if guest_id:
             guest = self.hass.states.get(guest_id)
             if not self._valid(guest):
@@ -375,7 +392,6 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             household_home = household_home or guest.state == "on"
 
         proximity_home = False
-        proximity_id = self.config.get(CONF_PROXIMITY_ENTITY)
         if proximity_id:
             proximity = self.hass.states.get(proximity_id)
             if not self._valid(proximity):
@@ -385,7 +401,6 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None, "Personen-/Geräte-Tracker nicht verfügbar – keine Sollwertänderung"
 
         present = household_home or proximity_home
-        presence_id = self.config.get(CONF_PRESENCE_ENTITY)
         use_presence = bool(presence_id)
         schedule_id = self.config.get(CONF_PRESENCE_SCHEDULE_ENTITY)
         if schedule_id:
