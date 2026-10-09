@@ -14,7 +14,17 @@
           "comfort_temperature": "Comfort temperature (°C)",
           "eco_temperature": "Setback temperature (°C)",
           "max_preheat_minutes": "Maximum preheating time (minutes)",
-          "weather_entity": "Weather forecast entity (optional)"
+          "weather_entity": "Weather forecast entity (optional)",
+          "person_entities": "Persons / device trackers (optional)",
+          "guest_entity": "Guest mode (optional)",
+          "enter_home_duration": "Arrival delay (seconds)",
+          "leaving_home_duration": "Leaving-home delay (seconds)",
+          "proximity_entity": "Proximity / geo-fencing (optional)",
+          "proximity_duration": "Approach duration (seconds)",
+          "proximity_distance": "Proximity distance (entity unit)",
+          "presence_schedule_entity": "Presence sensor schedule (optional)",
+          "presence_on_duration": "Presence reaction ON time (seconds)",
+          "presence_off_duration": "Presence reaction OFF time (seconds)"
         }
       }
     },
@@ -40,7 +50,17 @@
           "weather_entity": "Weather forecast entity (optional)",
           "comfort_temperature": "Comfort temperature (°C)",
           "eco_temperature": "Setback temperature (°C)",
-          "max_preheat_minutes": "Maximum preheating time (minutes)"
+          "max_preheat_minutes": "Maximum preheating time (minutes)",
+          "person_entities": "Persons / device trackers (optional)",
+          "guest_entity": "Guest mode (optional)",
+          "enter_home_duration": "Arrival delay (seconds)",
+          "leaving_home_duration": "Leaving-home delay (seconds)",
+          "proximity_entity": "Proximity / geo-fencing (optional)",
+          "proximity_duration": "Approach duration (seconds)",
+          "proximity_distance": "Proximity distance (entity unit)",
+          "presence_schedule_entity": "Presence sensor schedule (optional)",
+          "presence_on_duration": "Presence reaction ON time (seconds)",
+          "presence_off_duration": "Presence reaction OFF time (seconds)"
         }
       }
     },
