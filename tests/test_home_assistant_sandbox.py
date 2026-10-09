@@ -411,3 +411,49 @@ async def test_unavailable_proximity_prevents_thermostat_control(
     assert calls == []
     assert coordinator.data["mode"] == "waiting"
     assert "Proximity-Entität nicht verfügbar" in coordinator.data["status"]
+
+@pytest.mark.asyncio
+async def test_proximity_debounce_survives_changing_distance_states(
+    hass, enable_custom_integrations
+):
+    """Changing distance values must not restart the configured approach timer."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["proximity_entity"] = "proximity.home"
+    coordinator.config["proximity_distance"] = 500
+    coordinator.config["proximity_duration"] = 120
+    start = dt_util.utcnow()
+
+    hass.states.async_set("proximity.home", "450", {"dir_of_travel": "towards"})
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start,
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+    hass.states.async_set("proximity.home", "380", {"dir_of_travel": "towards"})
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=60),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
+    hass.states.async_set("proximity.home", "290", {"dir_of_travel": "towards"})
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=120),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+
+    hass.states.async_set("proximity.home", "250", {"dir_of_travel": "away_from"})
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=130),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+
