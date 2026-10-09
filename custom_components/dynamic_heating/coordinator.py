@@ -25,6 +25,8 @@ from .const import (
     CONF_ENTER_HOME_DURATION,
     CONF_LEAVING_HOME_DURATION,
     CONF_PROXIMITY_ENTITY,
+    CONF_PROXIMITY_DIRECTION_ENTITY,
+    CONF_PROXIMITY_MAX_AGE,
     CONF_PROXIMITY_DURATION,
     CONF_PROXIMITY_DISTANCE,
     CONF_PRESENCE_SCHEDULE_ENTITY,
@@ -41,6 +43,10 @@ from .const import (
     DEFAULT_LEAVING_HOME_DURATION,
     DEFAULT_PROXIMITY_DURATION,
     DEFAULT_PROXIMITY_DISTANCE,
+    DEFAULT_PROXIMITY_MAX_AGE,
+    MAX_HEATING_SAMPLE_SECONDS,
+    MAX_COOLING_SAMPLE_SECONDS,
+    FORECAST_EVALUATION_GRACE_SECONDS,
     DEFAULT_PRESENCE_ON_DURATION,
     DEFAULT_PRESENCE_OFF_DURATION,
     DEFAULT_HEATING_RATE,
@@ -96,6 +102,30 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._forecast_items: list[dict[str, Any]] = []
         self._forecast_fetched_at: datetime | None = None
         self._proximity_approaching_since: datetime | None = None
+        self._proximity_distance_m: float | None = None
+        self._proximity_direction: str | None = None
+        self._proximity_age_seconds: float | None = None
+        self._proximity_status = "Proximity nicht konfiguriert"
+
+        # The model retains only compact quality metrics, not raw location or
+        # temperature histories. The pending forecast is ephemeral per event.
+        self._heating_samples = 0
+        self._cooling_samples = 0
+        self._rejected_samples = 0
+        self._last_observed_heating_rate: float | None = None
+        self._last_observed_cooling_rate: float | None = None
+        self._last_learning_type = "none"
+        self._last_learning_status = "Noch keine Lernmessung"
+        self._last_learning_sample_at: str | None = None
+        self._forecast_evaluations = 0
+        self._forecast_mae_c: float | None = None
+        self._last_forecast_error_c: float | None = None
+        self._last_forecast_predicted_temperature: float | None = None
+        self._last_forecast_actual_temperature: float | None = None
+        self._last_forecast_event: str | None = None
+        self._last_forecast_error_at: str | None = None
+        self._pending_forecast_event: datetime | None = None
+        self._pending_forecast_temperature: float | None = None
 
     async def async_load_learning(self) -> None:
         """Restore learned rates, validating persisted values before using them."""
@@ -122,6 +152,42 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 MIN_LEARNED_COOLING_RATE,
                 min(cooling_rate, MAX_LEARNED_COOLING_RATE),
             )
+
+        self._heating_samples = self._stored_count(stored.get("heating_samples"))
+        self._cooling_samples = self._stored_count(stored.get("cooling_samples"))
+        self._rejected_samples = self._stored_count(stored.get("rejected_samples"))
+        self._forecast_evaluations = self._stored_count(
+            stored.get("forecast_evaluations")
+        )
+        self._forecast_mae_c = self._stored_float(stored.get("forecast_mae_c"))
+        self._last_forecast_error_c = self._stored_float(
+            stored.get("last_forecast_error_c")
+        )
+        self._last_forecast_predicted_temperature = self._stored_float(
+            stored.get("last_forecast_predicted_temperature")
+        )
+        self._last_forecast_actual_temperature = self._stored_float(
+            stored.get("last_forecast_actual_temperature")
+        )
+        self._last_forecast_event = self._stored_string(stored.get("last_forecast_event"))
+        self._last_forecast_error_at = self._stored_string(
+            stored.get("last_forecast_error_at")
+        )
+        self._last_observed_heating_rate = self._stored_float(
+            stored.get("last_observed_heating_rate")
+        )
+        self._last_observed_cooling_rate = self._stored_float(
+            stored.get("last_observed_cooling_rate")
+        )
+        self._last_learning_type = self._stored_string(
+            stored.get("last_learning_type")
+        ) or "none"
+        self._last_learning_status = self._stored_string(
+            stored.get("last_learning_status")
+        ) or "Noch keine Lernmessung"
+        self._last_learning_sample_at = self._stored_string(
+            stored.get("last_learning_sample_at")
+        )
 
     @staticmethod
     def _climate_setpoint(state: State | None) -> float | None:
@@ -160,12 +226,75 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             event = event.replace(tzinfo=timezone)
         return event
 
+    @staticmethod
+    def _stored_count(value: object) -> int:
+        """Read a non-negative persisted counter."""
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    @staticmethod
+    def _stored_float(value: object) -> float | None:
+        """Read a finite persisted float or return none."""
+        try:
+            result = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return result if math.isfinite(result) else None
+
+    @staticmethod
+    def _stored_string(value: object) -> str | None:
+        """Read a bounded string from persisted learning metadata."""
+        return value[:200] if isinstance(value, str) else None
+
+    def _learning_diagnostics(self) -> dict[str, Any]:
+        """Expose compact model quality metrics for sensors and diagnostics."""
+        return {
+            "heating_samples": self._heating_samples,
+            "cooling_samples": self._cooling_samples,
+            "rejected_samples": self._rejected_samples,
+            "last_observed_heating_rate": self._last_observed_heating_rate,
+            "last_observed_cooling_rate": self._last_observed_cooling_rate,
+            "last_learning_type": self._last_learning_type,
+            "learning_status": self._last_learning_status,
+            "last_learning_sample_at": self._last_learning_sample_at,
+            "forecast_evaluations": self._forecast_evaluations,
+            "forecast_mae_c": self._forecast_mae_c,
+            "last_forecast_error_c": self._last_forecast_error_c,
+            "last_forecast_predicted_temperature": (
+                self._last_forecast_predicted_temperature
+            ),
+            "last_forecast_actual_temperature": self._last_forecast_actual_temperature,
+            "last_forecast_event": self._last_forecast_event,
+            "last_forecast_error_at": self._last_forecast_error_at,
+        }
+
     async def _save_learning(self) -> None:
-        """Persist both bounded learning estimates together."""
+        """Persist rates and compact quality metrics together."""
         await self._store.async_save(
             {
                 "heating_rate": self.heating_rate,
                 "cooling_rate": self.cooling_rate,
+                "heating_samples": self._heating_samples,
+                "cooling_samples": self._cooling_samples,
+                "rejected_samples": self._rejected_samples,
+                "last_observed_heating_rate": self._last_observed_heating_rate,
+                "last_observed_cooling_rate": self._last_observed_cooling_rate,
+                "last_learning_type": self._last_learning_type,
+                "last_learning_status": self._last_learning_status,
+                "last_learning_sample_at": self._last_learning_sample_at,
+                "forecast_evaluations": self._forecast_evaluations,
+                "forecast_mae_c": self._forecast_mae_c,
+                "last_forecast_error_c": self._last_forecast_error_c,
+                "last_forecast_predicted_temperature": (
+                    self._last_forecast_predicted_temperature
+                ),
+                "last_forecast_actual_temperature": (
+                    self._last_forecast_actual_temperature
+                ),
+                "last_forecast_event": self._last_forecast_event,
+                "last_forecast_error_at": self._last_forecast_error_at,
             }
         )
 
@@ -179,26 +308,21 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         schedule_active: bool,
         eco_temperature: float,
     ) -> None:
-        """Learn only from bounded, stable heating or setback observations."""
+        """Learn from plausible temperature trends and reject outlier samples."""
         attributes = climate_state.attributes if climate_state else {}
-        setpoint = attributes.get("temperature")
+        setpoint_value = self._stored_float(attributes.get("temperature"))
         is_heating = attributes.get("hvac_action") == "heating"
-        try:
-            setpoint_value = float(setpoint)
-        except (TypeError, ValueError):
-            setpoint_value = None
-        if setpoint_value is not None and not math.isfinite(setpoint_value):
-            setpoint_value = None
-
         now = dt_util.utcnow()
 
-        # Do not learn during open-window or away periods, as those observations
-        # are not representative of normal room behaviour.
         if window_open or not present:
             self._sample_temperature = None
             self._sample_time = None
             self._cooling_sample_temperature = None
             self._cooling_sample_time = None
+            self._last_learning_status = (
+                "Lernen pausiert: Fenster offen" if window_open
+                else "Lernen pausiert: keine Anwesenheit"
+            )
             return
 
         if is_heating:
@@ -207,31 +331,52 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if setpoint_value is None or room_temperature >= setpoint_value - 0.1:
                 self._sample_temperature = None
                 self._sample_time = None
+                self._last_learning_status = "Warte auf aktive Heizphase unter Solltemperatur"
                 return
 
             if self._sample_temperature is None or self._sample_time is None:
                 self._sample_temperature = room_temperature
                 self._sample_time = now
+                self._last_learning_type = "heating"
+                self._last_learning_status = "Sammle Aufheizmessung"
                 return
 
             elapsed = (now - self._sample_time).total_seconds()
             if elapsed < MIN_SAMPLE_SECONDS:
+                self._last_learning_status = "Sammle weitere Aufheizdaten"
                 return
-
-            delta = room_temperature - self._sample_temperature
-            if 0.05 <= delta <= 2.5:
-                observed_rate = delta / (elapsed / 3600)
-                observed_rate = max(
-                    MIN_LEARNED_HEATING_RATE,
-                    min(observed_rate, MAX_LEARNED_HEATING_RATE),
-                )
-                self.heating_rate = round(
-                    0.8 * self.heating_rate + 0.2 * observed_rate, 3
-                )
-                await self._save_learning()
-
+            baseline = self._sample_temperature
             self._sample_temperature = room_temperature
             self._sample_time = now
+            delta = room_temperature - baseline
+
+            if elapsed > MAX_HEATING_SAMPLE_SECONDS:
+                self._rejected_samples += 1
+                self._last_learning_status = "Aufheizmessung verworfen: Messintervall zu lang"
+                await self._save_learning()
+                return
+            if not 0.05 <= delta <= 2.5:
+                self._rejected_samples += 1
+                self._last_learning_status = "Aufheizmessung verworfen: Temperaturänderung unplausibel"
+                await self._save_learning()
+                return
+
+            observed_rate = delta / (elapsed / 3600)
+            self._last_observed_heating_rate = round(observed_rate, 3)
+            if not MIN_LEARNED_HEATING_RATE <= observed_rate <= MAX_LEARNED_HEATING_RATE:
+                self._rejected_samples += 1
+                self._last_learning_status = "Aufheizmessung verworfen: Rate außerhalb plausibler Grenzen"
+                await self._save_learning()
+                return
+
+            self.heating_rate = round(
+                0.8 * self.heating_rate + 0.2 * observed_rate, 3
+            )
+            self._heating_samples += 1
+            self._last_learning_type = "heating"
+            self._last_learning_sample_at = now.isoformat()
+            self._last_learning_status = "Aufheizrate aktualisiert"
+            await self._save_learning()
             return
 
         self._sample_temperature = None
@@ -245,6 +390,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not can_learn_cooling:
             self._cooling_sample_temperature = None
             self._cooling_sample_time = None
+            self._last_learning_status = "Warte auf stabile Abkühlphase im Absenkbetrieb"
             return
 
         if (
@@ -253,26 +399,128 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ):
             self._cooling_sample_temperature = room_temperature
             self._cooling_sample_time = now
+            self._last_learning_type = "cooling"
+            self._last_learning_status = "Sammle Abkühlmessung"
             return
 
         elapsed = (now - self._cooling_sample_time).total_seconds()
         if elapsed < MIN_COOLING_SAMPLE_SECONDS:
+            self._last_learning_status = "Sammle weitere Abkühldaten"
             return
-
-        delta = room_temperature - self._cooling_sample_temperature
-        if -2.0 <= delta <= -0.05:
-            observed_rate = -delta / (elapsed / 3600)
-            observed_rate = max(
-                MIN_LEARNED_COOLING_RATE,
-                min(observed_rate, MAX_LEARNED_COOLING_RATE),
-            )
-            self.cooling_rate = round(0.8 * self.cooling_rate + 0.2 * observed_rate, 3)
-            await self._save_learning()
-
+        baseline = self._cooling_sample_temperature
         self._cooling_sample_temperature = room_temperature
         self._cooling_sample_time = now
+        delta = room_temperature - baseline
 
+        if elapsed > MAX_COOLING_SAMPLE_SECONDS:
+            self._rejected_samples += 1
+            self._last_learning_status = "Abkühlmessung verworfen: Messintervall zu lang"
+            await self._save_learning()
+            return
+        if not -2.0 <= delta <= -0.05:
+            self._rejected_samples += 1
+            self._last_learning_status = "Abkühlmessung verworfen: Temperaturänderung unplausibel"
+            await self._save_learning()
+            return
 
+        observed_rate = -delta / (elapsed / 3600)
+        self._last_observed_cooling_rate = round(observed_rate, 3)
+        if not MIN_LEARNED_COOLING_RATE <= observed_rate <= MAX_LEARNED_COOLING_RATE:
+            self._rejected_samples += 1
+            self._last_learning_status = "Abkühlmessung verworfen: Rate außerhalb plausibler Grenzen"
+            await self._save_learning()
+            return
+
+        self.cooling_rate = round(
+            0.8 * self.cooling_rate + 0.2 * observed_rate, 3
+        )
+        self._cooling_samples += 1
+        self._last_learning_type = "cooling"
+        self._last_learning_sample_at = now.isoformat()
+        self._last_learning_status = "Abkühlrate aktualisiert"
+        await self._save_learning()
+
+    async def _evaluate_pending_forecast(
+        self,
+        *,
+        now: datetime,
+        room_temperature: float,
+        schedule_active: bool,
+        present: bool,
+        window_open: bool,
+    ) -> None:
+        """Compare a stored pre-schedule temperature projection with reality."""
+        event = self._pending_forecast_event
+        predicted = self._pending_forecast_temperature
+        if event is None or predicted is None:
+            return
+
+        seconds_after_event = (now - event).total_seconds()
+        if seconds_after_event > FORECAST_EVALUATION_GRACE_SECONDS:
+            self._pending_forecast_event = None
+            self._pending_forecast_temperature = None
+            return
+        if (
+            seconds_after_event < 0
+            or not schedule_active
+            or not present
+            or window_open
+        ):
+            return
+
+        error = round(room_temperature - predicted, 3)
+        absolute_error = abs(error)
+        self._forecast_evaluations += 1
+        if self._forecast_mae_c is None or self._forecast_evaluations == 1:
+            self._forecast_mae_c = round(absolute_error, 3)
+        else:
+            self._forecast_mae_c = round(
+                self._forecast_mae_c
+                + (absolute_error - self._forecast_mae_c)
+                / self._forecast_evaluations,
+                3,
+            )
+        self._last_forecast_error_c = error
+        self._last_forecast_predicted_temperature = round(predicted, 2)
+        self._last_forecast_actual_temperature = round(room_temperature, 2)
+        self._last_forecast_event = event.isoformat()
+        self._last_forecast_error_at = now.isoformat()
+        self._last_learning_status = (
+            f"Vorhersage ausgewertet: Fehler {error:+.1f} °C "
+            f"(MAE {self._forecast_mae_c:.1f} °C)"
+        )
+        self._pending_forecast_event = None
+        self._pending_forecast_temperature = None
+        await self._save_learning()
+
+    def _update_pending_forecast(
+        self,
+        *,
+        now: datetime,
+        next_event: datetime | None,
+        projected_temperature: float | None,
+        schedule_active: bool,
+        present: bool,
+        window_open: bool,
+    ) -> None:
+        """Keep the latest forecast until its scheduled comfort transition."""
+        if self._pending_forecast_event is not None and (
+            now - self._pending_forecast_event
+        ).total_seconds() > FORECAST_EVALUATION_GRACE_SECONDS:
+            self._pending_forecast_event = None
+            self._pending_forecast_temperature = None
+
+        if (
+            schedule_active
+            or not present
+            or window_open
+            or next_event is None
+            or projected_temperature is None
+            or next_event <= now
+        ):
+            return
+        self._pending_forecast_event = next_event
+        self._pending_forecast_temperature = projected_temperature
 
     async def _async_get_forecast_items(self) -> list[dict[str, Any]]:
         """Fetch hourly forecast at most every 30 minutes, if configured."""
@@ -336,6 +584,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "forecast_condition": None,
             "solar_adjustment_minutes": 0,
             "enabled": self.enabled,
+            "proximity_status": self._proximity_status,
+            "proximity_distance_m": self._proximity_distance_m,
+            "proximity_direction": self._proximity_direction,
+            "proximity_age_seconds": self._proximity_age_seconds,
+            **self._learning_diagnostics(),
         }
 
     def _presence_is_active(
@@ -348,48 +601,144 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         age = (dt_util.utcnow() - state.last_changed).total_seconds()
         return delay_seconds <= 0 or age >= delay_seconds
 
-    def _proximity_is_active(self, state: State) -> bool:
-        """Count continuous approach time independently of changing distance state."""
-        direction = str(state.attributes.get("dir_of_travel", "")).lower()
-        distance = _as_float(state)
+    @staticmethod
+    def _distance_to_meters(value: float, unit: str | None) -> float | None:
+        """Normalize supported distance units to meters."""
+        normalized = (unit or "m").strip().lower()
+        factors = {
+            "m": 1.0,
+            "meter": 1.0,
+            "meters": 1.0,
+            "metre": 1.0,
+            "metres": 1.0,
+            "km": 1000.0,
+            "kilometer": 1000.0,
+            "kilometers": 1000.0,
+            "kilometre": 1000.0,
+            "kilometres": 1000.0,
+            "mi": 1609.344,
+            "mile": 1609.344,
+            "miles": 1609.344,
+            "ft": 0.3048,
+            "foot": 0.3048,
+            "feet": 0.3048,
+            "yd": 0.9144,
+            "yard": 0.9144,
+            "yards": 0.9144,
+        }
+        factor = factors.get(normalized)
+        if factor is None:
+            return None
+        result = value * factor
+        return result if math.isfinite(result) and result >= 0 else None
 
-        if state.state == "home" or direction == "arrived" or distance == 0:
-            self._proximity_approaching_since = None
-            return True
+    def _proximity_is_active(
+        self,
+        distance_state: State | None,
+        direction_state: State | None,
+    ) -> tuple[bool | None, str]:
+        """Validate freshness, unit, direction and distance before inferring arrival."""
+        self._proximity_distance_m = None
+        self._proximity_direction = None
+        self._proximity_age_seconds = None
 
-        within_range = (
-            distance is not None
-            and distance <= float(
-                self.config.get(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE)
-            )
-        )
-        approaching = direction == "towards" and within_range
-        if not approaching:
+        if not self._valid(distance_state):
             self._proximity_approaching_since = None
-            return False
+            return None, "Proximity-Entfernung nicht verfügbar"
 
         now = dt_util.utcnow()
+        age = (now - dt_util.as_utc(distance_state.last_updated)).total_seconds()
+        self._proximity_age_seconds = round(max(age, 0), 1)
+        max_age = max(
+            0,
+            int(self.config.get(CONF_PROXIMITY_MAX_AGE, DEFAULT_PROXIMITY_MAX_AGE)),
+        )
+        if age < -60 or age > max_age:
+            self._proximity_approaching_since = None
+            return (
+                None,
+                f"Standortdaten veraltet ({round(max(age, 0) / 60)} min) – "
+                "Proximity wird nicht für Anfahrt verwendet",
+            )
+
+        legacy_direction = distance_state.attributes.get("dir_of_travel")
+        if distance_state.domain == "proximity" or legacy_direction is not None:
+            raw_direction = legacy_direction
+        elif direction_state is not None and self._valid(direction_state):
+            raw_direction = direction_state.state
+        elif self.config.get(CONF_PROXIMITY_DIRECTION_ENTITY):
+            self._proximity_approaching_since = None
+            return None, "Proximity-Richtung nicht verfügbar"
+        else:
+            self._proximity_approaching_since = None
+            return None, "Proximity-Richtung fehlt: bitte Richtungssensor auswählen"
+
+        direction = str(raw_direction or "").strip().lower()
+        self._proximity_direction = direction or None
+        if direction == "unknown" or direction in _INVALID_STATES or not direction:
+            self._proximity_approaching_since = None
+            return None, "Proximity-Richtung ist unbekannt"
+
+        raw_distance = _as_float(distance_state)
+        if raw_distance is None:
+            self._proximity_approaching_since = None
+            return None, "Proximity-Entfernung ist kein gültiger Zahlenwert"
+
+        distance_m = self._distance_to_meters(
+            raw_distance,
+            distance_state.attributes.get("unit_of_measurement"),
+        )
+        if distance_m is None:
+            self._proximity_approaching_since = None
+            return None, "Proximity-Einheit nicht unterstützt"
+        self._proximity_distance_m = round(distance_m, 1)
+
+        maximum_distance = max(
+            0.0,
+            float(self.config.get(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE)),
+        )
+        if direction == "arrived" or distance_m <= 0:
+            self._proximity_approaching_since = None
+            return True, "Proximity meldet Ankunft"
+        if direction in ("away_from", "stationary"):
+            self._proximity_approaching_since = None
+            return False, (
+                "Bewegung weg vom Zuhause" if direction == "away_from"
+                else "Standort stationär – keine Anfahrt"
+            )
+        if direction != "towards":
+            self._proximity_approaching_since = None
+            return None, f"Unbekannte Bewegungsrichtung: {direction}"
+
+        if distance_m > maximum_distance:
+            self._proximity_approaching_since = None
+            return False, "Noch außerhalb der Anfahrtsentfernung"
+
         if self._proximity_approaching_since is None:
             self._proximity_approaching_since = now
-        delay = max(
+        duration = max(
             0,
             int(self.config.get(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION)),
         )
-        return (now - self._proximity_approaching_since).total_seconds() >= delay
+        elapsed = (now - self._proximity_approaching_since).total_seconds()
+        if elapsed < duration:
+            return False, (
+                f"Anfahrt erkannt – Wartezeit {round(duration - elapsed)} s"
+            )
+        return True, "Anfahrt bestätigt"
 
     def _evaluate_presence(self) -> tuple[bool | None, str]:
-        """Combine household, guest, proximity and scheduled presence signals."""
+        """Combine person, guest, proximity and scheduled presence signals."""
         people = self.config.get(CONF_PERSON_ENTITIES) or []
         if isinstance(people, str):
             people = [people]
 
         guest_id = self.config.get(CONF_GUEST_ENTITY)
         proximity_id = self.config.get(CONF_PROXIMITY_ENTITY)
+        direction_id = self.config.get(CONF_PROXIMITY_DIRECTION_ENTITY)
         presence_id = self.config.get(CONF_PRESENCE_ENTITY)
         has_household_source = bool(people or guest_id or proximity_id)
         has_any_source = has_household_source or bool(presence_id)
-
-        # Preserve old behavior only when no presence source has been configured.
         household_home = not has_any_source
         invalid_people = False
         enter_delay = int(
@@ -398,6 +747,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         leave_delay = int(
             self.config.get(CONF_LEAVING_HOME_DURATION, DEFAULT_LEAVING_HOME_DURATION)
         )
+
         for entity_id in people:
             state = self.hass.states.get(entity_id)
             if not self._valid(state):
@@ -409,7 +759,6 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             elif state.state == "not_home" and not self._presence_is_active(
                 state, False, leave_delay
             ):
-                # Keep the former home state during the configured leave grace.
                 household_home = True
 
         if guest_id:
@@ -419,13 +768,27 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             household_home = household_home or guest.state == "on"
 
         proximity_home = False
+        self._proximity_status = "Proximity nicht konfiguriert"
         if proximity_id:
-            proximity = self.hass.states.get(proximity_id)
-            if not self._valid(proximity):
-                # An unavailable gap breaks the requirement for a continuous approach.
-                self._proximity_approaching_since = None
-                return None, "Proximity-Entität nicht verfügbar – keine Sollwertänderung"
-            proximity_home = self._proximity_is_active(proximity)
+            distance_state = self.hass.states.get(proximity_id)
+            direction_state = (
+                self.hass.states.get(direction_id) if direction_id else None
+            )
+            proximity_home, self._proximity_status = self._proximity_is_active(
+                distance_state, direction_state
+            )
+            if proximity_home is None:
+                # A person/guest tracker is more authoritative than an old GPS
+                # estimate. When it already confirms home, ignore stale Proximity
+                # data instead of blocking otherwise valid local presence.
+                if household_home:
+                    proximity_home = False
+                    self._proximity_status += " – bekannte Anwesenheit hat Vorrang"
+                else:
+                    return None, (
+                        self._proximity_status
+                        + " – keine Sollwertänderung aus unbekannten Standortdaten"
+                    )
 
         household_present = household_home or proximity_home
         if invalid_people and not household_present:
@@ -458,7 +821,6 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if state.state == "on":
                 sensor_present = self._presence_is_active(state, True, on_delay)
             elif state.state == "off":
-                # Keep presence true for the configured off-delay after motion stops.
                 sensor_present = not self._presence_is_active(state, False, off_delay)
             else:
                 return None, "Anwesenheitssensor liefert ungültigen Zustand – keine Sollwertänderung"
@@ -469,7 +831,6 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 else sensor_present
             )
         elif presence_id and presence_schedule_off and not has_household_source:
-            # With no other source, a disabled presence schedule intentionally means eco.
             present = False
         else:
             present = household_present
@@ -530,6 +891,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         schedule_active = schedule_state.state == "on"
 
+        await self._evaluate_pending_forecast(
+            now=dt_util.utcnow(),
+            room_temperature=room_temperature,
+            schedule_active=schedule_active,
+            present=present,
+            window_open=window_open,
+        )
+
         await self._learn(
             room_temperature,
             climate_state,
@@ -562,6 +931,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
             window_open=window_open,
             present=present,
+        )
+
+        self._update_pending_forecast(
+            now=dt_util.utcnow(),
+            next_event=next_event,
+            projected_temperature=decision.projected_temperature,
+            schedule_active=schedule_active,
+            present=present,
+            window_open=window_open,
         )
 
         target_temperature = decision.target_temperature
@@ -597,6 +975,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "enabled": self.enabled,
             "decision_status": decision.status,
             "control_error": False,
+            "proximity_status": self._proximity_status,
+            "proximity_distance_m": self._proximity_distance_m,
+            "proximity_direction": self._proximity_direction,
+            "proximity_age_seconds": self._proximity_age_seconds,
+            **self._learning_diagnostics(),
         }
 
         if (
