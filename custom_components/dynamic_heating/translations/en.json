@@ -19,25 +19,29 @@
           "guest_entity": "Guest mode (optional)",
           "enter_home_duration": "Arrival delay (seconds)",
           "leaving_home_duration": "Leaving-home delay (seconds)",
-          "proximity_entity": "Proximity / geo-fencing (optional)",
+          "proximity_entity": "Proximity distance sensor (optional)",
           "proximity_duration": "Approach duration (seconds)",
-          "proximity_distance": "Proximity distance (entity unit)",
+          "proximity_distance": "Maximum approach distance (meters)",
           "presence_schedule_entity": "Presence sensor schedule (optional)",
           "presence_on_duration": "Presence reaction ON time (seconds)",
-          "presence_off_duration": "Presence reaction OFF time (seconds)"
+          "presence_off_duration": "Presence reaction OFF time (seconds)",
+          "proximity_direction_entity": "Proximity direction-of-travel sensor (optional)",
+          "proximity_max_age": "Maximum age of location data"
         },
         "data_description": {
           "person_entities": "Comfort heating is allowed when at least one selected person or device tracker is home. Device trackers are recommended for simple home/not-home states.",
           "enter_home_duration": "The home state must remain stable for this long before comfort heating is allowed.",
           "leaving_home_duration": "After the last selected person leaves, wait this long before switching to setback temperature.",
           "guest_entity": "An active guest toggle counts as someone being home.",
-          "proximity_entity": "Select the Home Assistant Proximity entity for the monitored home zone. A geo-location must be available.",
-          "proximity_duration": "The direction must continuously point towards home within the configured range for this long before comfort heating is allowed.",
-          "proximity_distance": "Maximum approach distance, using the unit reported by the selected Proximity entity.",
+          "proximity_entity": "Choose the Home Assistant Proximity distance sensor, for example the distance-to-zone or nearest-distance sensor. Older combined proximity entities remain supported.",
+          "proximity_duration": "The direction must continuously point towards home within the configured range for this long before comfort heating is allowed. Changing distance readings do not restart the timer; a direction change or unavailable reading does.",
+          "proximity_distance": "Maximum approach distance in meters. Distance values in m, km, miles, feet or yards are normalized to meters before comparison.",
           "presence_entity": "Comfort heating is allowed only while this sensor reports presence and the configured household presence source also allows heating.",
           "presence_schedule_entity": "The presence sensor is used only while this schedule is on. When off, sensor motion is ignored.",
           "presence_on_duration": "Presence must remain on for this long before it is accepted.",
-          "presence_off_duration": "After the sensor turns off, keep presence accepted for this long before switching to setback."
+          "presence_off_duration": "After the sensor turns off, keep presence accepted for this long before switching to setback.",
+          "proximity_direction_entity": "Choose the matching direction-of-travel sensor. The states towards, arrived, away_from and stationary are understood. For new Proximity entities, select the distance and direction sensors separately.",
+          "proximity_max_age": "If the distance sensor has not updated within this duration, its position is considered stale. No new heating decision is made from stale proximity data; a person/guest tracker that already confirms home still takes precedence."
         }
       }
     },
@@ -68,25 +72,29 @@
           "guest_entity": "Guest mode (optional)",
           "enter_home_duration": "Arrival delay (seconds)",
           "leaving_home_duration": "Leaving-home delay (seconds)",
-          "proximity_entity": "Proximity / geo-fencing (optional)",
+          "proximity_entity": "Proximity distance sensor (optional)",
           "proximity_duration": "Approach duration (seconds)",
-          "proximity_distance": "Proximity distance (entity unit)",
+          "proximity_distance": "Maximum approach distance (meters)",
           "presence_schedule_entity": "Presence sensor schedule (optional)",
           "presence_on_duration": "Presence reaction ON time (seconds)",
-          "presence_off_duration": "Presence reaction OFF time (seconds)"
+          "presence_off_duration": "Presence reaction OFF time (seconds)",
+          "proximity_direction_entity": "Proximity direction-of-travel sensor (optional)",
+          "proximity_max_age": "Maximum age of location data"
         },
         "data_description": {
           "person_entities": "Comfort heating is allowed when at least one selected person or device tracker is home. Device trackers are recommended for simple home/not-home states.",
           "enter_home_duration": "The home state must remain stable for this long before comfort heating is allowed.",
           "leaving_home_duration": "After the last selected person leaves, wait this long before switching to setback temperature.",
           "guest_entity": "An active guest toggle counts as someone being home.",
-          "proximity_entity": "Select the Home Assistant Proximity entity for the monitored home zone. A geo-location must be available.",
-          "proximity_duration": "The direction must continuously point towards home within the configured range for this long before comfort heating is allowed.",
-          "proximity_distance": "Maximum approach distance, using the unit reported by the selected Proximity entity.",
+          "proximity_entity": "Choose the Home Assistant Proximity distance sensor, for example the distance-to-zone or nearest-distance sensor. Older combined proximity entities remain supported.",
+          "proximity_duration": "The direction must continuously point towards home within the configured range for this long before comfort heating is allowed. Changing distance readings do not restart the timer; a direction change or unavailable reading does.",
+          "proximity_distance": "Maximum approach distance in meters. Distance values in m, km, miles, feet or yards are normalized to meters before comparison.",
           "presence_entity": "Comfort heating is allowed only while this sensor reports presence and the configured household presence source also allows heating.",
           "presence_schedule_entity": "The presence sensor is used only while this schedule is on. When off, sensor motion is ignored.",
           "presence_on_duration": "Presence must remain on for this long before it is accepted.",
-          "presence_off_duration": "After the sensor turns off, keep presence accepted for this long before switching to setback."
+          "presence_off_duration": "After the sensor turns off, keep presence accepted for this long before switching to setback.",
+          "proximity_direction_entity": "Choose the matching direction-of-travel sensor. The states towards, arrived, away_from and stationary are understood. For new Proximity entities, select the distance and direction sensors separately.",
+          "proximity_max_age": "If the distance sensor has not updated within this duration, its position is considered stale. No new heating decision is made from stale proximity data; a person/guest tracker that already confirms home still takes precedence."
         }
       }
     },
