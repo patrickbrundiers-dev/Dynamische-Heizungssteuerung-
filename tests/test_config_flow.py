@@ -195,3 +195,37 @@ async def test_editor_rejects_thermostat_already_used_by_another_room(
     assert result["type"] is FlowResultType.ABORT
     assert second.unique_id == "climate.kitchen"
     assert first.unique_id == "climate.living_room"
+
+
+
+@pytest.mark.asyncio
+async def test_editor_saves_presence_and_proximity_settings(
+    hass, enable_custom_integrations
+):
+    """The room editor exposes person, guest, proximity and debounce fields."""
+    entry = _mock_room(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    edited = {
+        **_valid_input(),
+        "person_entities": ["person.patrick", "person.jenny"],
+        "guest_entity": "input_boolean.guest_mode",
+        "enter_home_duration": 120,
+        "leaving_home_duration": 180,
+        "proximity_entity": "proximity.home",
+        "proximity_duration": 120,
+        "proximity_distance": 500,
+        "presence_schedule_entity": "schedule.presence_active",
+        "presence_on_duration": 300,
+        "presence_off_duration": 1200,
+    }
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=edited
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["person_entities"] == ["person.patrick", "person.jenny"]
+    assert entry.options["guest_entity"] == "input_boolean.guest_mode"
+    assert entry.options["proximity_entity"] == "proximity.home"
+    assert entry.options["presence_schedule_entity"] == "schedule.presence_active"
+    assert entry.options["presence_on_duration"] == 300
+    assert entry.options["presence_off_duration"] == 1200
