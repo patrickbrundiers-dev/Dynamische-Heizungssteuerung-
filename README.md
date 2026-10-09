@@ -106,4 +106,7 @@ Das ist bewusst eine konservative Heuristik und keine echte Strahlungs- oder Rau
 - **Gastmodus:** Eine eingeschaltete Gast-Entität zählt als Anwesenheit.
 - **Präsenzsensor:** Optional mit eigenem Zeitplan sowie getrennten Reaktionszeiten für EIN und AUS. Ist der Präsenzzeitplan ausgeschaltet, wird der Präsenzsensor für die Entscheidung ignoriert.
 - **Proximity:** Eine Proximity-Entität kann als alternative Anwesenheitsquelle dienen, wenn sie „home“ meldet oder sich in Richtung Zuhause innerhalb der eingestellten Entfernung bewegt. Die Entfernung wird in der Einheit der Proximity-Entität angegeben.
-- **Sicherheit:** Ist eine konfigurierte erforderliche Entität nicht verfügbar, wird kein neuer Thermostat-Sollwert gesetzt. Alle neuen Funktionen sind optional; Präsenz-Reaktionszeiten sind für Bestandsräume standardmäßig 0, damit sie sich nicht unerwartet anders verhalten.
+- **Sicherheit:** Ist eine konfigurierte erforderliche Entität nicht verfügbar, wird kein neuer Thermostat-Sollwert gesetzt. Alle neuen Entitätsfelder sind optional. Standardmäßig gelten 2 Sekunden für Ankunft und Verlassen, 2 Minuten für die Anfahrt sowie 5 Minuten EIN- und 20 Minuten AUS-Reaktionszeit am Präsenzsensor. Diese Sensor-Verzögerungen greifen nur, wenn ein entsprechender Präsenzsensor konfiguriert ist.
+
+
+Die Zeitfelder verwenden im Raum-Editor den nativen Home-Assistant-Dauerauswähler mit Stunden, Minuten und Sekunden. Die Anfahrtszeit wird intern vom ersten stabilen Proximity-Messpunkt in Richtung Zuhause gemessen; spätere Änderungen der Entfernung setzen den Timer nicht zurück, solange Richtung und Distanzbedingung weiter erfüllt sind.
