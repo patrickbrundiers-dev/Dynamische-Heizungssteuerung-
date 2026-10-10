@@ -9,6 +9,8 @@ from custom_components.dynamic_heating.logic import (
     decide_heating_target,
     evaluate_heating_limit,
     evaluate_window_open,
+    valve_maintenance_due,
+    valve_maintenance_phase,
 )
 
 
@@ -454,3 +456,21 @@ def test_calibration_offset_follows_valve_error_and_is_bounded() -> None:
     assert calibration_offset(20.0, 23.0, 10.0) == 3.0
     assert calibration_offset(21.0, 20.0, 10.0) == -1.0
     assert calibration_offset(10.0, 40.0, 10.0) == 10.0
+
+
+def test_valve_maintenance_runs_weekly_in_its_hour() -> None:
+    now = datetime(2026, 10, 12, 9, 30, tzinfo=UTC)
+    assert valve_maintenance_due(None, now, 11, 7, 11)
+    assert not valve_maintenance_due(None, now, 10, 7, 11)
+    assert not valve_maintenance_due(now - timedelta(days=3), now, 11, 7, 11)
+    # A week minus a few minutes still counts, so the hour does not drift.
+    assert valve_maintenance_due(
+        now - timedelta(days=7, minutes=-5), now, 11, 7, 11
+    )
+
+
+def test_valve_maintenance_opens_then_closes_then_ends() -> None:
+    start = datetime(2026, 10, 12, 9, 0, tzinfo=UTC)
+    assert valve_maintenance_phase(start, start, 300) == "open"
+    assert valve_maintenance_phase(start, start + timedelta(seconds=301), 300) == "close"
+    assert valve_maintenance_phase(start, start + timedelta(seconds=600), 300) is None

@@ -97,6 +97,13 @@ CONF_CALIBRATION: Final = "calibration"
 CALIBRATION_INTERVAL_SECONDS: Final = 600
 MAX_CALIBRATION_OFFSET: Final = 10.0
 
+# Weekly valve exercise against calcification (as in Better Thermostat):
+# open fully, then close fully, each for a few minutes, at a fixed hour.
+CONF_VALVE_MAINTENANCE: Final = "valve_maintenance"
+VALVE_MAINTENANCE_INTERVAL_DAYS: Final = 7
+VALVE_MAINTENANCE_HOUR: Final = 11
+VALVE_MAINTENANCE_PHASE_SECONDS: Final = 300
+
 # Thermostats without hvac_action count as heating when the setpoint is at least
 # this far above the room temperature (used for learning only).
 INFERRED_HEATING_MARGIN: Final = 0.5

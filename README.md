@@ -209,3 +209,10 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 - Die Abweichung wird pro Thermostat höchstens alle 10 Minuten neu berechnet und auf ±10 °C sowie die Grenzen und Schrittweite des Thermostats begrenzt. Meldet ein Thermostat keine eigene Temperatur, erhält es den unkalibrierten Sollwert. Außerhalb der Heizperiode wird nicht kalibriert.
 - Der Statussensor zeigt im Attribut `thermostat_setpoints` den tatsächlich an jedes Thermostat gesendeten Sollwert.
 - **Wichtig:** Nicht einschalten, wenn das gewählte Thermostat bereits ein Better-Thermostat ist; sonst wird doppelt kalibriert.
+
+## Version 0.4.0: Ventilwartung
+
+- **Wöchentliche Ventilwartung (optional):** Gegen Verkalkung öffnet die Integration die Ventile einmal pro Woche gegen 11 Uhr für 5 Minuten ganz (Maximaltemperatur des Thermostats) und schließt sie danach 5 Minuten ganz (Minimaltemperatur), wie Better Thermostat. Danach gilt wieder der normale Sollwert.
+- Bei offenem Fenster oder manueller Übersteuerung wird die Wartung auf die nächste passende Stunde verschoben. Sie läuft nur bei eingeschalteter Regelung. Der Zeitpunkt der letzten Wartung wird gespeichert und übersteht Neustarts.
+- Der Statussensor zeigt während der Wartung „Ventilwartung – Ventile öffnen/schließen“ und das Attribut `valve_maintenance`.
+- Mit den Versionen 0.3.6 bis 0.4.0 kann die Integration die Aufgaben von Advanced Heating Control, Climate Group Helper und Better Thermostat übernehmen: Thermostatköpfe direkt als Haupt- und weitere Thermostate wählen, Kalibrierung und Ventilwartung einschalten. Vorher die alte Steuerung für diesen Raum abschalten, damit nicht zwei Regler dieselben Ventile stellen.

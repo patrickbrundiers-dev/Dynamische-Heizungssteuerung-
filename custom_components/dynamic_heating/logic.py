@@ -5,7 +5,7 @@ can be tested independently of the runtime.
 """
 
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 TrendResult = Literal["started", "collecting", "too_long", "implausible", "complete"]
@@ -439,3 +439,33 @@ def calibration_offset(
     """
     offset = thermostat_temperature - room_temperature
     return max(-max_offset, min(offset, max_offset))
+
+
+def valve_maintenance_due(
+    last_run: datetime | None,
+    now: datetime,
+    local_hour: int,
+    interval_days: int,
+    start_hour: int,
+) -> bool:
+    """True in the maintenance hour once the interval since the last run passed.
+
+    An hour of slack keeps a weekly run on the same hour despite small delays.
+    """
+    if local_hour != start_hour:
+        return False
+    return last_run is None or now - last_run >= timedelta(
+        days=interval_days, hours=-1
+    )
+
+
+def valve_maintenance_phase(
+    started_at: datetime, now: datetime, phase_seconds: int
+) -> str | None:
+    """Return "open", then "close", then None once maintenance is over."""
+    elapsed = (now - started_at).total_seconds()
+    if elapsed < phase_seconds:
+        return "open"
+    if elapsed < 2 * phase_seconds:
+        return "close"
+    return None
