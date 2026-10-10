@@ -33,7 +33,8 @@
           "window_close_delay": "Fenster: Wartezeit nach dem Schließen",
           "window_temperature": "Temperatur bei offenem Fenster (°C, optional)",
           "frost_protection_temperature": "Frostschutztemperatur (°C, optional)",
-          "heating_season_entity": "Heizperiode / Wintermodus (optional)"
+          "heating_season_entity": "Heizperiode / Wintermodus (optional)",
+          "additional_climate_entities": "Weitere Thermostate im Raum (optional)"
         },
         "data_description": {
           "person_entities": "Komfortheizung ist erlaubt, wenn mindestens eine ausgewählte Person oder ein Geräte-Tracker zu Hause ist. Geräte-Tracker mit einfachem Zuhause/Nicht-zuhause-Status werden empfohlen.",
@@ -55,7 +56,8 @@
           "window_close_delay": "Nach dem Schließen bleibt die Fensterabsenkung so lange bestehen, damit sich die Raumluft beruhigt. 0 = sofort.",
           "window_temperature": "Eigener Sollwert bei offenem Fenster, z. B. 15 °C. Leer lassen, um wie bisher die Absenk- bzw. Abwesenheitstemperatur zu verwenden. Muss unter der Komforttemperatur liegen.",
           "frost_protection_temperature": "Kein Sollwert geht unter diesen Wert, auch nicht bei offenem Fenster oder Abwesenheit, z. B. 12 °C. Leer lassen zum Abschalten. Muss unter der Komforttemperatur liegen.",
-          "heating_season_entity": "Schalter oder Sensor für die Heizperiode, z. B. ein Wintermodus. Ist er AUS, wird nicht geheizt: der Sollwert geht auf die Frostschutztemperatur oder, ohne sie, auf das Minimum des Thermostats. Ist die Entität nicht verfügbar, wird normal weitergeheizt. Leer lassen zum Abschalten."
+          "heating_season_entity": "Schalter oder Sensor für die Heizperiode, z. B. ein Wintermodus. Ist er AUS, wird nicht geheizt: der Sollwert geht auf die Frostschutztemperatur oder, ohne sie, auf das Minimum des Thermostats. Ist die Entität nicht verfügbar, wird normal weitergeheizt. Leer lassen zum Abschalten.",
+          "additional_climate_entities": "Weitere Heizkörperthermostate desselben Raums. Sie erhalten denselben Sollwert wie das Hauptthermostat, so wie eine Climate-Gruppe. Ein nicht verfügbares weiteres Thermostat wird übersprungen; eine manuelle Änderung an einem davon pausiert die Regelung für den Raum."
         }
       }
     },
@@ -81,7 +83,8 @@
           "comfort_temperature": "Komforttemperatur (°C)",
           "eco_temperature": "Absenktemperatur (°C)",
           "max_preheat_minutes": "Maximale Vorheizzeit (Minuten)",
-          "frost_protection_temperature": "Frostschutztemperatur (°C, optional)"
+          "frost_protection_temperature": "Frostschutztemperatur (°C, optional)",
+          "additional_climate_entities": "Weitere Thermostate im Raum (optional)"
         },
         "data_description": {
           "climate_entity": "Wähle die Climate-Entität, deren Sollwert dieser Raumregler verändern darf. Vermeide weitere Automationen, die gleichzeitig dasselbe Thermostat steuern.",
@@ -90,7 +93,8 @@
           "comfort_temperature": "Gewünschte Raumtemperatur während aktiver Komfortzeiten.",
           "eco_temperature": "Absenktemperatur außerhalb der Komfortzeit, bei Abwesenheit oder offenem Fenster. Sie muss unter der Komforttemperatur liegen.",
           "max_preheat_minutes": "Harte Obergrenze, wie früh die Vorheizung starten darf.",
-          "frost_protection_temperature": "Kein Sollwert geht unter diesen Wert, auch nicht bei offenem Fenster oder Abwesenheit, z. B. 12 °C. Leer lassen zum Abschalten. Muss unter der Komforttemperatur liegen."
+          "frost_protection_temperature": "Kein Sollwert geht unter diesen Wert, auch nicht bei offenem Fenster oder Abwesenheit, z. B. 12 °C. Leer lassen zum Abschalten. Muss unter der Komforttemperatur liegen.",
+          "additional_climate_entities": "Weitere Heizkörperthermostate desselben Raums. Sie erhalten denselben Sollwert wie das Hauptthermostat, so wie eine Climate-Gruppe. Ein nicht verfügbares weiteres Thermostat wird übersprungen; eine manuelle Änderung an einem davon pausiert die Regelung für den Raum."
         }
       },
       "presence": {

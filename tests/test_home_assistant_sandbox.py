@@ -1260,3 +1260,74 @@ async def test_heating_season_off_stops_heating_and_unknown_keeps_it(
     assert coordinator.data["mode"] == "comfort"
     assert coordinator.data["heating_season"] is True
     assert [call[2]["temperature"] for call in calls] == [float(min_temp), 21.0]
+
+
+def _set_trv(hass, entity_id: str, state: str = "heat", temperature: float = 18.0):
+    hass.states.async_set(
+        entity_id,
+        state,
+        {"temperature": temperature, "min_temp": 5, "max_temp": 30,
+         "target_temp_step": 0.5},
+    )
+
+
+@pytest.mark.asyncio
+async def test_additional_thermostats_get_the_same_target(
+    hass, enable_custom_integrations
+):
+    """Every thermostat of the room is written; unavailable ones are skipped."""
+    _set_up_test_entities(hass)
+    _set_trv(hass, "climate.living_room_2")
+    _set_trv(hass, "climate.living_room_3")
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_climate_entities"] = [
+        "climate.living_room_2",
+        "climate.living_room_3",
+    ]
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        assert sorted(
+            (call[2]["entity_id"], call[2]["temperature"]) for call in calls
+        ) == [
+            ("climate.living_room", 21.0),
+            ("climate.living_room_2", 21.0),
+            ("climate.living_room_3", 21.0),
+        ]
+
+        # Thermostats confirm 21 °C; then one drops out and the window opens.
+        _set_climate(hass, temperature=21.0)
+        _set_trv(hass, "climate.living_room_2", temperature=21.0)
+        hass.states.async_set("climate.living_room_3", "unavailable")
+        hass.states.async_set("binary_sensor.living_room_window", "on")
+        await coordinator.async_refresh()
+
+    assert coordinator.data["unavailable_thermostats"] == ["climate.living_room_3"]
+    assert "nicht verfügbar" in coordinator.data["status"]
+    assert sorted(
+        call[2]["entity_id"] for call in calls if call[2]["temperature"] == 18.0
+    ) == ["climate.living_room", "climate.living_room_2"]
+
+
+@pytest.mark.asyncio
+async def test_manual_change_on_additional_thermostat_pauses_room(
+    hass, enable_custom_integrations
+):
+    """A manual change on any thermostat of the room pauses control."""
+    _set_up_test_entities(hass)
+    _set_trv(hass, "climate.living_room_2")
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_climate_entities"] = ["climate.living_room_2"]
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        _set_climate(hass, temperature=21.0)
+        _set_trv(hass, "climate.living_room_2", temperature=21.0)
+        await coordinator.async_refresh()
+        _set_trv(hass, "climate.living_room_2", temperature=23.0)
+        await coordinator.async_refresh()
+
+    assert coordinator.data["manual_override"] is True
+    assert len(calls) == 2

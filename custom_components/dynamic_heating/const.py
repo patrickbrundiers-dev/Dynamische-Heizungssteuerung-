@@ -6,6 +6,8 @@ DOMAIN: Final = "dynamic_heating"
 PLATFORMS: Final = ["sensor", "switch"]
 
 CONF_CLIMATE_ENTITY: Final = "climate_entity"
+# Further thermostats of the same room; they get the same target.
+CONF_ADDITIONAL_CLIMATE_ENTITIES: Final = "additional_climate_entities"
 CONF_ROOM_TEMPERATURE_ENTITY: Final = "room_temperature_entity"
 CONF_SCHEDULE_ENTITY: Final = "schedule_entity"
 CONF_WINDOW_ENTITY: Final = "window_entity"
