@@ -1857,3 +1857,71 @@ async def test_external_temperature_option_off_touches_nothing(
         await coordinator.async_refresh()
 
     assert [c for c in calls if c[0] != "climate"] == []
+
+
+@pytest.mark.asyncio
+async def test_schedule_block_temperature_replaces_comfort(
+    hass, enable_custom_integrations
+):
+    """An active schedule block with a temperature sets the comfort target."""
+    _set_up_test_entities(hass)
+    hass.states.async_set(
+        "schedule.living_room_comfort",
+        "on",
+        {
+            "next_event": (dt_util.now() + timedelta(hours=2)).isoformat(),
+            "temperature": 22.5,
+        },
+    )
+    _, coordinator = await _setup_integration(hass)
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert coordinator.data["mode"] == "comfort"
+    assert coordinator.data["target_temperature"] == 22.5
+    assert coordinator.data["schedule_comfort_temperature"] == 22.5
+    assert calls[-1][2]["temperature"] == 22.5
+
+
+@pytest.mark.asyncio
+async def test_boost_switch_heats_and_ends_by_itself(
+    hass, enable_custom_integrations
+):
+    """The boost switch raises the target and switches off after its duration."""
+    _set_up_test_entities(hass)
+    entry, coordinator = await _setup_integration(hass)
+    coordinator.config["boost_temperature"] = 24.0
+    coordinator.config["boost_duration"] = 1800
+    boost_id = er.async_get(hass).async_get_entity_id(
+        "switch", DOMAIN, f"{entry.entry_id}_boost"
+    )
+    start = dt_util.utcnow()
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        with patch(
+            "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+            return_value=start,
+        ):
+            await hass.services.async_call(
+                "switch", "turn_on", {"entity_id": boost_id}, blocking=True
+            )
+            await hass.async_block_till_done()
+            await coordinator.async_refresh()
+        assert coordinator.data["mode"] == "boost"
+        assert coordinator.data["status"].startswith("Boost bis ")
+        assert hass.states.get(boost_id).state == "on"
+
+        with patch(
+            "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+            return_value=start + timedelta(minutes=31),
+        ):
+            await coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+    assert coordinator.data["mode"] != "boost"
+    assert coordinator.boost_until is None
+    assert hass.states.get(boost_id).state == "off"
+    assert calls[0][2]["temperature"] == 24.0

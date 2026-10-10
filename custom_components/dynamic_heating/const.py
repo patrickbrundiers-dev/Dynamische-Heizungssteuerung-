@@ -122,3 +122,15 @@ CONF_EXTERNAL_TEMPERATURE: Final = "external_temperature"
 # Resend when the room temperature moved this far, or after this long anyway.
 EXTERNAL_TEMPERATURE_MIN_CHANGE: Final = 0.1
 EXTERNAL_TEMPERATURE_RESEND_SECONDS: Final = 1800
+
+# Boost: heat to a higher temperature for a limited time (Better Thermostat's
+# boost preset), started with the "Boost" switch.
+CONF_BOOST_TEMPERATURE: Final = "boost_temperature"
+CONF_BOOST_DURATION: Final = "boost_duration"
+DEFAULT_BOOST_TEMPERATURE: Final = 24.0
+DEFAULT_BOOST_DURATION: Final = 3600
+
+# A schedule block may carry its own comfort temperature in its additional
+# data (e.g. ``temperature: 22``); it replaces the comfort temperature while
+# that block is active.
+SCHEDULE_TEMPERATURE_ATTRIBUTE: Final = "temperature"

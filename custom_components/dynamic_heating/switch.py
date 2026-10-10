@@ -21,7 +21,9 @@ async def async_setup_entry(
 ) -> None:
     """Set up the opt-in control switch."""
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
-    async_add_entities([DynamicHeatingSwitch(coordinator, entry)])
+    async_add_entities(
+        [DynamicHeatingSwitch(coordinator, entry), BoostSwitch(coordinator, entry)]
+    )
 
 
 class DynamicHeatingSwitch(
@@ -74,3 +76,44 @@ class DynamicHeatingSwitch(
         self.coordinator.enabled = False
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
+
+
+class BoostSwitch(CoordinatorEntity[DynamicHeatingCoordinator], SwitchEntity):
+    """Heat to the boost temperature for a limited time; turns itself off."""
+
+    _attr_icon = "mdi:fire"
+    _attr_name = "Boost"
+
+    def __init__(
+        self, coordinator: DynamicHeatingCoordinator, entry: ConfigEntry
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_boost"
+        self._attr_has_entity_name = True
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dynamische Heizungssteuerung",
+            manufacturer="Community",
+            model="Adaptive Heating Controller",
+        )
+
+    @property
+    def is_on(self) -> bool:
+        """Return whether a boost is running."""
+        return self.coordinator.boost_until is not None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | None]:
+        """When the running boost ends."""
+        until = self.coordinator.boost_until
+        return {"until": until.isoformat() if until is not None else None}
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Start (or restart) the boost."""
+        await self.coordinator.async_start_boost()
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        """End the boost early."""
+        await self.coordinator.async_stop_boost()
+        self.async_write_ha_state()

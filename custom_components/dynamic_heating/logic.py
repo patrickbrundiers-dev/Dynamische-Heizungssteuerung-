@@ -73,6 +73,7 @@ def decide_heating_target(
     frost_protection_temperature: float | None = None,
     heating_season: bool = True,
     off_temperature: float | None = None,
+    boost_temperature: float | None = None,
 ) -> HeatingDecision:
     """Return the target and reason for the current conditions.
 
@@ -80,6 +81,8 @@ def decide_heating_target(
     ``frost_protection_temperature`` is a floor no decision may go below.
     Outside the ``heating_season`` the room is not heated: the target is
     ``off_temperature`` (the thermostat minimum), raised by frost protection.
+    A ``boost_temperature`` wins over schedule, presence and heating limit,
+    but not over an open window or the end of the heating season.
     """
     if not heating_season:
         decision = HeatingDecision(
@@ -88,6 +91,8 @@ def decide_heating_target(
             off_temperature if off_temperature is not None else eco_temperature,
             0,
         )
+    elif boost_temperature is not None and not window_open:
+        decision = HeatingDecision("Boost", "boost", boost_temperature, 0)
     else:
         decision = _decide(
             now=now,
@@ -439,6 +444,19 @@ def calibration_offset(
     """
     offset = thermostat_temperature - room_temperature
     return max(-max_offset, min(offset, max_offset))
+
+
+def schedule_comfort_temperature(
+    value: object, minimum: float = 5.0, maximum: float = 30.0
+) -> float | None:
+    """Comfort temperature from a schedule block's data, if it holds a valid one."""
+    try:
+        temperature = float(value)
+    except (TypeError, ValueError):
+        return None
+    if temperature != temperature or not minimum <= temperature <= maximum:
+        return None
+    return temperature
 
 
 def apply_hysteresis(

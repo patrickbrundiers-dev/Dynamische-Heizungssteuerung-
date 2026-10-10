@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -20,7 +20,12 @@ from .const import (
     CALIBRATION_INTERVAL_SECONDS,
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_CALIBRATION,
+    CONF_BOOST_DURATION,
+    CONF_BOOST_TEMPERATURE,
     CONF_EXTERNAL_TEMPERATURE,
+    DEFAULT_BOOST_DURATION,
+    DEFAULT_BOOST_TEMPERATURE,
+    SCHEDULE_TEMPERATURE_ATTRIBUTE,
     CONF_HYSTERESIS,
     EXTERNAL_TEMPERATURE_MIN_CHANGE,
     EXTERNAL_TEMPERATURE_RESEND_SECONDS,
@@ -95,6 +100,7 @@ from .logic import (
     apply_hysteresis,
     calibration_offset,
     fallback_room_temperature,
+    schedule_comfort_temperature,
     decide_heating_target,
     evaluate_heating_limit,
     evaluate_window_open,
@@ -148,6 +154,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # True while the room sensor is unavailable and the thermostats'
         # own readings stand in for it.
         self._room_fallback = False
+        # End of a running boost (UTC), None when no boost is active.
+        self.boost_until: datetime | None = None
         self.heating_rate = DEFAULT_HEATING_RATE
         self.cooling_rate = DEFAULT_COOLING_RATE
         self._store = Store(hass, 1, f"{DOMAIN}_{entry_id}_learning")
@@ -1372,6 +1380,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "nicht verfügbar"
             )
 
+    async def async_start_boost(self) -> None:
+        """Heat to the boost temperature for the configured duration."""
+        duration = int(self.config.get(CONF_BOOST_DURATION) or DEFAULT_BOOST_DURATION)
+        self.boost_until = dt_util.utcnow() + timedelta(seconds=duration)
+        await self.async_request_refresh()
+
+    async def async_stop_boost(self) -> None:
+        """End a running boost early."""
+        self.boost_until = None
+        await self.async_request_refresh()
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Run one control cycle and attach the thermostats' health."""
         await self._sync_external_temperature()
@@ -1538,6 +1557,22 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         comfort_temperature = float(
             self.config.get(CONF_COMFORT_TEMPERATURE, DEFAULT_COMFORT_TEMPERATURE)
         )
+        slot_comfort = (
+            schedule_comfort_temperature(
+                schedule_state.attributes.get(SCHEDULE_TEMPERATURE_ATTRIBUTE)
+            )
+            if schedule_state.state == "on"
+            else None
+        )
+        if slot_comfort is not None:
+            comfort_temperature = slot_comfort
+        if self.boost_until is not None and dt_util.utcnow() >= self.boost_until:
+            self.boost_until = None
+        boost_temperature = (
+            float(self.config.get(CONF_BOOST_TEMPERATURE) or DEFAULT_BOOST_TEMPERATURE)
+            if self.boost_until is not None
+            else None
+        )
         eco_temperature = float(
             self.config.get(CONF_ECO_TEMPERATURE, DEFAULT_ECO_TEMPERATURE)
         )
@@ -1618,7 +1653,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
             heating_season=heating_season,
             off_temperature=off_temperature,
+            boost_temperature=boost_temperature,
         )
+        if decision.mode == "boost":
+            end = dt_util.as_local(self.boost_until).strftime("%H:%M")
+            decision = replace(decision, status=f"Boost bis {end} Uhr")
         if decision.mode == "preheat":
             self._preheat_event = next_event
 
@@ -1657,6 +1696,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "window_open": window_open,
             "window_contact_open": window_contact_open,
             "heating_season": heating_season,
+            "comfort_temperature": comfort_temperature,
+            "schedule_comfort_temperature": slot_comfort,
+            "boost_until": (
+                self.boost_until.isoformat() if self.boost_until is not None else None
+            ),
             "heating_limit_reached": self._heating_limit_reached,
             "present": present,
             "presence_status": presence_status,

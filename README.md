@@ -238,3 +238,8 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 - Erkannt werden Thermostate, deren Gerät eine Auswahl mit den Optionen `internal`/`external` und eine Zahl `…external_temperature…` hat. Andere Thermostate desselben Raums werden wie bisher (gegebenenfalls kalibriert) angesteuert.
 - Gesendet wird, wenn sich die Raumtemperatur um mindestens 0,1 °C ändert, sonst spätestens alle 30 Minuten. Ist die Regelung aus, der Raumfühler nicht verfügbar oder wird die Integration entladen bzw. die Option abgeschaltet, werden die Thermostate wieder auf ihren eigenen Sensor geschaltet.
 - Das Attribut `external_temperature_thermostats` am Statussensor nennt die Thermostate, die gerade die Raumtemperatur erhalten.
+
+## Version 0.4.5: Komfort je Zeitfenster und Boost
+
+- **Komforttemperatur je Zeitfenster:** Ein Block im Zeitplan-Helfer kann unter „Zusätzliche Daten“ eine eigene Temperatur tragen, z. B. `temperature: 22`. Solange dieser Block aktiv ist, gilt sie statt der Komforttemperatur des Raums; Blöcke ohne Angabe nutzen weiter die normale Komforttemperatur. Das Vorheizen zielt auf die normale Komforttemperatur, weil der Zeitplan die Daten des nächsten Blocks erst zeigt, wenn er beginnt. Die Attribute `comfort_temperature` und `schedule_comfort_temperature` zeigen den gerade gültigen Wert.
+- **Boost:** Der neue Schalter **Boost** heizt für die eingestellte Dauer (Standard 60 Minuten) auf die Boost-Temperatur (Standard 24 °C) und schaltet sich danach selbst aus. Boost hat Vorrang vor Zeitplan, Anwesenheit und Heizgrenze, nicht aber vor einem offenen Fenster oder ausgeschalteter Heizperiode. Temperatur und Dauer stehen auf der Seite **Raum und Heizverhalten**.
