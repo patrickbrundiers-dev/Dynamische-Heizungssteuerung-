@@ -13,6 +13,7 @@ from .const import (
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_AWAY_TEMPERATURE,
     CONF_CALIBRATION,
+    CONF_EXTERNAL_TEMPERATURE,
     CONF_HYSTERESIS,
     DEFAULT_HYSTERESIS,
     CONF_VALVE_MAINTENANCE,
@@ -154,6 +155,9 @@ def _user_schema() -> vol.Schema:
                 selector.EntitySelectorConfig(domain="climate", multiple=True)
             ),
             vol.Optional(CONF_CALIBRATION, default=False): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_EXTERNAL_TEMPERATURE, default=False
+            ): selector.BooleanSelector(),
             vol.Optional(CONF_VALVE_MAINTENANCE, default=False): selector.BooleanSelector(),
             vol.Optional(
                 CONF_HYSTERESIS, default=DEFAULT_HYSTERESIS
@@ -362,6 +366,10 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             ),
             vol.Optional(
                 CONF_CALIBRATION, default=bool(current.get(CONF_CALIBRATION, False))
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_EXTERNAL_TEMPERATURE,
+                default=bool(current.get(CONF_EXTERNAL_TEMPERATURE, False)),
             ): selector.BooleanSelector(),
             vol.Optional(
                 CONF_VALVE_MAINTENANCE,

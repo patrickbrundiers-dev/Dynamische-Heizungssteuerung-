@@ -114,3 +114,11 @@ INFERRED_HEATING_MARGIN: Final = 0.5
 
 # A thermostat battery at or below this level is reported as a warning.
 LOW_BATTERY_PERCENT: Final = 20
+
+# Feed the room sensor into thermostats that accept an external temperature
+# (e.g. Aqara E1 via Zigbee2MQTT: a "sensor" select internal/external and an
+# "external_temperature_input" number), as Better Thermostat does.
+CONF_EXTERNAL_TEMPERATURE: Final = "external_temperature"
+# Resend when the room temperature moved this far, or after this long anyway.
+EXTERNAL_TEMPERATURE_MIN_CHANGE: Final = 0.1
+EXTERNAL_TEMPERATURE_RESEND_SECONDS: Final = 1800
