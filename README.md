@@ -196,3 +196,9 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 - **Heizperiode (optional):** Ein Schalter oder Sensor (z. B. `binary_sensor.wintermodus` oder ein `input_boolean`) legt fest, ob überhaupt geheizt wird. Ist er AUS, geht der Sollwert auf die Frostschutztemperatur oder, ohne sie, auf das Minimum des Thermostats; Status „Heizperiode aus – nicht geheizt“. Ist die Entität nicht verfügbar, wird normal weitergeheizt.
 - Die Heizperiode ergänzt die Heizgrenze: die Heizgrenze reagiert auf die aktuelle Außentemperatur, die Heizperiode schaltet saisonal ganz ab.
 - **Editor:** Optionale Entitäten wie Fensterkontakt, Außensensor, Wetter oder Gastmodus lassen sich jetzt im Raum-Editor wieder entfernen. Vorher wurde ein geleertes Feld beim Speichern mit dem alten Wert neu befüllt.
+
+## Version 0.3.8: Mehrere Thermostate pro Raum
+
+- **Weitere Thermostate im Raum (optional):** Auf der Seite **Raum und Heizverhalten** lassen sich zusätzliche Heizkörperthermostate desselben Raums auswählen. Alle erhalten denselben Sollwert wie das Hauptthermostat, so wie eine Climate-Gruppe im Sync-Modus „lock“. Damit kann die Integration die Thermostatköpfe direkt ansteuern statt über eine Gruppe.
+- Ist ein weiteres Thermostat nicht verfügbar, wird es übersprungen; der Status nennt die Anzahl, das Attribut `unavailable_thermostats` die Entitäten. Ist das Hauptthermostat nicht verfügbar, wird wie bisher gar nichts geschrieben.
+- Ein ausgeschaltetes Thermostat wird nicht beschrieben. Eine manuelle Sollwertänderung an irgendeinem Thermostat des Raums pausiert die Regelung bis zum nächsten Moduswechsel.

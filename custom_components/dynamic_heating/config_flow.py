@@ -10,6 +10,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_AWAY_TEMPERATURE,
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
@@ -135,6 +136,9 @@ def _user_schema() -> vol.Schema:
         {
             vol.Required(CONF_CLIMATE_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="climate")
+            ),
+            vol.Optional(CONF_ADDITIONAL_CLIMATE_ENTITIES): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="climate", multiple=True)
             ),
             vol.Required(CONF_ROOM_TEMPERATURE_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
@@ -335,6 +339,9 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             vol.Required(
                 CONF_CLIMATE_ENTITY, default=current[CONF_CLIMATE_ENTITY]
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="climate")),
+            vol.Optional(CONF_ADDITIONAL_CLIMATE_ENTITIES): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="climate", multiple=True)
+            ),
             vol.Required(
                 CONF_ROOM_TEMPERATURE_ENTITY,
                 default=current[CONF_ROOM_TEMPERATURE_ENTITY],
@@ -466,6 +473,11 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             else:
                 current.update(user_input)
                 # A cleared field must override a value saved earlier.
+                current[CONF_ADDITIONAL_CLIMATE_ENTITIES] = [
+                    entity_id
+                    for entity_id in user_input.get(CONF_ADDITIONAL_CLIMATE_ENTITIES) or []
+                    if entity_id != climate_entity
+                ]
                 current[CONF_FROST_PROTECTION_TEMPERATURE] = user_input.get(
                     CONF_FROST_PROTECTION_TEMPERATURE
                 )

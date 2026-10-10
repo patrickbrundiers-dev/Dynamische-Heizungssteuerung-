@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_CLIMATE_ENTITY,
     CONF_GUEST_ENTITY,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
@@ -25,6 +26,7 @@ from .const import (
 )
 
 TO_REDACT = {
+    CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_CLIMATE_ENTITY,
     CONF_GUEST_ENTITY,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,

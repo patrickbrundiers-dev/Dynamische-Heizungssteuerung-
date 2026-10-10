@@ -66,6 +66,8 @@ async def _finish_editor_flow(
             "max_preheat_minutes",
         )
     }
+    if values.get("additional_climate_entities"):
+        first["additional_climate_entities"] = values["additional_climate_entities"]
     if values.get("frost_protection_temperature") is not None:
         first["frost_protection_temperature"] = values["frost_protection_temperature"]
     result = await hass.config_entries.options.async_configure(
@@ -475,3 +477,23 @@ async def test_editor_saves_and_clears_heating_season_entity(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["heating_season_entity"] is None
+
+
+@pytest.mark.asyncio
+async def test_editor_saves_additional_thermostats_without_primary(
+    hass, enable_custom_integrations
+):
+    """Additional thermostats are saved; the primary is not duplicated."""
+    entry = _mock_room(hass)
+    result = await _finish_editor_flow(
+        hass,
+        entry,
+        basic={
+            "additional_climate_entities": [
+                "climate.living_room",
+                "climate.living_room_2",
+            ]
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["additional_climate_entities"] == ["climate.living_room_2"]

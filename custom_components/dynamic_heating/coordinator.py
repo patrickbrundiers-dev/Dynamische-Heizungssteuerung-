@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -15,6 +16,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_AWAY_TEMPERATURE,
+    CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
     CONF_ECO_TEMPERATURE,
@@ -83,6 +85,17 @@ from .logic import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _WrittenSetpoint:
+    """Last setpoint written successfully to one thermostat."""
+
+    target: float
+    at: datetime
+    # True once the thermostat reported the value; only then can a different
+    # setpoint be attributed to a manual change.
+    confirmed: bool = False
 _INVALID_STATES = {"unknown", "unavailable", None}
 
 
@@ -124,13 +137,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._heating_limit_reached = False
         # Debounced window state, kept so the close delay can run out.
         self._window_open = False
-        # Last setpoint written successfully, to avoid re-sending it every
-        # update to thermostats that store a slightly different value.
-        self._last_written_target: float | None = None
-        self._last_written_at: datetime | None = None
-        # True once the thermostat reported the setpoint we wrote; only then
-        # can a different setpoint be attributed to a manual change.
-        self._setpoint_confirmed = False
+        # Per thermostat: last setpoint written successfully, to avoid
+        # re-sending it every update to thermostats that store a slightly
+        # different value and to detect manual changes.
+        self._written: dict[str, _WrittenSetpoint] = {}
         # (mode, target) during which a manual setpoint change is respected.
         self._manual_override: tuple[str, float] | None = None
         self._forecast_items: list[dict[str, Any]] = []
@@ -1047,37 +1057,125 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "Anwesenheit erkannt" if present else "Keine Anwesenheit – abgesenkt"
         )
 
-    def _forget_written_setpoint(self) -> None:
-        self._last_written_target = None
-        self._last_written_at = None
-        self._setpoint_confirmed = False
+    def _thermostat_ids(self) -> list[str]:
+        """Primary thermostat first, then additional ones of the same room."""
+        ids = [self.config[CONF_CLIMATE_ENTITY]]
+        for entity_id in self.config.get(CONF_ADDITIONAL_CLIMATE_ENTITIES) or []:
+            if entity_id not in ids:
+                ids.append(entity_id)
+        return ids
 
-    def _track_manual_override(
-        self,
-        current_setpoint: float | None,
-        override_key: tuple[str, float],
+    def _changed_manually(self, entity_id: str, state: State) -> bool:
+        """True when a confirmed setpoint was changed at the thermostat."""
+        written = self._written.get(entity_id)
+        current = self._climate_setpoint(state)
+        if written is None or current is None:
+            return False
+        if abs(current - written.target) < 0.2:
+            written.confirmed = True
+            return False
+        return written.confirmed
+
+    async def _write_setpoint(
+        self, entity_id: str, state: State, target: float, now: datetime
+    ) -> bool:
+        """Send ``target`` unless the thermostat already has it; False on error."""
+        target = round(target, 1)
+        written = self._written.get(entity_id)
+        if (
+            written is not None
+            and written.target == target
+            and (now - written.at).total_seconds() < SETPOINT_RESEND_SECONDS
+        ):
+            return True
+        current = self._climate_setpoint(state)
+        if current is not None and abs(current - target) < 0.2:
+            return True
+        try:
+            await self.hass.services.async_call(
+                "climate",
+                "set_temperature",
+                {"entity_id": entity_id, "temperature": target},
+                blocking=True,
+            )
+        except HomeAssistantError as err:
+            # Keep the coordinator healthy and retry on the next update.
+            _LOGGER.warning(
+                "Could not set target temperature %.1f for %s: %s",
+                target,
+                entity_id,
+                err,
+            )
+            return False
+        self._written[entity_id] = _WrittenSetpoint(target, now)
+        return True
+
+    async def _apply_target(
+        self, decision_mode: str, target: float, result: dict[str, Any]
     ) -> None:
-        """Detect a setpoint changed at the thermostat and pause until the
-        decision (mode or target) changes."""
-        if self._manual_override is not None:
-            if self._manual_override == override_key:
-                return
+        """Write the decision to every thermostat of the room."""
+        override_key = (decision_mode, round(target, 1))
+        if self._manual_override is not None and self._manual_override != override_key:
             # The decision moved on: resume control and write the new target.
             self._manual_override = None
-            self._forget_written_setpoint()
+            self._written.clear()
+
+        states = {
+            entity_id: self.hass.states.get(entity_id)
+            for entity_id in self._thermostat_ids()
+        }
+        available = {
+            entity_id: state
+            for entity_id, state in states.items()
+            if self._valid(state)
+        }
+        unavailable = [entity_id for entity_id in states if entity_id not in available]
+        result["unavailable_thermostats"] = unavailable
+
+        if self._manual_override is None:
+            for entity_id, state in available.items():
+                if self._changed_manually(entity_id, state):
+                    self._manual_override = override_key
+                    _LOGGER.info(
+                        "Setpoint of %s changed manually to %s; pausing control",
+                        entity_id,
+                        state.attributes.get("temperature"),
+                    )
+                    break
+        if self._manual_override is not None:
+            result["manual_override"] = True
+            result["status"] = (
+                "Manuell übersteuert – Regelung pausiert bis zum "
+                "nächsten Moduswechsel"
+            )
             return
 
-        written = self._last_written_target
-        if written is None or current_setpoint is None:
+        active = {
+            entity_id: state
+            for entity_id, state in available.items()
+            if state.state != "off"
+        }
+        if not active:
+            result["status"] = "Thermostat ausgeschaltet – keine Sollwertänderung"
             return
-        if abs(current_setpoint - written) < 0.2:
-            self._setpoint_confirmed = True
-        elif self._setpoint_confirmed:
-            self._manual_override = override_key
-            _LOGGER.info(
-                "Setpoint of %s changed manually to %.1f; pausing control",
-                self.config[CONF_CLIMATE_ENTITY],
-                current_setpoint,
+
+        now = dt_util.utcnow()
+        failed = False
+        for entity_id, state in active.items():
+            if not await self._write_setpoint(
+                entity_id, state, self._fit_to_thermostat(target, state), now
+            ):
+                failed = True
+        if failed:
+            result["control_error"] = True
+            result["status"] = (
+                "Thermostat konnte Sollwert nicht übernehmen – "
+                "erneuter Versuch beim nächsten Update"
+            )
+        elif unavailable:
+            result["status"] = (
+                f"{result['status']} – {len(unavailable)} Thermostat(e) "
+                "nicht verfügbar"
             )
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -1266,70 +1364,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             **self._learning_diagnostics(),
         }
 
-        if (
-            self.enabled
-            and target_temperature is not None
-            and self._valid(climate_state)
-        ):
-            current_setpoint = climate_state.attributes.get("temperature")
-            try:
-                current_setpoint_value = float(current_setpoint)
-            except (TypeError, ValueError):
-                current_setpoint_value = None
-            now = dt_util.utcnow()
-            override_key = (decision.mode, round(target_temperature, 1))
-            self._track_manual_override(current_setpoint_value, override_key)
-            if climate_state.state == "off":
-                result["status"] = (
-                    "Thermostat ausgeschaltet – keine Sollwertänderung"
-                )
-                return result
-            if self._manual_override is not None:
-                result["manual_override"] = True
-                result["status"] = (
-                    "Manuell übersteuert – Regelung pausiert bis zum "
-                    "nächsten Moduswechsel"
-                )
-                return result
-            recently_written = (
-                self._last_written_target == round(target_temperature, 1)
-                and self._last_written_at is not None
-                and (now - self._last_written_at).total_seconds()
-                < SETPOINT_RESEND_SECONDS
+        if self.enabled and decision.target_temperature is not None:
+            await self._apply_target(
+                decision.mode, decision.target_temperature, result
             )
-            if not recently_written and (
-                current_setpoint_value is None
-                or abs(current_setpoint_value - target_temperature) >= 0.2
-            ):
-                try:
-                    await self.hass.services.async_call(
-                        "climate",
-                        "set_temperature",
-                        {
-                            "entity_id": self.config[CONF_CLIMATE_ENTITY],
-                            "temperature": round(target_temperature, 1),
-                        },
-                        blocking=True,
-                    )
-                except HomeAssistantError as err:
-                    # Keep the coordinator healthy and retry on the next update.
-                    _LOGGER.warning(
-                        "Could not set target temperature %.1f for %s: %s",
-                        target_temperature,
-                        self.config[CONF_CLIMATE_ENTITY],
-                        err,
-                    )
-                    result["control_error"] = True
-                    result["status"] = (
-                        "Thermostat konnte Sollwert nicht übernehmen – "
-                        "erneuter Versuch beim nächsten Update"
-                    )
-                else:
-                    self._last_written_target = round(target_temperature, 1)
-                    self._last_written_at = now
-                    self._setpoint_confirmed = False
         else:
-            self._forget_written_setpoint()
+            self._written.clear()
             self._manual_override = None
 
         return result
