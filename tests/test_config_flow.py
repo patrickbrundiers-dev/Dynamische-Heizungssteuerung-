@@ -66,6 +66,8 @@ async def _finish_editor_flow(
             "max_preheat_minutes",
         )
     }
+    if values.get("frost_protection_temperature") is not None:
+        first["frost_protection_temperature"] = values["frost_protection_temperature"]
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], user_input=first
     )
@@ -113,7 +115,7 @@ async def _finish_editor_flow(
 
     env_keys = (
         "window_entity", "outdoor_temperature_entity", "weather_entity",
-        "heating_limit_temperature",
+        "heating_limit_temperature", "window_temperature",
     )
     env_input = {key: values[key] for key in env_keys if values.get(key)}
     for key, value in (environment or {}).items():
@@ -411,3 +413,46 @@ async def test_editor_saves_and_clears_heating_limit(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["heating_limit_temperature"] is None
+
+
+@pytest.mark.asyncio
+async def test_editor_saves_window_and_frost_settings(
+    hass, enable_custom_integrations
+):
+    """Window delays, window temperature and frost protection are editable."""
+    entry = _mock_room(hass)
+    result = await _finish_editor_flow(
+        hass,
+        entry,
+        basic={"frost_protection_temperature": 12.0},
+        environment={
+            "window_open_delay": {"hours": 0, "minutes": 5, "seconds": 0},
+            "window_close_delay": {"hours": 0, "minutes": 10, "seconds": 0},
+            "window_temperature": 15.0,
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["window_open_delay"] == 300
+    assert entry.options["window_close_delay"] == 600
+    assert entry.options["window_temperature"] == 15.0
+    assert entry.options["frost_protection_temperature"] == 12.0
+
+    result = await _finish_editor_flow(
+        hass, entry, environment={"window_temperature": None}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["window_temperature"] is None
+    assert entry.options["window_open_delay"] == 300
+
+
+@pytest.mark.asyncio
+async def test_editor_rejects_window_temperature_above_comfort(
+    hass, enable_custom_integrations
+):
+    """The open-window temperature must stay below comfort."""
+    entry = _mock_room(hass)
+    result = await _finish_editor_flow(
+        hass, entry, environment={"window_temperature": 21.0}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "window_must_be_below_comfort"}

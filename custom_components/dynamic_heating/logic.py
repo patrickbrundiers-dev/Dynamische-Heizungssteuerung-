@@ -4,7 +4,7 @@ This module intentionally has no Home Assistant imports so its calculations
 can be tested independently of the runtime.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Literal
 
@@ -69,8 +69,67 @@ def decide_heating_target(
     preheat_started: bool = False,
     away_temperature: float | None = None,
     heating_limit_reached: bool = False,
+    window_temperature: float | None = None,
+    frost_protection_temperature: float | None = None,
 ) -> HeatingDecision:
     """Return the target and reason for the current conditions.
+
+    ``window_temperature`` replaces the setback target while a window is open.
+    ``frost_protection_temperature`` is a floor no decision may go below.
+    """
+    decision = _decide(
+        now=now,
+        schedule_active=schedule_active,
+        next_event=next_event,
+        room_temperature=room_temperature,
+        outdoor_temperature=outdoor_temperature,
+        comfort_temperature=comfort_temperature,
+        eco_temperature=eco_temperature,
+        heating_rate_c_per_hour=heating_rate_c_per_hour,
+        max_preheat_minutes=max_preheat_minutes,
+        cooling_rate_c_per_hour=cooling_rate_c_per_hour,
+        forecast_condition=forecast_condition,
+        window_open=window_open,
+        present=present,
+        preheat_started=preheat_started,
+        away_temperature=away_temperature,
+        heating_limit_reached=heating_limit_reached,
+        window_temperature=window_temperature,
+    )
+    if (
+        frost_protection_temperature is not None
+        and decision.target_temperature is not None
+        and decision.target_temperature < frost_protection_temperature
+    ):
+        return replace(
+            decision,
+            status=f"{decision.status} (Frostschutz)",
+            target_temperature=frost_protection_temperature,
+        )
+    return decision
+
+
+def _decide(
+    *,
+    now: datetime,
+    schedule_active: bool,
+    next_event: datetime | None,
+    room_temperature: float,
+    outdoor_temperature: float | None,
+    comfort_temperature: float,
+    eco_temperature: float,
+    heating_rate_c_per_hour: float,
+    max_preheat_minutes: int,
+    cooling_rate_c_per_hour: float,
+    forecast_condition: str | None,
+    window_open: bool,
+    present: bool,
+    preheat_started: bool,
+    away_temperature: float | None,
+    heating_limit_reached: bool,
+    window_temperature: float | None,
+) -> HeatingDecision:
+    """Decide without the frost-protection floor.
 
     ``preheat_started`` tells the decision that preheating for ``next_event``
     already began. Preheating then continues until the event instead of being
@@ -87,11 +146,14 @@ def decide_heating_target(
     )
 
     if window_open:
-        # An open window never heats above the away setpoint.
+        # Without its own window temperature, an open window never heats
+        # above the away setpoint.
         return HeatingDecision(
             "Fenster offen – abgesenkt",
             "window",
-            min(eco_temperature, away_target),
+            min(eco_temperature, away_target)
+            if window_temperature is None
+            else window_temperature,
             0,
         )
 
@@ -332,3 +394,22 @@ class TrendSample:
 
         self._restart(temperature, now, anchored=False)
         return "complete", change / (elapsed / 3600)
+
+
+def evaluate_window_open(
+    contact_open: bool,
+    seconds_since_change: float,
+    previously_open: bool,
+    open_delay_seconds: int,
+    close_delay_seconds: int,
+) -> bool:
+    """Debounce a window contact.
+
+    A window counts as open only after it stayed open for the open delay, and
+    stays open for the close delay after closing, so short airing or a door
+    draft does not toggle the setpoint and the room air settles before heating
+    resumes.
+    """
+    if contact_open:
+        return previously_open or seconds_since_change >= open_delay_seconds
+    return previously_open and seconds_since_change < close_delay_seconds

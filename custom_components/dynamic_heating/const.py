@@ -21,6 +21,14 @@ CONF_AWAY_TEMPERATURE: Final = "away_temperature"
 CONF_HEATING_LIMIT_TEMPERATURE: Final = "heating_limit_temperature"
 # The heating limit is released only this far below the limit.
 HEATING_LIMIT_HYSTERESIS: Final = 1.0
+# Window contact debounce (seconds) and optional own setpoint while open.
+CONF_WINDOW_OPEN_DELAY: Final = "window_open_delay"
+CONF_WINDOW_CLOSE_DELAY: Final = "window_close_delay"
+CONF_WINDOW_TEMPERATURE: Final = "window_temperature"
+DEFAULT_WINDOW_OPEN_DELAY: Final = 0
+DEFAULT_WINDOW_CLOSE_DELAY: Final = 0
+# Optional floor that no setpoint goes below (window, away, eco).
+CONF_FROST_PROTECTION_TEMPERATURE: Final = "frost_protection_temperature"
 
 DEFAULT_COMFORT_TEMPERATURE: Final = 21.0
 DEFAULT_ECO_TEMPERATURE: Final = 18.0

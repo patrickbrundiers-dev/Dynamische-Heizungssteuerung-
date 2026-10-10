@@ -14,6 +14,7 @@ from .const import (
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
     CONF_ECO_TEMPERATURE,
+    CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_HEATING_LIMIT_TEMPERATURE,
     CONF_MAX_PREHEAT_MINUTES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
@@ -33,7 +34,10 @@ from .const import (
     CONF_ROOM_TEMPERATURE_ENTITY,
     CONF_SCHEDULE_ENTITY,
     CONF_WEATHER_ENTITY,
+    CONF_WINDOW_CLOSE_DELAY,
     CONF_WINDOW_ENTITY,
+    CONF_WINDOW_OPEN_DELAY,
+    CONF_WINDOW_TEMPERATURE,
     DEFAULT_COMFORT_TEMPERATURE,
     DEFAULT_ECO_TEMPERATURE,
     DEFAULT_MAX_PREHEAT_MINUTES,
@@ -44,6 +48,8 @@ from .const import (
     DEFAULT_PROXIMITY_MAX_AGE,
     DEFAULT_PRESENCE_ON_DURATION,
     DEFAULT_PRESENCE_OFF_DURATION,
+    DEFAULT_WINDOW_CLOSE_DELAY,
+    DEFAULT_WINDOW_OPEN_DELAY,
     DOMAIN,
 )
 
@@ -90,6 +96,8 @@ _DURATION_OPTIONS = (
     CONF_PRESENCE_ON_DURATION,
     CONF_PRESENCE_OFF_DURATION,
     CONF_PROXIMITY_MAX_AGE,
+    CONF_WINDOW_OPEN_DELAY,
+    CONF_WINDOW_CLOSE_DELAY,
 )
 
 
@@ -108,6 +116,18 @@ def _away_below_comfort(values: dict, comfort: float) -> bool:
     return away is None or float(away) < comfort
 
 
+def _setback_error(values: dict, comfort: float) -> str | None:
+    """Optional window and frost temperatures must stay below comfort."""
+    for key, error in (
+        (CONF_WINDOW_TEMPERATURE, "window_must_be_below_comfort"),
+        (CONF_FROST_PROTECTION_TEMPERATURE, "frost_must_be_below_comfort"),
+    ):
+        value = values.get(key)
+        if value is not None and float(value) >= comfort:
+            return error
+    return None
+
+
 def _user_schema() -> vol.Schema:
     """Build the initial entity and tuning form."""
     return vol.Schema(
@@ -124,6 +144,15 @@ def _user_schema() -> vol.Schema:
             vol.Optional(CONF_WINDOW_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="binary_sensor")
             ),
+            vol.Optional(
+                CONF_WINDOW_OPEN_DELAY,
+                default=_seconds_to_duration(DEFAULT_WINDOW_OPEN_DELAY),
+            ): _duration_selector(),
+            vol.Optional(
+                CONF_WINDOW_CLOSE_DELAY,
+                default=_seconds_to_duration(DEFAULT_WINDOW_CLOSE_DELAY),
+            ): _duration_selector(),
+            vol.Optional(CONF_WINDOW_TEMPERATURE): _temperature_selector(5, 21),
             vol.Optional(CONF_PERSON_ENTITIES): selector.EntitySelector(
                 selector.EntitySelectorConfig(
                     domain=["person", "device_tracker"], multiple=True
@@ -189,6 +218,7 @@ def _user_schema() -> vol.Schema:
                 CONF_ECO_TEMPERATURE, default=DEFAULT_ECO_TEMPERATURE
             ): _temperature_selector(7, 21),
             vol.Optional(CONF_AWAY_TEMPERATURE): _temperature_selector(5, 21),
+            vol.Optional(CONF_FROST_PROTECTION_TEMPERATURE): _temperature_selector(5, 15),
             vol.Required(
                 CONF_MAX_PREHEAT_MINUTES, default=DEFAULT_MAX_PREHEAT_MINUTES
             ): selector.NumberSelector(
@@ -224,6 +254,8 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "eco_must_be_below_comfort"
             elif not _away_below_comfort(user_input, comfort):
                 errors["base"] = "away_must_be_below_comfort"
+            elif error := _setback_error(user_input, comfort):
+                errors["base"] = error
             else:
                 title = f"Dynamische Heizung – {climate_entity}"
                 data = dict(user_input)
@@ -254,6 +286,8 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         values.setdefault(CONF_PROXIMITY_MAX_AGE, DEFAULT_PROXIMITY_MAX_AGE)
         values.setdefault(CONF_PRESENCE_ON_DURATION, DEFAULT_PRESENCE_ON_DURATION)
         values.setdefault(CONF_PRESENCE_OFF_DURATION, DEFAULT_PRESENCE_OFF_DURATION)
+        values.setdefault(CONF_WINDOW_OPEN_DELAY, DEFAULT_WINDOW_OPEN_DELAY)
+        values.setdefault(CONF_WINDOW_CLOSE_DELAY, DEFAULT_WINDOW_CLOSE_DELAY)
         return values
 
     def _values(self) -> dict:
@@ -317,6 +351,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=15, max=240, step=5, mode="slider")
             ),
+            vol.Optional(CONF_FROST_PROTECTION_TEMPERATURE): _temperature_selector(5, 15),
         })
 
     def _presence_schema(self, current: dict) -> vol.Schema:
@@ -362,6 +397,12 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         schema = {}
         for item in (
             self._entity_field(CONF_WINDOW_ENTITY, "binary_sensor", current),
+            self._duration_field(CONF_WINDOW_OPEN_DELAY, current, DEFAULT_WINDOW_OPEN_DELAY),
+            self._duration_field(CONF_WINDOW_CLOSE_DELAY, current, DEFAULT_WINDOW_CLOSE_DELAY),
+        ):
+            schema[item[0]] = item[1]
+        schema[vol.Optional(CONF_WINDOW_TEMPERATURE)] = _temperature_selector(5, 21)
+        for item in (
             self._entity_field(CONF_OUTDOOR_TEMPERATURE_ENTITY, "sensor", current),
             self._entity_field(CONF_WEATHER_ENTITY, "weather", current),
         ):
@@ -398,6 +439,16 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             climate_entity = user_input[CONF_CLIMATE_ENTITY]
             if eco >= comfort:
                 errors["base"] = "eco_must_be_below_comfort"
+            elif error := _setback_error(
+                {
+                    CONF_FROST_PROTECTION_TEMPERATURE: user_input.get(
+                        CONF_FROST_PROTECTION_TEMPERATURE
+                    ),
+                    CONF_WINDOW_TEMPERATURE: current.get(CONF_WINDOW_TEMPERATURE),
+                },
+                comfort,
+            ):
+                errors["base"] = error
             elif any(
                 entry.entry_id != self.config_entry.entry_id
                 and entry.unique_id == climate_entity
@@ -406,6 +457,10 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 return self.async_abort(reason="already_configured")
             else:
                 current.update(user_input)
+                # A cleared field must override a value saved earlier.
+                current[CONF_FROST_PROTECTION_TEMPERATURE] = user_input.get(
+                    CONF_FROST_PROTECTION_TEMPERATURE
+                )
                 return await self.async_step_presence()
 
         suggested = dict(current)
@@ -466,10 +521,23 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
     async def async_step_environment(self, user_input=None):
         """Step 4: optional window, outdoor temperature and weather sensors."""
         current = self._values()
+        error = None if user_input is None else _setback_error(
+            user_input, float(current[CONF_COMFORT_TEMPERATURE])
+        )
+        if error:
+            return self._show_step(
+                "environment",
+                self._environment_schema(current),
+                {**current, **user_input},
+                {"base": error},
+            )
         if user_input is not None:
             current.update(user_input)
             for key in (CONF_WINDOW_ENTITY, CONF_OUTDOOR_TEMPERATURE_ENTITY, CONF_WEATHER_ENTITY):
                 current[key] = user_input.get(key) or None
+            for key in (CONF_WINDOW_OPEN_DELAY, CONF_WINDOW_CLOSE_DELAY):
+                current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
+            current[CONF_WINDOW_TEMPERATURE] = user_input.get(CONF_WINDOW_TEMPERATURE)
             # A cleared field must override a value saved earlier.
             current[CONF_HEATING_LIMIT_TEMPERATURE] = user_input.get(
                 CONF_HEATING_LIMIT_TEMPERATURE

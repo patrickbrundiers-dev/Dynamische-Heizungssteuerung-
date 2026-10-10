@@ -179,3 +179,14 @@ Für eine brauchbare Aussage sollte der Raum mehrere Komfortwechsel mit verfügb
 ### Sicherheit und Datenhaltung
 
 Alle neuen Kalibrierungswerte sind aggregierte Kennzahlen. Die Integration speichert weder eine fortlaufende GPS-Koordinaten-Historie noch Rohverläufe sämtlicher Temperaturmessungen. Die Regelung bleibt standardmäßig ausgeschaltet.
+
+## Version 0.3.6: Fenster-Reaktionszeiten, Fenstertemperatur und Frostschutz
+
+Übernommen aus Advanced Heating Control; alle Werte sind optional und ändern ohne Eingabe nichts am bisherigen Verhalten.
+
+- **Reaktionszeit beim Öffnen:** Das Fenster gilt erst als offen, wenn der Kontakt so lange offen ist (z. B. 5 Minuten). Kurzes Öffnen oder Durchzug ändert den Sollwert nicht.
+- **Wartezeit nach dem Schließen:** Nach dem Schließen bleibt die Fensterabsenkung so lange bestehen (z. B. 10 Minuten), damit sich die Raumluft beruhigt.
+- **Temperatur bei offenem Fenster:** Eigener Sollwert bei offenem Fenster, z. B. 15 °C. Leer bleibt es bei Absenk- bzw. Abwesenheitstemperatur.
+- **Frostschutztemperatur:** Kein Sollwert geht unter diesen Wert, auch nicht bei offenem Fenster oder Abwesenheit, z. B. 12 °C. Der Status zeigt dann den Zusatz „(Frostschutz)“.
+
+Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur und Wetter**, der Frostschutz auf der Seite **Raum und Heizverhalten**. Der Statussensor zeigt mit `window_contact_open` den Rohzustand des Kontakts und mit `window_open` den entprellten Zustand, nach dem geregelt wird.
