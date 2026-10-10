@@ -26,7 +26,8 @@
           "presence_on_duration": "Presence reaction ON time (seconds)",
           "presence_off_duration": "Presence reaction OFF time (seconds)",
           "proximity_direction_entity": "Proximity direction-of-travel sensor (optional)",
-          "proximity_max_age": "Maximum age of location data"
+          "proximity_max_age": "Maximum age of location data",
+          "away_temperature": "Away temperature (°C, optional)"
         },
         "data_description": {
           "person_entities": "Comfort heating is allowed when at least one selected person or device tracker is home. Device trackers are recommended for simple home/not-home states.",
@@ -41,12 +42,14 @@
           "presence_on_duration": "Presence must remain on for this long before it is accepted.",
           "presence_off_duration": "After the sensor turns off, keep presence accepted for this long before switching to setback.",
           "proximity_direction_entity": "Choose the matching direction-of-travel sensor. The states towards, arrived, away_from and stationary are understood. For new Proximity entities, select the distance and direction sensors separately.",
-          "proximity_max_age": "If the distance sensor has not updated within this duration, its position is considered stale. No new heating decision is made from stale proximity data; a person/guest tracker that already confirms home still takes precedence."
+          "proximity_max_age": "If the distance sensor has not updated within this duration, its position is considered stale. No new heating decision is made from stale proximity data; a person/guest tracker that already confirms home still takes precedence.",
+          "away_temperature": "Setpoint while nobody is home. Leave empty to keep using the setback temperature. Must be lower than the comfort temperature."
         }
       }
     },
     "error": {
-      "eco_must_be_below_comfort": "The setback temperature must be lower than the comfort temperature."
+      "eco_must_be_below_comfort": "The setback temperature must be lower than the comfort temperature.",
+      "away_must_be_below_comfort": "The away temperature must be lower than the comfort temperature."
     },
     "abort": {
       "already_configured": "A dynamic heating controller is already configured for this thermostat."
@@ -85,7 +88,8 @@
           "presence_entity": "Indoor presence sensor (optional)",
           "presence_schedule_entity": "Schedule for indoor presence (optional)",
           "presence_on_duration": "Presence ON reaction delay",
-          "presence_off_duration": "Presence OFF grace period"
+          "presence_off_duration": "Presence OFF grace period",
+          "away_temperature": "Away temperature (°C, optional)"
         },
         "data_description": {
           "person_entities": "Comfort is allowed when at least one selected person or device tracker is home. Device trackers with simple home/not_home states are usually most predictable.",
@@ -95,7 +99,8 @@
           "presence_entity": "Optional indoor presence or motion sensor. When used with people or proximity, both the household and this sensor must allow comfort heating.",
           "presence_schedule_entity": "The indoor presence sensor is considered only while this schedule is ON. Leave blank to use the sensor all day.",
           "presence_on_duration": "Presence must remain ON for this long before it is accepted.",
-          "presence_off_duration": "After OFF, retain the previous presence decision for this long to avoid quick setbacks."
+          "presence_off_duration": "After OFF, retain the previous presence decision for this long to avoid quick setbacks.",
+          "away_temperature": "Setpoint while nobody is home. Leave empty to keep using the setback temperature. Must be lower than the comfort temperature."
         }
       },
       "geofencing": {
@@ -132,7 +137,8 @@
       }
     },
     "error": {
-      "eco_must_be_below_comfort": "The setback temperature must be lower than the comfort temperature."
+      "eco_must_be_below_comfort": "The setback temperature must be lower than the comfort temperature.",
+      "away_must_be_below_comfort": "The away temperature must be lower than the comfort temperature."
     },
     "abort": {
       "already_configured": "This thermostat is already assigned to another heating controller."

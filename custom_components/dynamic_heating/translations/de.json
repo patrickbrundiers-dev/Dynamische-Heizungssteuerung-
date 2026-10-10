@@ -26,7 +26,8 @@
           "presence_on_duration": "Präsenz-Reaktionszeit EIN (Sekunden)",
           "presence_off_duration": "Präsenz-Reaktionszeit AUS (Sekunden)",
           "proximity_direction_entity": "Proximity-Richtungssensor (optional)",
-          "proximity_max_age": "Maximales Alter der Standortdaten"
+          "proximity_max_age": "Maximales Alter der Standortdaten",
+          "away_temperature": "Abwesenheitstemperatur (°C, optional)"
         },
         "data_description": {
           "person_entities": "Komfortheizung ist erlaubt, wenn mindestens eine ausgewählte Person oder ein Geräte-Tracker zu Hause ist. Geräte-Tracker mit einfachem Zuhause/Nicht-zuhause-Status werden empfohlen.",
@@ -41,12 +42,14 @@
           "presence_on_duration": "Anwesenheit muss so lange eingeschaltet sein, bevor sie akzeptiert wird.",
           "presence_off_duration": "Nach dem Ausschalten des Sensors bleibt Anwesenheit so lange gültig, bevor auf Absenkung gewechselt wird.",
           "proximity_direction_entity": "Wähle den passenden Richtungssensor. Unterstützte Zustände sind towards, arrived, away_from und stationary. Neue Proximity-Entitäten werden über Entfernungs- und Richtungssensor getrennt ausgewählt.",
-          "proximity_max_age": "Hat sich der Entfernungssensor länger als diese Dauer nicht aktualisiert, gelten seine Standortdaten als veraltet. Daraus wird keine neue Heizentscheidung abgeleitet; ein Personen-/Gast-Tracker, der Zuhause bestätigt, hat weiterhin Vorrang."
+          "proximity_max_age": "Hat sich der Entfernungssensor länger als diese Dauer nicht aktualisiert, gelten seine Standortdaten als veraltet. Daraus wird keine neue Heizentscheidung abgeleitet; ein Personen-/Gast-Tracker, der Zuhause bestätigt, hat weiterhin Vorrang.",
+          "away_temperature": "Sollwert, solange niemand zu Hause ist. Leer lassen, um wie bisher die Absenktemperatur zu verwenden. Muss unter der Komforttemperatur liegen."
         }
       }
     },
     "error": {
-      "eco_must_be_below_comfort": "Die Absenktemperatur muss unter der Komforttemperatur liegen."
+      "eco_must_be_below_comfort": "Die Absenktemperatur muss unter der Komforttemperatur liegen.",
+      "away_must_be_below_comfort": "Die Abwesenheitstemperatur muss unter der Komforttemperatur liegen."
     },
     "abort": {
       "already_configured": "Für dieses Thermostat ist bereits eine dynamische Heizungssteuerung eingerichtet."
@@ -85,7 +88,8 @@
           "presence_entity": "Innenraum-Präsenzsensor (optional)",
           "presence_schedule_entity": "Zeitplan für Präsenzsensor (optional)",
           "presence_on_duration": "Reaktionszeit bei Präsenz EIN",
-          "presence_off_duration": "Nachlaufzeit bei Präsenz AUS"
+          "presence_off_duration": "Nachlaufzeit bei Präsenz AUS",
+          "away_temperature": "Abwesenheitstemperatur (°C, optional)"
         },
         "data_description": {
           "person_entities": "Komfortbetrieb ist erlaubt, wenn mindestens eine ausgewählte Person oder ein Geräte-Tracker zu Hause ist. Geräte-Tracker mit einfachem home/not_home-Status sind meist am zuverlässigsten.",
@@ -95,7 +99,8 @@
           "presence_entity": "Optionaler Präsenz- oder Bewegungssensor. Bei Kombination mit Personen oder Proximity müssen Haushaltsstatus und dieser Sensor Komfortheizung erlauben.",
           "presence_schedule_entity": "Der Präsenzsensor wird nur verwendet, wenn dieser Zeitplan EIN ist. Leer lassen, um den Sensor ganztägig zu nutzen.",
           "presence_on_duration": "Präsenz muss so lange EIN sein, bevor sie akzeptiert wird.",
-          "presence_off_duration": "Nach AUS bleibt die bisherige Präsenzentscheidung so lange erhalten, damit nicht zu schnell abgesenkt wird."
+          "presence_off_duration": "Nach AUS bleibt die bisherige Präsenzentscheidung so lange erhalten, damit nicht zu schnell abgesenkt wird.",
+          "away_temperature": "Sollwert, solange niemand zu Hause ist. Leer lassen, um wie bisher die Absenktemperatur zu verwenden. Muss unter der Komforttemperatur liegen."
         }
       },
       "geofencing": {
@@ -132,7 +137,8 @@
       }
     },
     "error": {
-      "eco_must_be_below_comfort": "Die Absenktemperatur muss unter der Komforttemperatur liegen."
+      "eco_must_be_below_comfort": "Die Absenktemperatur muss unter der Komforttemperatur liegen.",
+      "away_must_be_below_comfort": "Die Abwesenheitstemperatur muss unter der Komforttemperatur liegen."
     },
     "abort": {
       "already_configured": "Dieses Thermostat wird bereits von einer anderen Heizungsregelung verwendet."

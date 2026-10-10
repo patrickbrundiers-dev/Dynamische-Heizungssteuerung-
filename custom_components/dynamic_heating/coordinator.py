@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_AWAY_TEMPERATURE,
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
     CONF_ECO_TEMPERATURE,
@@ -1098,6 +1099,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         eco_temperature = float(
             self.config.get(CONF_ECO_TEMPERATURE, DEFAULT_ECO_TEMPERATURE)
         )
+        away_value = self.config.get(CONF_AWAY_TEMPERATURE)
+        away_temperature = None if away_value is None else float(away_value)
         schedule_active = schedule_state.state == "on"
 
         await self._evaluate_pending_forecast(
@@ -1143,6 +1146,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             window_open=window_open,
             present=present,
             preheat_started=self._preheat_event is not None,
+            away_temperature=away_temperature,
         )
         if decision.mode == "preheat":
             self._preheat_event = next_event
