@@ -27,5 +27,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload platforms and discard runtime state."""
     if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         return False
+    # Thermostats must not keep regulating on a room value nobody updates.
+    await entry.runtime_data.async_release_external_temperature()
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     return True

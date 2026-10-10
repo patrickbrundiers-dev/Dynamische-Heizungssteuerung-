@@ -20,7 +20,10 @@ from .const import (
     CALIBRATION_INTERVAL_SECONDS,
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_CALIBRATION,
+    CONF_EXTERNAL_TEMPERATURE,
     CONF_HYSTERESIS,
+    EXTERNAL_TEMPERATURE_MIN_CHANGE,
+    EXTERNAL_TEMPERATURE_RESEND_SECONDS,
     LOW_BATTERY_PERCENT,
     DEFAULT_HYSTERESIS,
     CONF_VALVE_MAINTENANCE,
@@ -162,6 +165,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._written: dict[str, _WrittenSetpoint] = {}
         # Per thermostat: calibration offset and when it was computed.
         self._calibration: dict[str, tuple[float, datetime]] = {}
+        # Thermostats currently regulating on the room temperature we feed
+        # them, and the last value sent to each external-temperature input.
+        self._external_fed: set[str] = set()
+        self._external_sent: dict[str, tuple[float, datetime]] = {}
         # Valve maintenance: last start (persisted) and the running one.
         self._maintenance_last: datetime | None = None
         self._maintenance_started: datetime | None = None
@@ -1198,7 +1205,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now: datetime,
     ) -> float:
         """Shift ``target`` by the valve's measurement error, if enabled."""
-        if not self.config.get(CONF_CALIBRATION):
+        if not self.config.get(CONF_CALIBRATION) or entity_id in self._external_fed:
+            # A thermostat fed with the room temperature needs no offset.
             return target
         cached = self._calibration.get(entity_id)
         if self._room_fallback:
@@ -1366,9 +1374,105 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Run one control cycle and attach the thermostats' health."""
+        await self._sync_external_temperature()
         result = await self._async_control_cycle()
         result["thermostat_warnings"] = self._thermostat_warnings()
+        result["external_temperature_thermostats"] = sorted(self._external_fed)
         return result
+
+    def _external_temperature_entities(
+        self, entity_id: str
+    ) -> tuple[str, str] | None:
+        """The (select, number) pair for feeding a thermostat, if it has one."""
+        registry = er.async_get(self.hass)
+        entry = registry.async_get(entity_id)
+        if entry is None or not entry.device_id:
+            return None
+        select_id = number_id = None
+        for device_entry in er.async_entries_for_device(registry, entry.device_id):
+            if device_entry.domain == "number" and (
+                "external_temperature" in device_entry.entity_id
+                or "external_temperature" in (device_entry.unique_id or "")
+            ):
+                number_id = device_entry.entity_id
+            elif device_entry.domain == "select":
+                state = self.hass.states.get(device_entry.entity_id)
+                options = state.attributes.get("options") if state else None
+                if options and {"internal", "external"} <= set(options):
+                    select_id = device_entry.entity_id
+        if select_id is None or number_id is None:
+            return None
+        return select_id, number_id
+
+    async def _call(self, domain: str, service: str, data: dict[str, Any]) -> bool:
+        """Call a service; log and return False instead of raising."""
+        try:
+            await self.hass.services.async_call(domain, service, data, blocking=True)
+        except HomeAssistantError as err:
+            _LOGGER.warning("Could not call %s.%s with %s: %s", domain, service, data, err)
+            return False
+        return True
+
+    async def async_release_external_temperature(self) -> None:
+        """Hand every fed thermostat back to its own sensor."""
+        await self._sync_external_temperature(release=True)
+
+    async def _sync_external_temperature(self, *, release: bool = False) -> None:
+        """Feed the room temperature to thermostats that accept one.
+
+        While control is on and the room sensor works, each supported
+        thermostat is switched to its external sensor and receives the room
+        temperature. Otherwise it is switched back to its internal sensor so it
+        never regulates on a stale value. Without the option nothing is touched.
+        """
+        if not self.config.get(CONF_EXTERNAL_TEMPERATURE):
+            self._external_fed.clear()
+            return
+        room_temperature = _as_float(self._state(CONF_ROOM_TEMPERATURE_ENTITY))
+        feed = self.enabled and room_temperature is not None and not release
+        now = dt_util.utcnow()
+        fed: set[str] = set()
+        for entity_id in self._thermostat_ids():
+            entities = self._external_temperature_entities(entity_id)
+            if entities is None:
+                continue
+            select_id, number_id = entities
+            select_state = self.hass.states.get(select_id)
+            if not self._valid(select_state):
+                continue
+            if feed:
+                last = self._external_sent.get(number_id)
+                if (
+                    last is None
+                    or abs(last[0] - room_temperature) >= EXTERNAL_TEMPERATURE_MIN_CHANGE
+                    or (now - last[1]).total_seconds() >= EXTERNAL_TEMPERATURE_RESEND_SECONDS
+                ):
+                    if not await self._call(
+                        "number",
+                        "set_value",
+                        {"entity_id": number_id, "value": room_temperature},
+                    ):
+                        continue
+                    self._external_sent[number_id] = (room_temperature, now)
+                if select_state.state != "external" and not await self._call(
+                    "select",
+                    "select_option",
+                    {"entity_id": select_id, "option": "external"},
+                ):
+                    continue
+                fed.add(entity_id)
+            else:
+                self._external_sent.pop(number_id, None)
+                if select_state.state != "internal":
+                    await self._call(
+                        "select",
+                        "select_option",
+                        {"entity_id": select_id, "option": "internal"},
+                    )
+        if fed != self._external_fed:
+            # Offsets measured against the valve's own sensor no longer apply.
+            self._calibration.clear()
+        self._external_fed = fed
 
     async def _async_control_cycle(self) -> dict[str, Any]:
         """Read Home Assistant states, calculate a target and optionally apply it."""

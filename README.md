@@ -231,3 +231,10 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 
 - **Neuer Sensor „Thermostat-Problem“:** Er ist an, sobald ein Thermostat des Raums nicht erreichbar ist, seine Batterie bei 20 % oder darunter liegt oder ein Problem-Sensor desselben Geräts (z. B. der Ventilalarm der Aqara-Köpfe) meldet. Das Attribut `warnings` listet die Meldungen je Thermostat, der Statussensor zeigt sie im Attribut `thermostat_warnings`. Für eine Benachrichtigung reicht eine Automation auf diesen Sensor.
 - Gelesen werden die Batterie- und Problem-Entitäten, die zum selben Gerät wie das Thermostat gehören; es muss nichts zusätzlich eingestellt werden.
+
+## Version 0.4.4: Raumtemperatur an die Thermostate senden
+
+- **Externer Sensor im Thermostat (optional):** Manche Thermostatköpfe, z. B. Aqara E1 über Zigbee2MQTT, können statt ihres eigenen Fühlers eine externe Temperatur verwenden. Ist **Raumtemperatur an die Thermostate senden** auf der Seite **Raum und Heizverhalten** aktiv, schaltet die Integration sie auf den externen Sensor und schickt ihnen die Temperatur des Raumfühlers, wie Better Thermostat. Das Ventil regelt dann selbst nach der Raumtemperatur; genauer als das Verschieben des Sollwerts und ohne Nachstellen alle 10 Minuten.
+- Erkannt werden Thermostate, deren Gerät eine Auswahl mit den Optionen `internal`/`external` und eine Zahl `…external_temperature…` hat. Andere Thermostate desselben Raums werden wie bisher (gegebenenfalls kalibriert) angesteuert.
+- Gesendet wird, wenn sich die Raumtemperatur um mindestens 0,1 °C ändert, sonst spätestens alle 30 Minuten. Ist die Regelung aus, der Raumfühler nicht verfügbar oder wird die Integration entladen bzw. die Option abgeschaltet, werden die Thermostate wieder auf ihren eigenen Sensor geschaltet.
+- Das Attribut `external_temperature_thermostats` am Statussensor nennt die Thermostate, die gerade die Raumtemperatur erhalten.

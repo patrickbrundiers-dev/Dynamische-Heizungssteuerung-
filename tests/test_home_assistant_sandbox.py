@@ -1695,3 +1695,165 @@ async def test_thermostat_problems_are_reported(hass, enable_custom_integrations
 
     assert coordinator.data["thermostat_warnings"] == {}
     assert hass.states.get(problem_id).state == "off"
+
+
+def _set_up_aqara_trv(hass):
+    """Register a thermostat device with an external temperature input."""
+    trv_entry = MockConfigEntry(domain="mqtt")
+    trv_entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=trv_entry.entry_id, identifiers={("mqtt", "aqara_1")}
+    )
+    registry = er.async_get(hass)
+    for domain, unique_id, object_id in (
+        ("climate", "aqara_1_climate", "living_room_aqara"),
+        ("select", "aqara_1_sensor", "living_room_aqara_sensor"),
+        ("number", "aqara_1_external_temperature_input", "living_room_aqara_external_temperature_input"),
+    ):
+        registry.async_get_or_create(
+            domain,
+            "mqtt",
+            unique_id,
+            suggested_object_id=object_id,
+            device_id=device.id,
+            config_entry=trv_entry,
+        )
+    hass.states.async_set(
+        "climate.living_room_aqara",
+        "heat",
+        {"temperature": 18.0, "current_temperature": 23.0, "min_temp": 5,
+         "max_temp": 30, "target_temp_step": 0.5},
+    )
+    hass.states.async_set(
+        "select.living_room_aqara_sensor",
+        "internal",
+        {"options": ["internal", "external"]},
+    )
+    hass.states.async_set(
+        "number.living_room_aqara_external_temperature_input", "0"
+    )
+
+
+@contextmanager
+def _capture_all_calls(hass):
+    """Record climate/select/number calls and apply select changes to states."""
+    calls = []
+    service_registry_type = type(hass.services)
+    original_call = service_registry_type.async_call
+
+    async def record_calls(
+        service_registry, domain, service, service_data=None, *args, **kwargs
+    ):
+        if domain in ("climate", "select", "number"):
+            calls.append((domain, service, dict(service_data)))
+            if domain == "select":
+                state = hass.states.get(service_data["entity_id"])
+                hass.states.async_set(
+                    service_data["entity_id"], service_data["option"], state.attributes
+                )
+            return None
+        return await original_call(
+            service_registry, domain, service, service_data, *args, **kwargs
+        )
+
+    with patch.object(service_registry_type, "async_call", record_calls):
+        yield calls
+
+
+@pytest.mark.asyncio
+async def test_room_temperature_is_fed_to_external_sensor_thermostats(
+    hass, enable_custom_integrations
+):
+    """Supported valves get the room temperature and no calibration offset."""
+    _set_up_test_entities(hass)
+    hass.states.async_set(
+        "schedule.living_room_comfort",
+        "on",
+        {"next_event": (dt_util.now() + timedelta(hours=2)).isoformat()},
+    )
+    _set_up_aqara_trv(hass)
+    entry, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_climate_entities"] = ["climate.living_room_aqara"]
+    coordinator.config["calibration"] = True
+    coordinator.config["external_temperature"] = True
+
+    with _capture_all_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        # Unchanged room temperature: nothing is sent again.
+        await coordinator.async_refresh()
+
+    assert ("number", "set_value", {
+        "entity_id": "number.living_room_aqara_external_temperature_input",
+        "value": 18.0,
+    }) in calls
+    assert ("select", "select_option", {
+        "entity_id": "select.living_room_aqara_sensor", "option": "external",
+    }) in calls
+    assert [c for c in calls if c[0] == "number"] == [calls[0]]
+    assert coordinator.data["external_temperature_thermostats"] == [
+        "climate.living_room_aqara"
+    ]
+    # Fed with the room temperature, the valve gets the plain target, not
+    # target + (23 - 18).
+    assert coordinator.data["thermostat_setpoints"]["climate.living_room_aqara"] == 21.0
+
+    with _capture_all_calls(hass) as calls:
+        hass.states.async_set("sensor.living_room_temperature", "18.3")
+        await coordinator.async_refresh()
+    assert calls[0] == ("number", "set_value", {
+        "entity_id": "number.living_room_aqara_external_temperature_input",
+        "value": 18.3,
+    })
+
+    # Room sensor gone: the valve goes back to its own sensor.
+    with _capture_all_calls(hass) as calls:
+        hass.states.async_set("sensor.living_room_temperature", "unavailable")
+        await coordinator.async_refresh()
+    assert ("select", "select_option", {
+        "entity_id": "select.living_room_aqara_sensor", "option": "internal",
+    }) in calls
+    assert coordinator.data["external_temperature_thermostats"] == []
+
+
+@pytest.mark.asyncio
+async def test_external_sensor_is_released_when_control_stops_or_unloads(
+    hass, enable_custom_integrations
+):
+    """Switching control off or unloading hands the valve back to its sensor."""
+    _set_up_test_entities(hass)
+    _set_up_aqara_trv(hass)
+    entry, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_climate_entities"] = ["climate.living_room_aqara"]
+    coordinator.config["external_temperature"] = True
+
+    with _capture_all_calls(hass):
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        assert hass.states.get("select.living_room_aqara_sensor").state == "external"
+        coordinator.enabled = False
+        await coordinator.async_refresh()
+        assert hass.states.get("select.living_room_aqara_sensor").state == "internal"
+
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        assert hass.states.get("select.living_room_aqara_sensor").state == "external"
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        assert hass.states.get("select.living_room_aqara_sensor").state == "internal"
+
+
+@pytest.mark.asyncio
+async def test_external_temperature_option_off_touches_nothing(
+    hass, enable_custom_integrations
+):
+    """Without the option, select and number entities are left alone."""
+    _set_up_test_entities(hass)
+    _set_up_aqara_trv(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_climate_entities"] = ["climate.living_room_aqara"]
+
+    with _capture_all_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert [c for c in calls if c[0] != "climate"] == []
