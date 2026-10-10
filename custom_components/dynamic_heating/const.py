@@ -96,6 +96,10 @@ CONF_CALIBRATION: Final = "calibration"
 # every small reading of the valve's own sensor.
 CALIBRATION_INTERVAL_SECONDS: Final = 600
 MAX_CALIBRATION_OFFSET: Final = 10.0
+# A recomputed offset is only adopted when it moved at least this far, so the
+# valves are not re-adjusted for every small sensor fluctuation.
+CONF_HYSTERESIS: Final = "hysteresis"
+DEFAULT_HYSTERESIS: Final = 0.5
 
 # Weekly valve exercise against calcification (as in Better Thermostat):
 # open fully, then close fully, each for a few minutes, at a fixed hour.

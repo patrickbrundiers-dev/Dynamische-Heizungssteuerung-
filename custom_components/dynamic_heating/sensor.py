@@ -301,6 +301,7 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "heating_season",
             "thermostat_setpoints",
             "unavailable_thermostats",
+            "room_temperature_source",
             "valve_maintenance",
             "heating_limit_reached",
             "present",

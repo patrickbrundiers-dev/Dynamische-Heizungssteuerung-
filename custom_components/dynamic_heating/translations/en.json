@@ -36,7 +36,8 @@
           "heating_season_entity": "Heating season / winter mode (optional)",
           "additional_climate_entities": "Additional thermostats in the room (optional)",
           "calibration": "Calibrate setpoint with the room sensor",
-          "valve_maintenance": "Weekly valve maintenance"
+          "valve_maintenance": "Weekly valve maintenance",
+          "hysteresis": "Calibration hysteresis"
         },
         "data_description": {
           "person_entities": "Comfort heating is allowed when at least one selected person or device tracker is home. Device trackers are recommended for simple home/not-home states.",
@@ -61,7 +62,8 @@
           "heating_season_entity": "Switch or sensor for the heating season, e.g. a winter mode. While it is OFF the room is not heated: the setpoint goes to the frost protection temperature or, without one, the thermostat minimum. If the entity is unavailable, heating continues normally. Leave empty to disable.",
           "additional_climate_entities": "Further radiator thermostats of the same room. They get the same setpoint as the main thermostat, like a climate group. An unavailable additional thermostat is skipped; a manual change on any of them pauses control for the room.",
           "calibration": "The thermostat measures right at the radiator. When enabled, its setpoint is shifted by the difference between thermostat and room temperature (like Better Thermostat's target-temperature calibration) so it regulates on the room sensor. The difference is recomputed at most every 10 minutes. Do not enable when the selected thermostat already is a Better Thermostat.",
-          "valve_maintenance": "Against calcification the valves are fully opened for 5 minutes and then fully closed for 5 minutes once a week around 11:00 (thermostat maximum and minimum temperature), as in Better Thermostat. Postponed while a window is open or control is manually overridden. Only while control is active."
+          "valve_maintenance": "Against calcification the valves are fully opened for 5 minutes and then fully closed for 5 minutes once a week around 11:00 (thermostat maximum and minimum temperature), as in Better Thermostat. Postponed while a window is open or control is manually overridden. Only while control is active.",
+          "hysteresis": "A recomputed calibration is only applied when it changed by at least this value, so the thermostats are not re-adjusted for every small temperature fluctuation. 0 disables the hysteresis."
         }
       }
     },
@@ -90,7 +92,8 @@
           "frost_protection_temperature": "Frost protection temperature (°C, optional)",
           "additional_climate_entities": "Additional thermostats in the room (optional)",
           "calibration": "Calibrate setpoint with the room sensor",
-          "valve_maintenance": "Weekly valve maintenance"
+          "valve_maintenance": "Weekly valve maintenance",
+          "hysteresis": "Calibration hysteresis"
         },
         "data_description": {
           "climate_entity": "Select the climate entity this room controller may adjust. Avoid running another automation that writes targets to the same thermostat.",
@@ -102,7 +105,8 @@
           "frost_protection_temperature": "No setpoint goes below this value, not even with an open window or while away, e.g. 12 °C. Leave empty to disable. Must be below the comfort temperature.",
           "additional_climate_entities": "Further radiator thermostats of the same room. They get the same setpoint as the main thermostat, like a climate group. An unavailable additional thermostat is skipped; a manual change on any of them pauses control for the room.",
           "calibration": "The thermostat measures right at the radiator. When enabled, its setpoint is shifted by the difference between thermostat and room temperature (like Better Thermostat's target-temperature calibration) so it regulates on the room sensor. The difference is recomputed at most every 10 minutes. Do not enable when the selected thermostat already is a Better Thermostat.",
-          "valve_maintenance": "Against calcification the valves are fully opened for 5 minutes and then fully closed for 5 minutes once a week around 11:00 (thermostat maximum and minimum temperature), as in Better Thermostat. Postponed while a window is open or control is manually overridden. Only while control is active."
+          "valve_maintenance": "Against calcification the valves are fully opened for 5 minutes and then fully closed for 5 minutes once a week around 11:00 (thermostat maximum and minimum temperature), as in Better Thermostat. Postponed while a window is open or control is manually overridden. Only while control is active.",
+          "hysteresis": "A recomputed calibration is only applied when it changed by at least this value, so the thermostats are not re-adjusted for every small temperature fluctuation. 0 disables the hysteresis."
         }
       },
       "presence": {
