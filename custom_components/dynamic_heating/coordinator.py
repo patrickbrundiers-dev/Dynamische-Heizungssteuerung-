@@ -19,6 +19,7 @@ from .const import (
     CALIBRATION_INTERVAL_SECONDS,
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_CALIBRATION,
+    CONF_VALVE_MAINTENANCE,
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
     CONF_ECO_TEMPERATURE,
@@ -65,6 +66,9 @@ from .const import (
     DEFAULT_WINDOW_OPEN_DELAY,
     HEATING_LIMIT_HYSTERESIS,
     MAX_CALIBRATION_OFFSET,
+    VALVE_MAINTENANCE_HOUR,
+    VALVE_MAINTENANCE_INTERVAL_DAYS,
+    VALVE_MAINTENANCE_PHASE_SECONDS,
     SETPOINT_RESEND_SECONDS,
     FORECAST_EVALUATION_GRACE_SECONDS,
     DEFAULT_PRESENCE_ON_DURATION,
@@ -86,6 +90,8 @@ from .logic import (
     evaluate_heating_limit,
     evaluate_window_open,
     select_forecast_condition,
+    valve_maintenance_due,
+    valve_maintenance_phase,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -147,6 +153,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._written: dict[str, _WrittenSetpoint] = {}
         # Per thermostat: calibration offset and when it was computed.
         self._calibration: dict[str, tuple[float, datetime]] = {}
+        # Valve maintenance: last start (persisted) and the running one.
+        self._maintenance_last: datetime | None = None
+        self._maintenance_started: datetime | None = None
         # (mode, target) during which a manual setpoint change is respected.
         self._manual_override: tuple[str, float] | None = None
         self._forecast_items: list[dict[str, Any]] = []
@@ -282,6 +291,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._proximity_last_update_at = self._stored_string(
             stored.get("proximity_last_update_at")
+        )
+        raw_maintenance = self._stored_string(stored.get("valve_maintenance_last"))
+        parsed_maintenance = (
+            dt_util.parse_datetime(raw_maintenance) if raw_maintenance else None
+        )
+        self._maintenance_last = (
+            dt_util.as_utc(parsed_maintenance) if parsed_maintenance else None
         )
 
     @staticmethod
@@ -459,6 +475,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if self._proximity_last_state_update else None
                 ),
                 "proximity_last_update_at": self._proximity_last_update_at,
+                "valve_maintenance_last": (
+                    self._maintenance_last.isoformat()
+                    if self._maintenance_last else None
+                ),
             }
         )
 
@@ -1148,6 +1168,58 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._calibration[entity_id] = cached
         return target + cached[0]
 
+    async def _run_valve_maintenance(
+        self, window_open: bool, result: dict[str, Any]
+    ) -> bool:
+        """Exercise the valves weekly; True while maintenance owns the valves."""
+        now = dt_util.utcnow()
+        if self._maintenance_started is None:
+            if (
+                not self.config.get(CONF_VALVE_MAINTENANCE)
+                or window_open
+                or self._manual_override is not None
+                or not valve_maintenance_due(
+                    self._maintenance_last,
+                    now,
+                    dt_util.as_local(now).hour,
+                    VALVE_MAINTENANCE_INTERVAL_DAYS,
+                    VALVE_MAINTENANCE_HOUR,
+                )
+            ):
+                return False
+            self._maintenance_started = now
+            self._maintenance_last = now
+            await self._save_learning()
+
+        phase = valve_maintenance_phase(
+            self._maintenance_started, now, VALVE_MAINTENANCE_PHASE_SECONDS
+        )
+        if phase is None:
+            # Done: forget the maintenance setpoints so they are not taken
+            # for manual changes, and write the normal target again.
+            self._maintenance_started = None
+            self._written.clear()
+            return False
+
+        result["valve_maintenance"] = phase
+        result["status"] = (
+            "Ventilwartung – Ventile öffnen"
+            if phase == "open"
+            else "Ventilwartung – Ventile schließen"
+        )
+        for entity_id in self._thermostat_ids():
+            state = self.hass.states.get(entity_id)
+            if not self._valid(state) or state.state == "off":
+                continue
+            limit = "max_temp" if phase == "open" else "min_temp"
+            try:
+                setpoint = float(state.attributes[limit])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not await self._write_setpoint(entity_id, state, setpoint, now):
+                result["control_error"] = True
+        return True
+
     async def _apply_target(
         self,
         decision_mode: str,
@@ -1415,6 +1487,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             **self._learning_diagnostics(),
         }
 
+        result["valve_maintenance"] = None
+        if self.enabled and await self._run_valve_maintenance(window_open, result):
+            return result
         if self.enabled and decision.target_temperature is not None:
             await self._apply_target(
                 decision.mode, decision.target_temperature, room_temperature, result
@@ -1422,6 +1497,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             self._written.clear()
             self._calibration.clear()
+            self._maintenance_started = None
             self._manual_override = None
 
         return result

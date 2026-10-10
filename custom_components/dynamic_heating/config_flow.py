@@ -13,6 +13,7 @@ from .const import (
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_AWAY_TEMPERATURE,
     CONF_CALIBRATION,
+    CONF_VALVE_MAINTENANCE,
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
     CONF_ECO_TEMPERATURE,
@@ -142,6 +143,7 @@ def _user_schema() -> vol.Schema:
                 selector.EntitySelectorConfig(domain="climate", multiple=True)
             ),
             vol.Optional(CONF_CALIBRATION, default=False): selector.BooleanSelector(),
+            vol.Optional(CONF_VALVE_MAINTENANCE, default=False): selector.BooleanSelector(),
             vol.Required(CONF_ROOM_TEMPERATURE_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
@@ -346,6 +348,10 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             ),
             vol.Optional(
                 CONF_CALIBRATION, default=bool(current.get(CONF_CALIBRATION, False))
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_VALVE_MAINTENANCE,
+                default=bool(current.get(CONF_VALVE_MAINTENANCE, False)),
             ): selector.BooleanSelector(),
             vol.Required(
                 CONF_ROOM_TEMPERATURE_ENTITY,

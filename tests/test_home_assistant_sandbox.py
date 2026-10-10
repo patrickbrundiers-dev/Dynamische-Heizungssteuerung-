@@ -1395,3 +1395,41 @@ async def test_calibration_shifts_each_valve_by_its_measurement_error(
         for call in calls
         if call[2]["entity_id"] == "climate.living_room_2"
     ] == [24.0, 25.0]
+
+
+@pytest.mark.asyncio
+async def test_valve_maintenance_opens_closes_and_resumes(
+    hass, enable_custom_integrations
+):
+    """Due maintenance drives the valve to max, then min, then back to target."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["valve_maintenance"] = True
+    start = dt_util.as_utc(
+        dt_util.now().replace(hour=11, minute=0, second=0, microsecond=0)
+    )
+
+    async def refresh_at(seconds: int) -> None:
+        with patch(
+            "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+            return_value=start + timedelta(seconds=seconds),
+        ):
+            await coordinator.async_refresh()
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await refresh_at(0)
+        assert coordinator.data["valve_maintenance"] == "open"
+        await refresh_at(320)
+        assert coordinator.data["valve_maintenance"] == "close"
+        await refresh_at(620)
+        assert coordinator.data["valve_maintenance"] is None
+        # It does not start again in the same week.
+        await refresh_at(700)
+
+    assert coordinator.data["valve_maintenance"] is None
+    assert [call[2]["temperature"] for call in calls] == [
+        28.0,
+        7.0,
+        coordinator.data["target_temperature"],
+    ]
