@@ -12,9 +12,13 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_AWAY_TEMPERATURE,
+    CONF_BOOST_DURATION,
+    CONF_BOOST_TEMPERATURE,
     CONF_CALIBRATION,
     CONF_EXTERNAL_TEMPERATURE,
     CONF_HYSTERESIS,
+    DEFAULT_BOOST_DURATION,
+    DEFAULT_BOOST_TEMPERATURE,
     DEFAULT_HYSTERESIS,
     CONF_VALVE_MAINTENANCE,
     CONF_CLIMATE_ENTITY,
@@ -105,6 +109,7 @@ _DURATION_OPTIONS = (
     CONF_PROXIMITY_MAX_AGE,
     CONF_WINDOW_OPEN_DELAY,
     CONF_WINDOW_CLOSE_DELAY,
+    CONF_BOOST_DURATION,
 )
 
 
@@ -401,6 +406,15 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 selector.NumberSelectorConfig(min=15, max=240, step=5, mode="slider")
             ),
             vol.Optional(CONF_FROST_PROTECTION_TEMPERATURE): _temperature_selector(5, 15),
+            vol.Optional(
+                CONF_BOOST_TEMPERATURE,
+                default=float(
+                    current.get(CONF_BOOST_TEMPERATURE, DEFAULT_BOOST_TEMPERATURE)
+                ),
+            ): _temperature_selector(16, 30),
+            self._duration_field(
+                CONF_BOOST_DURATION, current, DEFAULT_BOOST_DURATION
+            )[0]: _duration_selector(),
         })
 
     def _presence_schema(self, current: dict) -> vol.Schema:
@@ -518,10 +532,22 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 current[CONF_FROST_PROTECTION_TEMPERATURE] = user_input.get(
                     CONF_FROST_PROTECTION_TEMPERATURE
                 )
+                current[CONF_BOOST_DURATION] = _duration_to_seconds(
+                    user_input.get(
+                        CONF_BOOST_DURATION,
+                        current.get(CONF_BOOST_DURATION, DEFAULT_BOOST_DURATION),
+                    )
+                )
                 return await self.async_step_presence()
 
         suggested = dict(current)
         suggested.update(user_input or {})
+        if CONF_BOOST_DURATION in suggested and not isinstance(
+            suggested[CONF_BOOST_DURATION], dict
+        ):
+            suggested[CONF_BOOST_DURATION] = _seconds_to_duration(
+                suggested[CONF_BOOST_DURATION]
+            )
         # Keep the user's attempted values visible when validation fails.
         return self.async_show_form(
             step_id="init",

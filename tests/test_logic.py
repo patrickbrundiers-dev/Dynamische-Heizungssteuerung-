@@ -11,6 +11,7 @@ from custom_components.dynamic_heating.logic import (
     evaluate_heating_limit,
     evaluate_window_open,
     fallback_room_temperature,
+    schedule_comfort_temperature,
     valve_maintenance_due,
     valve_maintenance_phase,
 )
@@ -490,3 +491,40 @@ def test_fallback_room_temperature_averages_available_readings() -> None:
     assert fallback_room_temperature([18.6, None, 19.2]) == 18.9
     assert fallback_room_temperature([None, None]) is None
     assert fallback_room_temperature([]) is None
+
+
+def _boost_decision(**overrides):
+    values = dict(
+        now=datetime(2026, 1, 1, 12, tzinfo=UTC),
+        schedule_active=False,
+        next_event=None,
+        room_temperature=19.0,
+        outdoor_temperature=5.0,
+        comfort_temperature=21.0,
+        eco_temperature=18.0,
+        heating_rate_c_per_hour=1.0,
+        max_preheat_minutes=120,
+        boost_temperature=24.0,
+    )
+    values.update(overrides)
+    return decide_heating_target(**values)
+
+
+def test_boost_wins_over_schedule_presence_and_heating_limit() -> None:
+    decision = _boost_decision(present=False, heating_limit_reached=True)
+    assert decision.mode == "boost"
+    assert decision.target_temperature == 24.0
+
+
+def test_boost_yields_to_open_window_and_season_off() -> None:
+    assert _boost_decision(window_open=True).mode == "window"
+    assert _boost_decision(heating_season=False).mode == "season_off"
+    assert _boost_decision(boost_temperature=None).mode != "boost"
+
+
+def test_schedule_comfort_temperature_accepts_only_plausible_numbers() -> None:
+    assert schedule_comfort_temperature(22) == 22.0
+    assert schedule_comfort_temperature("21.5") == 21.5
+    assert schedule_comfort_temperature(None) is None
+    assert schedule_comfort_temperature("warm") is None
+    assert schedule_comfort_temperature(45) is None

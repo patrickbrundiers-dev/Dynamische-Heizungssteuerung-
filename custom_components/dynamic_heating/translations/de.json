@@ -96,7 +96,9 @@
           "calibration": "Sollwert mit Raumfühler kalibrieren",
           "external_temperature": "Raumtemperatur an die Thermostate senden",
           "valve_maintenance": "Wöchentliche Ventilwartung",
-          "hysteresis": "Hysterese der Kalibrierung"
+          "hysteresis": "Hysterese der Kalibrierung",
+          "boost_temperature": "Boost-Temperatur",
+          "boost_duration": "Boost-Dauer"
         },
         "data_description": {
           "climate_entity": "Wähle die Climate-Entität, deren Sollwert dieser Raumregler verändern darf. Vermeide weitere Automationen, die gleichzeitig dasselbe Thermostat steuern.",
@@ -110,7 +112,9 @@
           "calibration": "Das Thermostat misst direkt am Heizkörper. Ist dies aktiv, wird sein Sollwert um die Differenz zwischen Thermostat- und Raumtemperatur verschoben (wie die zieltemperaturbasierte Kalibrierung von Better Thermostat), damit es nach dem Raumfühler regelt. Die Abweichung wird höchstens alle 10 Minuten neu berechnet. Nicht einschalten, wenn das gewählte Thermostat bereits ein Better-Thermostat ist.",
           "external_temperature": "Für Thermostate mit Eingang für eine externe Temperatur (z. B. Aqara E1 über Zigbee2MQTT): Die Integration schaltet sie auf den externen Sensor und schickt ihnen die Temperatur des Raumfühlers, wie Better Thermostat. Das Ventil regelt dann selbst nach der Raumtemperatur, eine Kalibrierung ist für diese Thermostate nicht nötig. Ist die Regelung aus oder der Raumfühler nicht verfügbar, werden sie wieder auf ihren eigenen Sensor geschaltet.",
           "valve_maintenance": "Gegen Verkalkung werden die Ventile einmal pro Woche gegen 11 Uhr für 5 Minuten ganz geöffnet und danach 5 Minuten ganz geschlossen (Maximal- bzw. Minimaltemperatur des Thermostats), wie bei Better Thermostat. Bei offenem Fenster oder manueller Übersteuerung wird sie verschoben. Nur bei aktiver Regelung.",
-          "hysteresis": "Eine neu berechnete Kalibrierung wird nur übernommen, wenn sie sich um mindestens diesen Wert geändert hat. So werden die Thermostate nicht bei jeder kleinen Temperaturschwankung nachgestellt. 0 schaltet die Hysterese ab."
+          "hysteresis": "Eine neu berechnete Kalibrierung wird nur übernommen, wenn sie sich um mindestens diesen Wert geändert hat. So werden die Thermostate nicht bei jeder kleinen Temperaturschwankung nachgestellt. 0 schaltet die Hysterese ab.",
+          "boost_temperature": "Solltemperatur, solange der Schalter „Boost“ an ist. Der Boost hat Vorrang vor Zeitplan, Anwesenheit und Heizgrenze, nicht aber vor einem offenen Fenster oder ausgeschalteter Heizperiode.",
+          "boost_duration": "Nach dieser Zeit schaltet sich der Boost von selbst aus."
         }
       },
       "presence": {

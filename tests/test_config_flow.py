@@ -72,6 +72,16 @@ async def _finish_editor_flow(
         first["additional_climate_entities"] = values["additional_climate_entities"]
     if values.get("frost_protection_temperature") is not None:
         first["frost_protection_temperature"] = values["frost_protection_temperature"]
+    for key in ("boost_temperature", "boost_duration", "hysteresis"):
+        if key in values:
+            first[key] = values[key]
+    if isinstance(first.get("boost_duration"), int):
+        seconds = first["boost_duration"]
+        first["boost_duration"] = {
+            "hours": seconds // 3600,
+            "minutes": seconds % 3600 // 60,
+            "seconds": seconds % 60,
+        }
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], user_input=first
     )
@@ -508,3 +518,25 @@ async def test_editor_saves_calibration_flag(hass, enable_custom_integrations):
     result = await _finish_editor_flow(hass, entry, basic={"calibration": True})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["calibration"] is True
+
+
+@pytest.mark.asyncio
+async def test_editor_saves_boost_settings_in_seconds(
+    hass, enable_custom_integrations
+):
+    """Boost temperature and duration are stored; the duration as seconds."""
+    _mock_room(hass)
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+
+    result = await _finish_editor_flow(
+        hass,
+        entry,
+        basic={
+            "boost_temperature": 23.0,
+            "boost_duration": {"hours": 0, "minutes": 45, "seconds": 0},
+        },
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["boost_temperature"] == 23.0
+    assert entry.options["boost_duration"] == 2700

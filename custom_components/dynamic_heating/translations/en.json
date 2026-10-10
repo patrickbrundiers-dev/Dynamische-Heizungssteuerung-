@@ -96,7 +96,9 @@
           "calibration": "Calibrate setpoint with the room sensor",
           "external_temperature": "Send the room temperature to the thermostats",
           "valve_maintenance": "Weekly valve maintenance",
-          "hysteresis": "Calibration hysteresis"
+          "hysteresis": "Calibration hysteresis",
+          "boost_temperature": "Boost temperature",
+          "boost_duration": "Boost duration"
         },
         "data_description": {
           "climate_entity": "Select the climate entity this room controller may adjust. Avoid running another automation that writes targets to the same thermostat.",
@@ -110,7 +112,9 @@
           "calibration": "The thermostat measures right at the radiator. When enabled, its setpoint is shifted by the difference between thermostat and room temperature (like Better Thermostat's target-temperature calibration) so it regulates on the room sensor. The difference is recomputed at most every 10 minutes. Do not enable when the selected thermostat already is a Better Thermostat.",
           "external_temperature": "For thermostats with an external temperature input (e.g. Aqara E1 via Zigbee2MQTT): the integration switches them to the external sensor and sends them the room sensor's temperature, like Better Thermostat. The valve then regulates on the room temperature itself, so no calibration is needed for these thermostats. While control is off or the room sensor is unavailable they are switched back to their own sensor.",
           "valve_maintenance": "Against calcification the valves are fully opened for 5 minutes and then fully closed for 5 minutes once a week around 11:00 (thermostat maximum and minimum temperature), as in Better Thermostat. Postponed while a window is open or control is manually overridden. Only while control is active.",
-          "hysteresis": "A recomputed calibration is only applied when it changed by at least this value, so the thermostats are not re-adjusted for every small temperature fluctuation. 0 disables the hysteresis."
+          "hysteresis": "A recomputed calibration is only applied when it changed by at least this value, so the thermostats are not re-adjusted for every small temperature fluctuation. 0 disables the hysteresis.",
+          "boost_temperature": "Target temperature while the \"Boost\" switch is on. Boost wins over schedule, presence and heating limit, but not over an open window or the heating season being off.",
+          "boost_duration": "The boost turns itself off after this time."
         }
       },
       "presence": {
