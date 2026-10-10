@@ -15,6 +15,8 @@ CONF_WEATHER_ENTITY: Final = "weather_entity"
 CONF_COMFORT_TEMPERATURE: Final = "comfort_temperature"
 CONF_ECO_TEMPERATURE: Final = "eco_temperature"
 CONF_MAX_PREHEAT_MINUTES: Final = "max_preheat_minutes"
+# Optional setpoint while nobody is home; falls back to the eco temperature.
+CONF_AWAY_TEMPERATURE: Final = "away_temperature"
 
 DEFAULT_COMFORT_TEMPERATURE: Final = 21.0
 DEFAULT_ECO_TEMPERATURE: Final = 18.0

@@ -67,6 +67,7 @@ def decide_heating_target(
     window_open: bool = False,
     present: bool = True,
     preheat_started: bool = False,
+    away_temperature: float | None = None,
 ) -> HeatingDecision:
     """Return the target and reason for the current conditions.
 
@@ -74,15 +75,28 @@ def decide_heating_target(
     already began. Preheating then continues until the event instead of being
     re-evaluated from the (now warmer) room, which would otherwise drop back
     to eco shortly before the comfort period and toggle the setpoint.
+
+    ``away_temperature`` is used while nobody is home; without it the eco
+    temperature applies, as before.
     """
+    away_target = (
+        eco_temperature
+        if present or away_temperature is None
+        else away_temperature
+    )
+
     if window_open:
+        # An open window never heats above the away setpoint.
         return HeatingDecision(
-            "Fenster offen – abgesenkt", "window", eco_temperature, 0
+            "Fenster offen – abgesenkt",
+            "window",
+            min(eco_temperature, away_target),
+            0,
         )
 
     if not present:
         return HeatingDecision(
-            "Keine Anwesenheit – abgesenkt", "away", eco_temperature, 0
+            "Keine Anwesenheit – abgesenkt", "away", away_target, 0
         )
 
     if schedule_active:

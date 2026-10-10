@@ -10,6 +10,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_AWAY_TEMPERATURE,
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
     CONF_ECO_TEMPERATURE,
@@ -100,6 +101,12 @@ def _temperature_selector(minimum: float, maximum: float) -> selector.NumberSele
     )
 
 
+def _away_below_comfort(values: dict, comfort: float) -> bool:
+    """An optional away temperature must stay below the comfort target."""
+    away = values.get(CONF_AWAY_TEMPERATURE)
+    return away is None or float(away) < comfort
+
+
 def _user_schema() -> vol.Schema:
     """Build the initial entity and tuning form."""
     return vol.Schema(
@@ -179,6 +186,7 @@ def _user_schema() -> vol.Schema:
             vol.Required(
                 CONF_ECO_TEMPERATURE, default=DEFAULT_ECO_TEMPERATURE
             ): _temperature_selector(7, 21),
+            vol.Optional(CONF_AWAY_TEMPERATURE): _temperature_selector(5, 21),
             vol.Required(
                 CONF_MAX_PREHEAT_MINUTES, default=DEFAULT_MAX_PREHEAT_MINUTES
             ): selector.NumberSelector(
@@ -212,6 +220,8 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             eco = float(user_input[CONF_ECO_TEMPERATURE])
             if eco >= comfort:
                 errors["base"] = "eco_must_be_below_comfort"
+            elif not _away_below_comfort(user_input, comfort):
+                errors["base"] = "away_must_be_below_comfort"
             else:
                 title = f"Dynamische Heizung – {climate_entity}"
                 data = dict(user_input)
@@ -321,6 +331,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             self._duration_field(CONF_PRESENCE_OFF_DURATION, current, DEFAULT_PRESENCE_OFF_DURATION),
         ):
             schema[item[0]] = item[1]
+        schema[vol.Optional(CONF_AWAY_TEMPERATURE)] = _temperature_selector(5, 21)
         return vol.Schema(schema)
 
     def _proximity_schema(self, current: dict) -> vol.Schema:
@@ -355,7 +366,13 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             schema[item[0]] = item[1]
         return vol.Schema(schema)
 
-    def _show_step(self, step_id: str, schema: vol.Schema, current: dict):
+    def _show_step(
+        self,
+        step_id: str,
+        schema: vol.Schema,
+        current: dict,
+        errors: dict[str, str] | None = None,
+    ):
         """Render one editor page while preserving and formatting saved values."""
         suggested = dict(current)
         # Native duration selectors require a structured duration, not seconds.
@@ -365,6 +382,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         return self.async_show_form(
             step_id=step_id,
             data_schema=self.add_suggested_values_to_schema(schema, suggested),
+            errors=errors or {},
         )
 
     async def async_step_init(self, user_input=None):
@@ -401,8 +419,19 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
     async def async_step_presence(self, user_input=None):
         """Step 2: occupancy, people and guest mode."""
         current = self._values()
+        if user_input is not None and not _away_below_comfort(
+            user_input, float(current[CONF_COMFORT_TEMPERATURE])
+        ):
+            return self._show_step(
+                "presence",
+                self._presence_schema(current),
+                {**current, **user_input},
+                {"base": "away_must_be_below_comfort"},
+            )
         if user_input is not None:
             current.update(user_input)
+            # A cleared field must override a value saved earlier.
+            current[CONF_AWAY_TEMPERATURE] = user_input.get(CONF_AWAY_TEMPERATURE)
             for key in (CONF_PERSON_ENTITIES, CONF_GUEST_ENTITY, CONF_PRESENCE_ENTITY,
                         CONF_PRESENCE_SCHEDULE_ENTITY):
                 current[key] = user_input.get(key) or None

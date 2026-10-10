@@ -326,3 +326,66 @@ async def test_editor_saves_presence_and_proximity_settings(
     assert entry.options["proximity_duration"] == 120
     assert entry.options["presence_on_duration"] == 300
     assert entry.options["presence_off_duration"] == 1200
+
+
+@pytest.mark.asyncio
+async def test_user_flow_validates_optional_away_temperature(
+    hass, enable_custom_integrations
+):
+    """An away temperature is optional but must stay below comfort."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    user_input = _valid_input() | {"away_temperature": 21.0}
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input=user_input
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "away_must_be_below_comfort"}
+
+    user_input["away_temperature"] = 16.0
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input=user_input
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["away_temperature"] == 16.0
+
+
+@pytest.mark.asyncio
+async def test_editor_saves_rejects_and_clears_away_temperature(
+    hass, enable_custom_integrations
+):
+    """The presence page edits the away temperature; clearing it is kept."""
+    entry = _mock_room(hass)
+    result = await _finish_editor_flow(
+        hass, entry, presence={"away_temperature": 16.0}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["away_temperature"] == 16.0
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    first = {
+        key: entry.data[key]
+        for key in (
+            "climate_entity",
+            "room_temperature_entity",
+            "schedule_entity",
+            "comfort_temperature",
+            "eco_temperature",
+            "max_preheat_minutes",
+        )
+    }
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=first
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={"away_temperature": 21.0}
+    )
+    assert result["step_id"] == "presence"
+    assert result["errors"] == {"base": "away_must_be_below_comfort"}
+
+    result = await _finish_editor_flow(
+        hass, entry, presence={"away_temperature": None}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["away_temperature"] is None

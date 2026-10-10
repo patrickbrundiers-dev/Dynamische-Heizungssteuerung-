@@ -1084,3 +1084,35 @@ async def test_heating_is_inferred_without_hvac_action(
     assert coordinator._is_heating(
         hass.states.get("climate.living_room"), 18.0, 21.0
     ) is False
+
+
+@pytest.mark.asyncio
+async def test_away_temperature_is_written_when_everyone_leaves(
+    hass, enable_custom_integrations
+):
+    """Leaving lowers to the away setpoint; returning heats to comfort."""
+    _set_up_test_entities(hass)
+    hass.states.async_set(
+        "schedule.living_room_comfort",
+        "on",
+        {"next_event": (dt_util.now() + timedelta(hours=2)).isoformat()},
+    )
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["away_temperature"] = 16.0
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        _set_climate(hass, temperature=21.0)
+
+        hass.states.async_set("binary_sensor.someone_home", "off")
+        await coordinator.async_refresh()
+        assert coordinator.data["mode"] == "away"
+        assert coordinator.data["target_temperature"] == 16.0
+        _set_climate(hass, temperature=16.0)
+
+        hass.states.async_set("binary_sensor.someone_home", "on")
+        await coordinator.async_refresh()
+
+    assert coordinator.data["mode"] == "comfort"
+    assert [call[2]["temperature"] for call in calls] == [21.0, 16.0, 21.0]

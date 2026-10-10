@@ -62,6 +62,38 @@ def test_absence_prevents_preheating() -> None:
     assert decision.target_temperature == 18.0
 
 
+def test_away_temperature_applies_only_while_nobody_is_home() -> None:
+    now = datetime.now(UTC)
+    common = dict(
+        now=now,
+        schedule_active=True,
+        next_event=None,
+        room_temperature=17.0,
+        outdoor_temperature=0.0,
+        comfort_temperature=21.0,
+        eco_temperature=18.0,
+        heating_rate_c_per_hour=1.0,
+        max_preheat_minutes=120,
+        away_temperature=16.0,
+    )
+    away = decide_heating_target(**common, present=False)
+    assert away.mode == "away"
+    assert away.target_temperature == 16.0
+
+    # Coming home during a comfort period heats straight back to comfort.
+    home = decide_heating_target(**common, present=True)
+    assert home.mode == "comfort"
+    assert home.target_temperature == 21.0
+
+    # An open window keeps eco while home, but never heats above away.
+    assert decide_heating_target(
+        **common, present=True, window_open=True
+    ).target_temperature == 18.0
+    assert decide_heating_target(
+        **common, present=False, window_open=True
+    ).target_temperature == 16.0
+
+
 def test_heating_starts_early_when_schedule_event_is_near() -> None:
     now = datetime.now(UTC)
     decision = decide_heating_target(
