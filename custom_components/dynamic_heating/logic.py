@@ -6,6 +6,9 @@ can be tested independently of the runtime.
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
+
+TrendResult = Literal["started", "collecting", "too_long", "implausible", "complete"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,8 +66,15 @@ def decide_heating_target(
     forecast_condition: str | None = None,
     window_open: bool = False,
     present: bool = True,
+    preheat_started: bool = False,
 ) -> HeatingDecision:
-    """Return the target and reason for the current conditions."""
+    """Return the target and reason for the current conditions.
+
+    ``preheat_started`` tells the decision that preheating for ``next_event``
+    already began. Preheating then continues until the event instead of being
+    re-evaluated from the (now warmer) room, which would otherwise drop back
+    to eco shortly before the comfort period and toggle the setpoint.
+    """
     if window_open:
         return HeatingDecision(
             "Fenster offen – abgesenkt", "window", eco_temperature, 0
@@ -119,10 +129,12 @@ def decide_heating_target(
         )
 
     if minutes_until_event is not None:
-        should_preheat = (
-            minutes_until_event > 0
-            and minutes_until_event <= lead
-            and room_temperature < comfort_temperature - 0.2
+        should_preheat = minutes_until_event > 0 and (
+            preheat_started
+            or (
+                minutes_until_event <= lead
+                and room_temperature < comfort_temperature - 0.2
+            )
         )
         if should_preheat:
             return HeatingDecision(
@@ -144,7 +156,6 @@ def decide_heating_target(
         forecast_condition,
         solar_adjustment,
     )
-
 
 
 def select_forecast_condition(
@@ -210,3 +221,74 @@ def apply_forecast_solar_adjustment(
     reduction = min(15, round(lead_minutes * factor))
     adjusted = max(0, lead_minutes - reduction)
     return adjusted, lead_minutes - adjusted
+
+
+@dataclass(slots=True)
+class TrendSample:
+    """Temperature trend window aligned to changes of the sensor reading.
+
+    Room sensors usually report in 0.1 °C steps. Measuring from an arbitrary
+    moment to the next step overstates slow rates heavily (a single 0.1 °C
+    step after five minutes reads as 1.2 °C/h). The window therefore starts
+    at the first change of the reading and is evaluated only once the reading
+    moved by ``min_delta``, so both ends sit on a sensor step.
+    """
+
+    temperature: float | None = None
+    started_at: datetime | None = None
+    anchored: bool = False
+
+    def reset(self) -> None:
+        """Discard the current window."""
+        self.temperature = None
+        self.started_at = None
+        self.anchored = False
+
+    def _restart(self, temperature: float, now: datetime, anchored: bool) -> None:
+        self.temperature = temperature
+        self.started_at = now
+        self.anchored = anchored
+
+    def observe(
+        self,
+        temperature: float,
+        now: datetime,
+        *,
+        direction: int,
+        min_seconds: float,
+        max_seconds: float,
+        min_delta: float,
+        max_delta: float,
+    ) -> tuple[TrendResult, float | None]:
+        """Advance the window; return the outcome and, when complete, the rate.
+
+        ``direction`` is +1 for heating and -1 for cooling; the returned rate
+        is always positive in that direction, in °C per hour.
+        """
+        if self.temperature is None or self.started_at is None:
+            self._restart(temperature, now, anchored=False)
+            return "started", None
+
+        if not self.anchored:
+            if abs(temperature - self.temperature) > 1e-6:
+                self._restart(temperature, now, anchored=True)
+            return "started", None
+
+        elapsed = (now - self.started_at).total_seconds()
+        change = (temperature - self.temperature) * direction
+        if elapsed > max_seconds:
+            self._restart(temperature, now, anchored=False)
+            return "too_long", None
+        if change > max_delta:
+            self._restart(temperature, now, anchored=False)
+            return "implausible", None
+        if change <= -min_delta:
+            # Moving the wrong way (e.g. thermal lag right after a valve opened):
+            # start a fresh window at this sensor step instead of rejecting.
+            self._restart(temperature, now, anchored=True)
+            return "collecting", None
+        if elapsed < min_seconds or change < min_delta:
+            return "collecting", None
+
+        self._restart(temperature, now, anchored=False)
+        return "complete", change / (elapsed / 3600)
