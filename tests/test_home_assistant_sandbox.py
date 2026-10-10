@@ -1116,3 +1116,55 @@ async def test_away_temperature_is_written_when_everyone_leaves(
 
     assert coordinator.data["mode"] == "comfort"
     assert [call[2]["temperature"] for call in calls] == [21.0, 16.0, 21.0]
+
+
+@pytest.mark.asyncio
+async def test_heating_limit_holds_eco_until_it_cools_down(
+    hass, enable_custom_integrations
+):
+    """Warm outdoor air pauses comfort heating; it resumes 1 °C below the limit."""
+    _set_up_test_entities(hass)
+    hass.states.async_set(
+        "schedule.living_room_comfort",
+        "on",
+        {"next_event": (dt_util.now() + timedelta(hours=2)).isoformat()},
+    )
+    hass.states.async_set("sensor.outdoor_temperature", "17.0")
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["heating_limit_temperature"] = 16.0
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        assert coordinator.data["mode"] == "heating_limit"
+        assert coordinator.data["heating_limit_reached"] is True
+
+        # Just below the limit the hysteresis keeps the setback.
+        hass.states.async_set("sensor.outdoor_temperature", "15.5")
+        await coordinator.async_refresh()
+        assert coordinator.data["mode"] == "heating_limit"
+
+        hass.states.async_set("sensor.outdoor_temperature", "14.9")
+        await coordinator.async_refresh()
+
+    assert coordinator.data["mode"] == "comfort"
+    assert coordinator.data["heating_limit_reached"] is False
+    assert [call[2]["temperature"] for call in calls] == [21.0]
+
+
+@pytest.mark.asyncio
+async def test_weather_entity_temperature_is_used_without_outdoor_sensor(
+    hass, enable_custom_integrations
+):
+    """Without an outdoor sensor the weather entity temperature is used."""
+    _set_up_test_entities(hass)
+    hass.states.async_set("sensor.outdoor_temperature", "unavailable")
+    hass.states.async_set("weather.home", "sunny", {"temperature": 19.5})
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["weather_entity"] = "weather.home"
+    coordinator.config["heating_limit_temperature"] = 18.0
+
+    await coordinator.async_refresh()
+
+    assert coordinator.data["outdoor_temperature"] == 19.5
+    assert coordinator.data["mode"] == "heating_limit"

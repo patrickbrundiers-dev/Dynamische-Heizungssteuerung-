@@ -6,6 +6,7 @@ from custom_components.dynamic_heating.logic import (
     TrendSample,
     calculate_lead_minutes,
     decide_heating_target,
+    evaluate_heating_limit,
 )
 
 
@@ -314,3 +315,61 @@ def test_trend_sample_restarts_when_the_room_moves_the_wrong_way() -> None:
     outcome, _ = _observe_heating(sample, 17.9, start + timedelta(minutes=10))
     assert outcome == "collecting"
     assert sample.temperature == 17.9
+
+
+def test_heating_limit_engages_at_limit_and_releases_with_hysteresis() -> None:
+    assert evaluate_heating_limit(16.0, None, False) is False
+    assert evaluate_heating_limit(None, 16.0, True) is False
+    assert evaluate_heating_limit(15.9, 16.0, False) is False
+    assert evaluate_heating_limit(16.0, 16.0, False) is True
+    # Hovering just below the limit keeps it reached until 1 °C below.
+    assert evaluate_heating_limit(15.5, 16.0, True) is True
+    assert evaluate_heating_limit(15.0, 16.0, True) is False
+
+
+def test_heating_limit_holds_eco_during_comfort_and_skips_preheat() -> None:
+    now = datetime.now(UTC)
+    common = dict(
+        now=now,
+        room_temperature=19.0,
+        outdoor_temperature=18.0,
+        comfort_temperature=21.0,
+        eco_temperature=18.0,
+        heating_rate_c_per_hour=1.0,
+        max_preheat_minutes=120,
+        heating_limit_reached=True,
+    )
+    comfort = decide_heating_target(
+        schedule_active=True, next_event=None, **common
+    )
+    assert comfort.mode == "heating_limit"
+    assert comfort.target_temperature == 18.0
+
+    before_event = decide_heating_target(
+        schedule_active=False,
+        next_event=now + timedelta(minutes=10),
+        preheat_started=True,
+        **common,
+    )
+    assert before_event.mode == "heating_limit"
+    assert before_event.preheat_minutes == 0
+
+
+def test_window_and_absence_take_precedence_over_heating_limit() -> None:
+    now = datetime.now(UTC)
+    common = dict(
+        now=now,
+        schedule_active=True,
+        next_event=None,
+        room_temperature=19.0,
+        outdoor_temperature=18.0,
+        comfort_temperature=21.0,
+        eco_temperature=18.0,
+        heating_rate_c_per_hour=1.0,
+        max_preheat_minutes=120,
+        heating_limit_reached=True,
+    )
+    assert decide_heating_target(window_open=True, **common).mode == "window"
+    away = decide_heating_target(present=False, away_temperature=16.0, **common)
+    assert away.mode == "away"
+    assert away.target_temperature == 16.0

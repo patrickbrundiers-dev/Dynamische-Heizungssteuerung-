@@ -17,6 +17,10 @@ CONF_ECO_TEMPERATURE: Final = "eco_temperature"
 CONF_MAX_PREHEAT_MINUTES: Final = "max_preheat_minutes"
 # Optional setpoint while nobody is home; falls back to the eco temperature.
 CONF_AWAY_TEMPERATURE: Final = "away_temperature"
+# Optional outdoor temperature at or above which comfort heating pauses.
+CONF_HEATING_LIMIT_TEMPERATURE: Final = "heating_limit_temperature"
+# The heating limit is released only this far below the limit.
+HEATING_LIMIT_HYSTERESIS: Final = 1.0
 
 DEFAULT_COMFORT_TEMPERATURE: Final = 21.0
 DEFAULT_ECO_TEMPERATURE: Final = 18.0

@@ -14,6 +14,7 @@ from .const import (
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
     CONF_ECO_TEMPERATURE,
+    CONF_HEATING_LIMIT_TEMPERATURE,
     CONF_MAX_PREHEAT_MINUTES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PRESENCE_ENTITY,
@@ -180,6 +181,7 @@ def _user_schema() -> vol.Schema:
             vol.Optional(CONF_WEATHER_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="weather")
             ),
+            vol.Optional(CONF_HEATING_LIMIT_TEMPERATURE): _temperature_selector(10, 25),
             vol.Required(
                 CONF_COMFORT_TEMPERATURE, default=DEFAULT_COMFORT_TEMPERATURE
             ): _temperature_selector(16, 25),
@@ -364,6 +366,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             self._entity_field(CONF_WEATHER_ENTITY, "weather", current),
         ):
             schema[item[0]] = item[1]
+        schema[vol.Optional(CONF_HEATING_LIMIT_TEMPERATURE)] = _temperature_selector(10, 25)
         return vol.Schema(schema)
 
     def _show_step(
@@ -467,6 +470,10 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             current.update(user_input)
             for key in (CONF_WINDOW_ENTITY, CONF_OUTDOOR_TEMPERATURE_ENTITY, CONF_WEATHER_ENTITY):
                 current[key] = user_input.get(key) or None
+            # A cleared field must override a value saved earlier.
+            current[CONF_HEATING_LIMIT_TEMPERATURE] = user_input.get(
+                CONF_HEATING_LIMIT_TEMPERATURE
+            )
 
             climate_entity = current[CONF_CLIMATE_ENTITY]
             options = dict(current)

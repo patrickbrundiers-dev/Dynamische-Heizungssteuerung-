@@ -18,6 +18,7 @@ from .const import (
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
     CONF_ECO_TEMPERATURE,
+    CONF_HEATING_LIMIT_TEMPERATURE,
     CONF_MAX_PREHEAT_MINUTES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PRESENCE_ENTITY,
@@ -51,6 +52,7 @@ from .const import (
     MAX_COOLING_SAMPLE_DELTA,
     MIN_SAMPLE_DELTA,
     INFERRED_HEATING_MARGIN,
+    HEATING_LIMIT_HYSTERESIS,
     SETPOINT_RESEND_SECONDS,
     FORECAST_EVALUATION_GRACE_SECONDS,
     DEFAULT_PRESENCE_ON_DURATION,
@@ -65,7 +67,12 @@ from .const import (
     MIN_LEARNED_HEATING_RATE,
     MIN_SAMPLE_SECONDS,
 )
-from .logic import TrendSample, decide_heating_target, select_forecast_condition
+from .logic import (
+    TrendSample,
+    decide_heating_target,
+    evaluate_heating_limit,
+    select_forecast_condition,
+)
 
 _LOGGER = logging.getLogger(__name__)
 _INVALID_STATES = {"unknown", "unavailable", None}
@@ -105,6 +112,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cooling_sample = TrendSample()
         # Comfort event for which preheating already started (see logic).
         self._preheat_event: datetime | None = None
+        # Kept between updates so the heating limit releases with hysteresis.
+        self._heating_limit_reached = False
         # Last setpoint written successfully, to avoid re-sending it every
         # update to thermostats that store a slightly different value.
         self._last_written_target: float | None = None
@@ -640,6 +649,21 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._pending_forecast_event = next_event
         self._pending_forecast_temperature = projected_temperature
 
+    def _outdoor_temperature(self) -> float | None:
+        """Read the outdoor sensor, falling back to the weather entity."""
+        temperature = _as_float(self._state(CONF_OUTDOOR_TEMPERATURE_ENTITY))
+        if temperature is not None:
+            return temperature
+        weather_id = self.config.get(CONF_WEATHER_ENTITY)
+        weather_state = self.hass.states.get(weather_id) if weather_id else None
+        if not self._valid(weather_state):
+            return None
+        try:
+            value = float(weather_state.attributes.get("temperature"))
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) else None
+
     async def _async_get_forecast_items(self) -> list[dict[str, Any]]:
         """Fetch hourly forecast at most every 30 minutes, if configured."""
         entity_id = self.config.get(CONF_WEATHER_ENTITY)
@@ -1051,7 +1075,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         room_temperature = _as_float(self._state(CONF_ROOM_TEMPERATURE_ENTITY))
         schedule_state = self._state(CONF_SCHEDULE_ENTITY)
         climate_state = self._state(CONF_CLIMATE_ENTITY)
-        outdoor_temperature = _as_float(self._state(CONF_OUTDOOR_TEMPERATURE_ENTITY))
+        outdoor_temperature = self._outdoor_temperature()
 
         if room_temperature is None:
             return self._waiting_result(
@@ -1102,6 +1126,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         away_value = self.config.get(CONF_AWAY_TEMPERATURE)
         away_temperature = None if away_value is None else float(away_value)
         schedule_active = schedule_state.state == "on"
+        limit_value = self.config.get(CONF_HEATING_LIMIT_TEMPERATURE)
+        self._heating_limit_reached = evaluate_heating_limit(
+            outdoor_temperature,
+            None if limit_value is None else float(limit_value),
+            self._heating_limit_reached,
+            HEATING_LIMIT_HYSTERESIS,
+        )
 
         await self._evaluate_pending_forecast(
             now=dt_util.utcnow(),
@@ -1147,6 +1178,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             present=present,
             preheat_started=self._preheat_event is not None,
             away_temperature=away_temperature,
+            heating_limit_reached=self._heating_limit_reached,
         )
         if decision.mode == "preheat":
             self._preheat_event = next_event
@@ -1180,6 +1212,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "schedule_active": schedule_active,
             "next_event": next_event.isoformat() if next_event else None,
             "window_open": window_open,
+            "heating_limit_reached": self._heating_limit_reached,
             "present": present,
             "presence_status": presence_status,
             "enabled": self.enabled,
