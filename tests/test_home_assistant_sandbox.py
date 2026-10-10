@@ -1168,3 +1168,65 @@ async def test_weather_entity_temperature_is_used_without_outdoor_sensor(
 
     assert coordinator.data["outdoor_temperature"] == 19.5
     assert coordinator.data["mode"] == "heating_limit"
+
+
+@pytest.mark.asyncio
+async def test_window_delays_and_window_temperature(
+    hass, enable_custom_integrations
+):
+    """Short airing is ignored; after closing the setback is held for a while."""
+    _set_up_test_entities(hass)
+    hass.states.async_set(
+        "schedule.living_room_comfort",
+        "on",
+        {"next_event": (dt_util.now() + timedelta(hours=2)).isoformat()},
+    )
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["window_open_delay"] = 300
+    coordinator.config["window_close_delay"] = 600
+    coordinator.config["window_temperature"] = 15.0
+    start = dt_util.utcnow()
+
+    async def refresh_at(seconds: int) -> None:
+        with patch(
+            "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+            return_value=start + timedelta(seconds=seconds),
+        ):
+            await coordinator.async_refresh()
+
+    hass.states.async_set("binary_sensor.living_room_window", "on")
+    await refresh_at(60)
+    assert coordinator.data["window_contact_open"] is True
+    assert coordinator.data["window_open"] is False
+    assert coordinator.data["mode"] == "comfort"
+
+    await refresh_at(400)
+    assert coordinator.data["window_open"] is True
+    assert coordinator.data["mode"] == "window"
+    assert coordinator.data["target_temperature"] == 15.0
+
+    hass.states.async_set("binary_sensor.living_room_window", "off")
+    closed_at = (dt_util.utcnow() - start).total_seconds()
+    await refresh_at(int(closed_at) + 300)
+    assert coordinator.data["mode"] == "window"
+
+    await refresh_at(int(closed_at) + 700)
+    assert coordinator.data["window_open"] is False
+    assert coordinator.data["mode"] == "comfort"
+
+
+@pytest.mark.asyncio
+async def test_frost_protection_floor_is_written(hass, enable_custom_integrations):
+    """An away temperature below frost protection is raised to the floor."""
+    _set_up_test_entities(hass, window_state="on")
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["window_temperature"] = 7.0
+    coordinator.config["frost_protection_temperature"] = 12.0
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert coordinator.data["mode"] == "window"
+    assert coordinator.data["target_temperature"] == 12.0
+    assert [call[2]["temperature"] for call in calls] == [12.0]

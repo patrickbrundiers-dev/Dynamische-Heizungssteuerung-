@@ -28,7 +28,11 @@
           "proximity_direction_entity": "Proximity direction-of-travel sensor (optional)",
           "proximity_max_age": "Maximum age of location data",
           "away_temperature": "Away temperature (°C, optional)",
-          "heating_limit_temperature": "Outdoor heating limit (°C, optional)"
+          "heating_limit_temperature": "Outdoor heating limit (°C, optional)",
+          "window_open_delay": "Window: reaction time when opened",
+          "window_close_delay": "Window: wait time after closing",
+          "window_temperature": "Temperature while window is open (°C, optional)",
+          "frost_protection_temperature": "Frost protection temperature (°C, optional)"
         },
         "data_description": {
           "person_entities": "Comfort heating is allowed when at least one selected person or device tracker is home. Device trackers are recommended for simple home/not-home states.",
@@ -45,13 +49,19 @@
           "proximity_direction_entity": "Choose the matching direction-of-travel sensor. The states towards, arrived, away_from and stationary are understood. For new Proximity entities, select the distance and direction sensors separately.",
           "proximity_max_age": "If the distance sensor has not updated within this duration, its position is considered stale. No new heating decision is made from stale proximity data; a person/guest tracker that already confirms home still takes precedence.",
           "away_temperature": "Setpoint while nobody is home. Leave empty to keep using the setback temperature. Must be lower than the comfort temperature.",
-          "heating_limit_temperature": "At or above this outdoor temperature the room stays at the setback temperature, even during comfort periods, and preheating is skipped. Normal heating resumes once it is 1 °C cooler. Uses the outdoor sensor, otherwise the weather entity temperature. Leave empty to disable."
+          "heating_limit_temperature": "At or above this outdoor temperature the room stays at the setback temperature, even during comfort periods, and preheating is skipped. Normal heating resumes once it is 1 °C cooler. Uses the outdoor sensor, otherwise the weather entity temperature. Leave empty to disable.",
+          "window_open_delay": "Setback starts only after the window stayed open this long. Short airing or a draft does not change the setpoint. 0 = immediately.",
+          "window_close_delay": "After closing, the window setback is kept this long so the room air settles. 0 = immediately.",
+          "window_temperature": "Own setpoint while a window is open, e.g. 15 °C. Leave empty to use the eco or away temperature as before. Must be below the comfort temperature.",
+          "frost_protection_temperature": "No setpoint goes below this value, not even with an open window or while away, e.g. 12 °C. Leave empty to disable. Must be below the comfort temperature."
         }
       }
     },
     "error": {
       "eco_must_be_below_comfort": "The setback temperature must be lower than the comfort temperature.",
-      "away_must_be_below_comfort": "The away temperature must be lower than the comfort temperature."
+      "away_must_be_below_comfort": "The away temperature must be lower than the comfort temperature.",
+      "window_must_be_below_comfort": "The open-window temperature must be below the comfort temperature.",
+      "frost_must_be_below_comfort": "The frost protection temperature must be below the comfort temperature."
     },
     "abort": {
       "already_configured": "A dynamic heating controller is already configured for this thermostat."
@@ -68,7 +78,8 @@
           "schedule_entity": "Comfort schedule",
           "comfort_temperature": "Comfort target (°C)",
           "eco_temperature": "Setback target (°C)",
-          "max_preheat_minutes": "Maximum preheating (minutes)"
+          "max_preheat_minutes": "Maximum preheating (minutes)",
+          "frost_protection_temperature": "Frost protection temperature (°C, optional)"
         },
         "data_description": {
           "climate_entity": "Select the climate entity this room controller may adjust. Avoid running another automation that writes targets to the same thermostat.",
@@ -76,7 +87,8 @@
           "schedule_entity": "A Home Assistant schedule entity: ON means comfort time. Its next_event is used to plan preheating.",
           "comfort_temperature": "Desired room temperature during active comfort periods.",
           "eco_temperature": "Setback target outside comfort periods, during absence or when a window is open. It must be below the comfort target.",
-          "max_preheat_minutes": "Hard limit for how early preheating may start."
+          "max_preheat_minutes": "Hard limit for how early preheating may start.",
+          "frost_protection_temperature": "No setpoint goes below this value, not even with an open window or while away, e.g. 12 °C. Leave empty to disable. Must be below the comfort temperature."
         }
       },
       "presence": {
@@ -130,19 +142,27 @@
           "window_entity": "Window contact (optional)",
           "outdoor_temperature_entity": "Outdoor temperature sensor (optional)",
           "weather_entity": "Weather forecast entity (optional)",
-          "heating_limit_temperature": "Outdoor heating limit (°C, optional)"
+          "heating_limit_temperature": "Outdoor heating limit (°C, optional)",
+          "window_open_delay": "Window: reaction time when opened",
+          "window_close_delay": "Window: wait time after closing",
+          "window_temperature": "Temperature while window is open (°C, optional)"
         },
         "data_description": {
           "window_entity": "When ON, setback is enforced. If configured but unavailable, the controller avoids writing a new target.",
           "outdoor_temperature_entity": "Optional outdoor sensor used to refine the conservative preheat estimate.",
           "weather_entity": "Optional hourly weather forecast. Sunny daytime conditions can reduce the estimated preheat lead by at most 15 minutes.",
-          "heating_limit_temperature": "At or above this outdoor temperature the room stays at the setback temperature, even during comfort periods, and preheating is skipped. Normal heating resumes once it is 1 °C cooler. Uses the outdoor sensor, otherwise the weather entity temperature. Leave empty to disable."
+          "heating_limit_temperature": "At or above this outdoor temperature the room stays at the setback temperature, even during comfort periods, and preheating is skipped. Normal heating resumes once it is 1 °C cooler. Uses the outdoor sensor, otherwise the weather entity temperature. Leave empty to disable.",
+          "window_open_delay": "Setback starts only after the window stayed open this long. Short airing or a draft does not change the setpoint. 0 = immediately.",
+          "window_close_delay": "After closing, the window setback is kept this long so the room air settles. 0 = immediately.",
+          "window_temperature": "Own setpoint while a window is open, e.g. 15 °C. Leave empty to use the eco or away temperature as before. Must be below the comfort temperature."
         }
       }
     },
     "error": {
       "eco_must_be_below_comfort": "The setback temperature must be lower than the comfort temperature.",
-      "away_must_be_below_comfort": "The away temperature must be lower than the comfort temperature."
+      "away_must_be_below_comfort": "The away temperature must be lower than the comfort temperature.",
+      "window_must_be_below_comfort": "The open-window temperature must be below the comfort temperature.",
+      "frost_must_be_below_comfort": "The frost protection temperature must be below the comfort temperature."
     },
     "abort": {
       "already_configured": "This thermostat is already assigned to another heating controller."

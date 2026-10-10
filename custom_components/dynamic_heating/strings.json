@@ -28,7 +28,11 @@
           "proximity_direction_entity": "Proximity-Richtungssensor (optional)",
           "proximity_max_age": "Maximales Alter der Standortdaten",
           "away_temperature": "Abwesenheitstemperatur (°C, optional)",
-          "heating_limit_temperature": "Heizgrenze Außentemperatur (°C, optional)"
+          "heating_limit_temperature": "Heizgrenze Außentemperatur (°C, optional)",
+          "window_open_delay": "Fenster: Reaktionszeit beim Öffnen",
+          "window_close_delay": "Fenster: Wartezeit nach dem Schließen",
+          "window_temperature": "Temperatur bei offenem Fenster (°C, optional)",
+          "frost_protection_temperature": "Frostschutztemperatur (°C, optional)"
         },
         "data_description": {
           "person_entities": "Komfortheizung ist erlaubt, wenn mindestens eine ausgewählte Person oder ein Geräte-Tracker zu Hause ist. Geräte-Tracker mit einfachem Zuhause/Nicht-zuhause-Status werden empfohlen.",
@@ -45,13 +49,19 @@
           "proximity_direction_entity": "Wähle den passenden Richtungssensor. Unterstützte Zustände sind towards, arrived, away_from und stationary. Neue Proximity-Entitäten werden über Entfernungs- und Richtungssensor getrennt ausgewählt.",
           "proximity_max_age": "Hat sich der Entfernungssensor länger als diese Dauer nicht aktualisiert, gelten seine Standortdaten als veraltet. Daraus wird keine neue Heizentscheidung abgeleitet; ein Personen-/Gast-Tracker, der Zuhause bestätigt, hat weiterhin Vorrang.",
           "away_temperature": "Sollwert, solange niemand zu Hause ist. Leer lassen, um wie bisher die Absenktemperatur zu verwenden. Muss unter der Komforttemperatur liegen.",
-          "heating_limit_temperature": "Ab dieser Außentemperatur bleibt der Raum auf der Absenktemperatur, auch während Komfortzeiten; Vorheizen entfällt. Erst wenn es 1 °C kühler ist, wird wieder normal geheizt. Nutzt den Außensensor, sonst die Temperatur der Wetter-Entität. Leer lassen zum Abschalten."
+          "heating_limit_temperature": "Ab dieser Außentemperatur bleibt der Raum auf der Absenktemperatur, auch während Komfortzeiten; Vorheizen entfällt. Erst wenn es 1 °C kühler ist, wird wieder normal geheizt. Nutzt den Außensensor, sonst die Temperatur der Wetter-Entität. Leer lassen zum Abschalten.",
+          "window_open_delay": "Erst wenn das Fenster so lange offen ist, wird abgesenkt. Kurzes Öffnen oder Durchzug ändert den Sollwert nicht. 0 = sofort.",
+          "window_close_delay": "Nach dem Schließen bleibt die Fensterabsenkung so lange bestehen, damit sich die Raumluft beruhigt. 0 = sofort.",
+          "window_temperature": "Eigener Sollwert bei offenem Fenster, z. B. 15 °C. Leer lassen, um wie bisher die Absenk- bzw. Abwesenheitstemperatur zu verwenden. Muss unter der Komforttemperatur liegen.",
+          "frost_protection_temperature": "Kein Sollwert geht unter diesen Wert, auch nicht bei offenem Fenster oder Abwesenheit, z. B. 12 °C. Leer lassen zum Abschalten. Muss unter der Komforttemperatur liegen."
         }
       }
     },
     "error": {
       "eco_must_be_below_comfort": "Die Absenktemperatur muss unter der Komforttemperatur liegen.",
-      "away_must_be_below_comfort": "Die Abwesenheitstemperatur muss unter der Komforttemperatur liegen."
+      "away_must_be_below_comfort": "Die Abwesenheitstemperatur muss unter der Komforttemperatur liegen.",
+      "window_must_be_below_comfort": "Die Temperatur bei offenem Fenster muss unter der Komforttemperatur liegen.",
+      "frost_must_be_below_comfort": "Die Frostschutztemperatur muss unter der Komforttemperatur liegen."
     },
     "abort": {
       "already_configured": "Für dieses Thermostat ist bereits eine dynamische Heizungssteuerung eingerichtet."
@@ -68,7 +78,8 @@
           "schedule_entity": "Komfortzeitplan",
           "comfort_temperature": "Komforttemperatur (°C)",
           "eco_temperature": "Absenktemperatur (°C)",
-          "max_preheat_minutes": "Maximale Vorheizzeit (Minuten)"
+          "max_preheat_minutes": "Maximale Vorheizzeit (Minuten)",
+          "frost_protection_temperature": "Frostschutztemperatur (°C, optional)"
         },
         "data_description": {
           "climate_entity": "Wähle die Climate-Entität, deren Sollwert dieser Raumregler verändern darf. Vermeide weitere Automationen, die gleichzeitig dasselbe Thermostat steuern.",
@@ -76,7 +87,8 @@
           "schedule_entity": "Eine Home-Assistant-Schedule-Entität: EIN bedeutet Komfortzeit. Das Attribut next_event wird für das Vorheizen genutzt.",
           "comfort_temperature": "Gewünschte Raumtemperatur während aktiver Komfortzeiten.",
           "eco_temperature": "Absenktemperatur außerhalb der Komfortzeit, bei Abwesenheit oder offenem Fenster. Sie muss unter der Komforttemperatur liegen.",
-          "max_preheat_minutes": "Harte Obergrenze, wie früh die Vorheizung starten darf."
+          "max_preheat_minutes": "Harte Obergrenze, wie früh die Vorheizung starten darf.",
+          "frost_protection_temperature": "Kein Sollwert geht unter diesen Wert, auch nicht bei offenem Fenster oder Abwesenheit, z. B. 12 °C. Leer lassen zum Abschalten. Muss unter der Komforttemperatur liegen."
         }
       },
       "presence": {
@@ -130,19 +142,27 @@
           "window_entity": "Fensterkontakt (optional)",
           "outdoor_temperature_entity": "Außentemperatursensor (optional)",
           "weather_entity": "Wettervorhersage-Entität (optional)",
-          "heating_limit_temperature": "Heizgrenze Außentemperatur (°C, optional)"
+          "heating_limit_temperature": "Heizgrenze Außentemperatur (°C, optional)",
+          "window_open_delay": "Fenster: Reaktionszeit beim Öffnen",
+          "window_close_delay": "Fenster: Wartezeit nach dem Schließen",
+          "window_temperature": "Temperatur bei offenem Fenster (°C, optional)"
         },
         "data_description": {
           "window_entity": "EIN erzwingt Absenkung. Ist ein ausgewählter Fensterkontakt nicht verfügbar, wird kein neuer Sollwert geschrieben.",
           "outdoor_temperature_entity": "Optionaler Außensensor verbessert die konservative Vorheizschätzung.",
           "weather_entity": "Optionale stündliche Wetterprognose. Sonniges Wetter am Tag kann die Vorheizzeit um höchstens 15 Minuten verkürzen.",
-          "heating_limit_temperature": "Ab dieser Außentemperatur bleibt der Raum auf der Absenktemperatur, auch während Komfortzeiten; Vorheizen entfällt. Erst wenn es 1 °C kühler ist, wird wieder normal geheizt. Nutzt den Außensensor, sonst die Temperatur der Wetter-Entität. Leer lassen zum Abschalten."
+          "heating_limit_temperature": "Ab dieser Außentemperatur bleibt der Raum auf der Absenktemperatur, auch während Komfortzeiten; Vorheizen entfällt. Erst wenn es 1 °C kühler ist, wird wieder normal geheizt. Nutzt den Außensensor, sonst die Temperatur der Wetter-Entität. Leer lassen zum Abschalten.",
+          "window_open_delay": "Erst wenn das Fenster so lange offen ist, wird abgesenkt. Kurzes Öffnen oder Durchzug ändert den Sollwert nicht. 0 = sofort.",
+          "window_close_delay": "Nach dem Schließen bleibt die Fensterabsenkung so lange bestehen, damit sich die Raumluft beruhigt. 0 = sofort.",
+          "window_temperature": "Eigener Sollwert bei offenem Fenster, z. B. 15 °C. Leer lassen, um wie bisher die Absenk- bzw. Abwesenheitstemperatur zu verwenden. Muss unter der Komforttemperatur liegen."
         }
       }
     },
     "error": {
       "eco_must_be_below_comfort": "Die Absenktemperatur muss unter der Komforttemperatur liegen.",
-      "away_must_be_below_comfort": "Die Abwesenheitstemperatur muss unter der Komforttemperatur liegen."
+      "away_must_be_below_comfort": "Die Abwesenheitstemperatur muss unter der Komforttemperatur liegen.",
+      "window_must_be_below_comfort": "Die Temperatur bei offenem Fenster muss unter der Komforttemperatur liegen.",
+      "frost_must_be_below_comfort": "Die Frostschutztemperatur muss unter der Komforttemperatur liegen."
     },
     "abort": {
       "already_configured": "Dieses Thermostat wird bereits von einer anderen Heizungsregelung verwendet."

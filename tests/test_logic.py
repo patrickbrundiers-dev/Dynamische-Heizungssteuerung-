@@ -7,6 +7,7 @@ from custom_components.dynamic_heating.logic import (
     calculate_lead_minutes,
     decide_heating_target,
     evaluate_heating_limit,
+    evaluate_window_open,
 )
 
 
@@ -373,3 +374,61 @@ def test_window_and_absence_take_precedence_over_heating_limit() -> None:
     away = decide_heating_target(present=False, away_temperature=16.0, **common)
     assert away.mode == "away"
     assert away.target_temperature == 16.0
+
+
+def _decide(**overrides):
+    values = dict(
+        now=datetime.now(UTC),
+        schedule_active=False,
+        next_event=None,
+        room_temperature=17.0,
+        outdoor_temperature=2.0,
+        comfort_temperature=21.0,
+        eco_temperature=18.0,
+        heating_rate_c_per_hour=1.0,
+        max_preheat_minutes=120,
+    )
+    values.update(overrides)
+    return decide_heating_target(**values)
+
+
+def test_window_temperature_replaces_setback_while_open() -> None:
+    decision = _decide(
+        schedule_active=True, window_open=True, window_temperature=15.0
+    )
+    assert decision.mode == "window"
+    assert decision.target_temperature == 15.0
+    # Without it the previous behaviour (eco) stays.
+    assert _decide(window_open=True).target_temperature == 18.0
+
+
+def test_frost_protection_is_a_floor_for_every_mode() -> None:
+    window = _decide(
+        window_open=True, window_temperature=8.0, frost_protection_temperature=12.0
+    )
+    assert window.mode == "window"
+    assert window.target_temperature == 12.0
+    assert "Frostschutz" in window.status
+
+    away = _decide(
+        present=False, away_temperature=10.0, frost_protection_temperature=12.0
+    )
+    assert away.target_temperature == 12.0
+
+    comfort = _decide(schedule_active=True, frost_protection_temperature=12.0)
+    assert comfort.target_temperature == 21.0
+    assert "Frostschutz" not in comfort.status
+
+
+def test_window_debounce_waits_for_open_and_close_delays() -> None:
+    # Opened shortly: not yet counted as open.
+    assert not evaluate_window_open(True, 60, False, 300, 600)
+    assert evaluate_window_open(True, 300, False, 300, 600)
+    # Closed again: setback is held for the close delay.
+    assert evaluate_window_open(False, 120, True, 300, 600)
+    assert not evaluate_window_open(False, 600, True, 300, 600)
+    # A closed window that never counted as open stays closed.
+    assert not evaluate_window_open(False, 0, False, 300, 600)
+    # Without delays the contact is followed directly.
+    assert evaluate_window_open(True, 0, False, 0, 0)
+    assert not evaluate_window_open(False, 0, True, 0, 0)

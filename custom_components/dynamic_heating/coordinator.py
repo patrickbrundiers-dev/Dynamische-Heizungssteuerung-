@@ -18,7 +18,11 @@ from .const import (
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
     CONF_ECO_TEMPERATURE,
+    CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_HEATING_LIMIT_TEMPERATURE,
+    CONF_WINDOW_CLOSE_DELAY,
+    CONF_WINDOW_OPEN_DELAY,
+    CONF_WINDOW_TEMPERATURE,
     CONF_MAX_PREHEAT_MINUTES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PRESENCE_ENTITY,
@@ -52,6 +56,8 @@ from .const import (
     MAX_COOLING_SAMPLE_DELTA,
     MIN_SAMPLE_DELTA,
     INFERRED_HEATING_MARGIN,
+    DEFAULT_WINDOW_CLOSE_DELAY,
+    DEFAULT_WINDOW_OPEN_DELAY,
     HEATING_LIMIT_HYSTERESIS,
     SETPOINT_RESEND_SECONDS,
     FORECAST_EVALUATION_GRACE_SECONDS,
@@ -71,6 +77,7 @@ from .logic import (
     TrendSample,
     decide_heating_target,
     evaluate_heating_limit,
+    evaluate_window_open,
     select_forecast_condition,
 )
 
@@ -114,6 +121,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._preheat_event: datetime | None = None
         # Kept between updates so the heating limit releases with hysteresis.
         self._heating_limit_reached = False
+        # Debounced window state, kept so the close delay can run out.
+        self._window_open = False
         # Last setpoint written successfully, to avoid re-sending it every
         # update to thermostats that store a slightly different value.
         self._last_written_target: float | None = None
@@ -1099,6 +1108,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
         window_open = False
+        window_contact_open = False
         window_id = self.config.get(CONF_WINDOW_ENTITY)
         if window_id:
             window_state = self.hass.states.get(window_id)
@@ -1108,7 +1118,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     room_temperature,
                     outdoor_temperature,
                 )
-            window_open = window_state.state == "on"
+            window_contact_open = window_state.state == "on"
+            window_open = evaluate_window_open(
+                window_contact_open,
+                (dt_util.utcnow() - window_state.last_changed).total_seconds(),
+                self._window_open,
+                int(self.config.get(CONF_WINDOW_OPEN_DELAY) or DEFAULT_WINDOW_OPEN_DELAY),
+                int(self.config.get(CONF_WINDOW_CLOSE_DELAY) or DEFAULT_WINDOW_CLOSE_DELAY),
+            )
+        self._window_open = window_open
 
         present, presence_status = self._evaluate_presence()
         if self._proximity_metrics_dirty:
@@ -1125,6 +1143,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         away_value = self.config.get(CONF_AWAY_TEMPERATURE)
         away_temperature = None if away_value is None else float(away_value)
+        window_value = self.config.get(CONF_WINDOW_TEMPERATURE)
+        frost_value = self.config.get(CONF_FROST_PROTECTION_TEMPERATURE)
         schedule_active = schedule_state.state == "on"
         limit_value = self.config.get(CONF_HEATING_LIMIT_TEMPERATURE)
         self._heating_limit_reached = evaluate_heating_limit(
@@ -1179,6 +1199,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             preheat_started=self._preheat_event is not None,
             away_temperature=away_temperature,
             heating_limit_reached=self._heating_limit_reached,
+            window_temperature=None if window_value is None else float(window_value),
+            frost_protection_temperature=(
+                None if frost_value is None else float(frost_value)
+            ),
         )
         if decision.mode == "preheat":
             self._preheat_event = next_event
@@ -1212,6 +1236,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "schedule_active": schedule_active,
             "next_event": next_event.isoformat() if next_event else None,
             "window_open": window_open,
+            "window_contact_open": window_contact_open,
             "heating_limit_reached": self._heating_limit_reached,
             "present": present,
             "presence_status": presence_status,
