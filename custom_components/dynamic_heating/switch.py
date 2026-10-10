@@ -7,6 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -23,8 +24,15 @@ async def async_setup_entry(
     async_add_entities([DynamicHeatingSwitch(coordinator, entry)])
 
 
-class DynamicHeatingSwitch(CoordinatorEntity[DynamicHeatingCoordinator], SwitchEntity):
-    """Enable or disable writing target temperatures to the configured thermostat."""
+class DynamicHeatingSwitch(
+    CoordinatorEntity[DynamicHeatingCoordinator], SwitchEntity, RestoreEntity
+):
+    """Enable or disable writing target temperatures to the configured thermostat.
+
+    The last state survives restarts and option changes: once the integration
+    is the only thing driving the valves, an unnoticed "off" would leave them
+    stuck at whatever setpoint was written last.
+    """
 
     _attr_icon = "mdi:heat-wave"
     _attr_name = "Regelung aktiv"
@@ -42,6 +50,14 @@ class DynamicHeatingSwitch(CoordinatorEntity[DynamicHeatingCoordinator], SwitchE
             model="Adaptive Heating Controller",
         )
 
+    async def async_added_to_hass(self) -> None:
+        """Restore the last switch state before the first controlled refresh."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is not None and last_state.state == "on":
+            self.coordinator.enabled = True
+            await self.coordinator.async_request_refresh()
+
     @property
     def is_on(self) -> bool:
         """Return whether the controller may apply its calculated target."""
@@ -54,7 +70,7 @@ class DynamicHeatingSwitch(CoordinatorEntity[DynamicHeatingCoordinator], SwitchE
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
-        """Disable control; it will remain disabled after Home Assistant restarts."""
+        """Disable control; it stays disabled after Home Assistant restarts."""
         self.coordinator.enabled = False
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()

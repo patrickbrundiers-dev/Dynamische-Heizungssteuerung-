@@ -8,7 +8,11 @@ import pytest
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from homeassistant.core import State
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    mock_restore_cache,
+)
 
 from custom_components.dynamic_heating.diagnostics import (
     async_get_config_entry_diagnostics,
@@ -126,6 +130,84 @@ async def test_controller_calculates_preheat_but_does_not_control_by_default(
 
     assert calls == []
     assert entry.state.value == "loaded"
+
+
+@pytest.mark.asyncio
+async def test_controller_switch_survives_options_reload(
+    hass, enable_custom_integrations
+):
+    """Reloading the entry (e.g. after the room editor) keeps control on."""
+    _set_up_test_entities(hass)
+    entry, _ = await _setup_integration(hass)
+    switch_entity_id = er.async_get(hass).async_get_entity_id(
+        "switch", DOMAIN, f"{entry.entry_id}_enabled"
+    )
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": switch_entity_id}, blocking=True
+    )
+
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.data[DOMAIN][entry.entry_id].enabled is True
+    assert hass.states.get(switch_entity_id).state == "on"
+
+
+@pytest.mark.asyncio
+async def test_controller_switch_restores_on_after_restart(
+    hass, enable_custom_integrations
+):
+    """A switch that was on before a restart is on again and writes."""
+    _set_up_test_entities(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Test Wohnzimmer",
+        unique_id="climate.living_room",
+        data=_config_data(),
+    )
+    entry.add_to_hass(hass)
+    switch_entity_id = er.async_get(hass).async_get_or_create(
+        "switch", DOMAIN, f"{entry.entry_id}_enabled", config_entry=entry
+    ).entity_id
+    mock_restore_cache(hass, [State(switch_entity_id, "on")])
+
+    with _capture_climate_calls(hass) as calls:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert hass.data[DOMAIN][entry.entry_id].enabled is True
+    assert hass.states.get(switch_entity_id).state == "on"
+    assert calls == [
+        (
+            "climate",
+            "set_temperature",
+            {"entity_id": "climate.living_room", "temperature": 21.0},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_controller_switch_restores_off_after_restart(
+    hass, enable_custom_integrations
+):
+    """A switch that was off before a restart stays off."""
+    _set_up_test_entities(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Test Wohnzimmer",
+        unique_id="climate.living_room",
+        data=_config_data(),
+    )
+    entry.add_to_hass(hass)
+    switch_entity_id = er.async_get(hass).async_get_or_create(
+        "switch", DOMAIN, f"{entry.entry_id}_enabled", config_entry=entry
+    ).entity_id
+    mock_restore_cache(hass, [State(switch_entity_id, "off")])
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.data[DOMAIN][entry.entry_id].enabled is False
 
 
 @pytest.mark.asyncio
