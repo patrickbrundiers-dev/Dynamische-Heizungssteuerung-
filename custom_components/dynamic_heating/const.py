@@ -3,7 +3,7 @@
 from typing import Final
 
 DOMAIN: Final = "dynamic_heating"
-PLATFORMS: Final = ["sensor", "switch"]
+PLATFORMS: Final = ["binary_sensor", "sensor", "switch"]
 
 CONF_CLIMATE_ENTITY: Final = "climate_entity"
 # Further thermostats of the same room; they get the same target.
@@ -111,3 +111,6 @@ VALVE_MAINTENANCE_PHASE_SECONDS: Final = 300
 # Thermostats without hvac_action count as heating when the setpoint is at least
 # this far above the room temperature (used for learning only).
 INFERRED_HEATING_MARGIN: Final = 0.5
+
+# A thermostat battery at or below this level is reported as a warning.
+LOW_BATTERY_PERCENT: Final = 20

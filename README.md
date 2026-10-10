@@ -226,3 +226,8 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 
 - **Hysterese der Kalibrierung:** Eine neu berechnete Kalibrierung wird nur übernommen, wenn sie sich um mindestens 0,5 °C geändert hat (einstellbar auf der Seite **Raum und Heizverhalten**, 0 schaltet ab). Die Thermostate werden so nicht bei jeder kleinen Temperaturschwankung nachgestellt; das schont Batterie und Ventilmotor.
 - **Ersatzwert bei Ausfall des Raumfühlers:** Ist der Raumfühler nicht verfügbar, regelt die Integration mit dem Mittelwert der Thermostat-Temperaturen weiter, wie der „degraded mode“ von Better Thermostat. Der Status nennt den Ersatzwert, das Attribut `room_temperature_source` ist dann `thermostats`. In dieser Zeit wird weder gelernt noch die Kalibrierung neu berechnet. Melden auch die Thermostate keine Temperatur, wird wie bisher nichts geschrieben.
+
+## Version 0.4.3: Thermostat-Warnungen
+
+- **Neuer Sensor „Thermostat-Problem“:** Er ist an, sobald ein Thermostat des Raums nicht erreichbar ist, seine Batterie bei 20 % oder darunter liegt oder ein Problem-Sensor desselben Geräts (z. B. der Ventilalarm der Aqara-Köpfe) meldet. Das Attribut `warnings` listet die Meldungen je Thermostat, der Statussensor zeigt sie im Attribut `thermostat_warnings`. Für eine Benachrichtigung reicht eine Automation auf diesen Sensor.
+- Gelesen werden die Batterie- und Problem-Entitäten, die zum selben Gerät wie das Thermostat gehören; es muss nichts zusätzlich eingestellt werden.

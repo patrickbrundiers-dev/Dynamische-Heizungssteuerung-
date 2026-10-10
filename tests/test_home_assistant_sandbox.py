@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from homeassistant.core import State
@@ -1627,3 +1628,70 @@ async def test_no_room_sensor_and_no_thermostat_reading_waits(
 
     assert coordinator.data["mode"] == "waiting"
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_thermostat_problems_are_reported(hass, enable_custom_integrations):
+    """Low battery, a device fault and an unreachable valve raise the problem sensor."""
+    _set_up_test_entities(hass)
+    trv_entry = MockConfigEntry(domain="mqtt")
+    trv_entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=trv_entry.entry_id, identifiers={("mqtt", "trv_1")}
+    )
+    registry = er.async_get(hass)
+    for domain, unique_id, object_id in (
+        ("climate", "trv_1_climate", "living_room_trv"),
+        ("sensor", "trv_1_battery", "living_room_battery"),
+        ("binary_sensor", "trv_1_alarm", "living_room_valve_alarm"),
+    ):
+        registry.async_get_or_create(
+            domain,
+            "mqtt",
+            unique_id,
+            suggested_object_id=object_id,
+            device_id=device.id,
+            config_entry=trv_entry,
+        )
+    hass.states.async_set(
+        "sensor.living_room_battery", "15", {"device_class": "battery"}
+    )
+    hass.states.async_set(
+        "binary_sensor.living_room_valve_alarm",
+        "on",
+        {"device_class": "problem", "friendly_name": "Ventilalarm"},
+    )
+    _set_trv(hass, "climate.living_room_trv")
+    hass.states.async_set("climate.living_room_3", "unavailable")
+    entry, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_climate_entities"] = [
+        "climate.living_room_trv",
+        "climate.living_room_3",
+    ]
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert coordinator.data["thermostat_warnings"] == {
+        "climate.living_room_trv": [
+            "Batterie schwach (15 %)",
+            "meldet Problem (Ventilalarm)",
+        ],
+        "climate.living_room_3": ["nicht erreichbar"],
+    }
+    problem_id = registry.async_get_entity_id(
+        "binary_sensor", DOMAIN, f"{entry.entry_id}_thermostat_problem"
+    )
+    assert hass.states.get(problem_id).state == "on"
+
+    hass.states.async_set(
+        "sensor.living_room_battery", "80", {"device_class": "battery"}
+    )
+    hass.states.async_set(
+        "binary_sensor.living_room_valve_alarm", "off", {"device_class": "problem"}
+    )
+    coordinator.config["additional_climate_entities"] = ["climate.living_room_trv"]
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert coordinator.data["thermostat_warnings"] == {}
+    assert hass.states.get(problem_id).state == "off"

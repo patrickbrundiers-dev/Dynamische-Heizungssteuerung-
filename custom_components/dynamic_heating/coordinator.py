@@ -10,6 +10,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -20,6 +21,7 @@ from .const import (
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_CALIBRATION,
     CONF_HYSTERESIS,
+    LOW_BATTERY_PERCENT,
     DEFAULT_HYSTERESIS,
     CONF_VALVE_MAINTENANCE,
     CONF_CLIMATE_ENTITY,
@@ -1098,6 +1100,43 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ids.append(entity_id)
         return ids
 
+    def _thermostat_warnings(self) -> dict[str, list[str]]:
+        """Problems reported by the room's thermostats or their devices.
+
+        Looks at the thermostat itself (unreachable) and at the battery and
+        problem entities of the same device, as Better Thermostat shows them.
+        """
+        registry = er.async_get(self.hass)
+        warnings: dict[str, list[str]] = {}
+        for entity_id in self._thermostat_ids():
+            found: list[str] = []
+            if not self._valid(self.hass.states.get(entity_id)):
+                found.append("nicht erreichbar")
+            entry = registry.async_get(entity_id)
+            device_entries = (
+                er.async_entries_for_device(registry, entry.device_id)
+                if entry is not None and entry.device_id
+                else []
+            )
+            for device_entry in device_entries:
+                state = self.hass.states.get(device_entry.entity_id)
+                if not self._valid(state):
+                    continue
+                device_class = state.attributes.get("device_class")
+                if device_entry.domain == "sensor" and device_class == "battery":
+                    level = self._stored_float(state.state)
+                    if level is not None and level <= LOW_BATTERY_PERCENT:
+                        found.append(f"Batterie schwach ({level:.0f} %)")
+                elif device_entry.domain == "binary_sensor" and state.state == "on":
+                    if device_class == "battery":
+                        found.append("Batterie schwach")
+                    elif device_class == "problem":
+                        name = state.attributes.get("friendly_name") or state.entity_id
+                        found.append(f"meldet Problem ({name})")
+            if found:
+                warnings[entity_id] = found
+        return warnings
+
     def _thermostat_temperature(self, entity_id: str) -> float | None:
         """The thermostat's own temperature reading, if it reports one."""
         state = self.hass.states.get(entity_id)
@@ -1326,6 +1365,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
     async def _async_update_data(self) -> dict[str, Any]:
+        """Run one control cycle and attach the thermostats' health."""
+        result = await self._async_control_cycle()
+        result["thermostat_warnings"] = self._thermostat_warnings()
+        return result
+
+    async def _async_control_cycle(self) -> dict[str, Any]:
         """Read Home Assistant states, calculate a target and optionally apply it."""
         room_temperature = _as_float(self._state(CONF_ROOM_TEMPERATURE_ENTITY))
         schedule_state = self._state(CONF_SCHEDULE_ENTITY)
