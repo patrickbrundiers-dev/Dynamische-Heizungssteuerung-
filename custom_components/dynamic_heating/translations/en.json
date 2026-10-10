@@ -27,7 +27,8 @@
           "presence_off_duration": "Presence reaction OFF time (seconds)",
           "proximity_direction_entity": "Proximity direction-of-travel sensor (optional)",
           "proximity_max_age": "Maximum age of location data",
-          "away_temperature": "Away temperature (°C, optional)"
+          "away_temperature": "Away temperature (°C, optional)",
+          "heating_limit_temperature": "Outdoor heating limit (°C, optional)"
         },
         "data_description": {
           "person_entities": "Comfort heating is allowed when at least one selected person or device tracker is home. Device trackers are recommended for simple home/not-home states.",
@@ -43,7 +44,8 @@
           "presence_off_duration": "After the sensor turns off, keep presence accepted for this long before switching to setback.",
           "proximity_direction_entity": "Choose the matching direction-of-travel sensor. The states towards, arrived, away_from and stationary are understood. For new Proximity entities, select the distance and direction sensors separately.",
           "proximity_max_age": "If the distance sensor has not updated within this duration, its position is considered stale. No new heating decision is made from stale proximity data; a person/guest tracker that already confirms home still takes precedence.",
-          "away_temperature": "Setpoint while nobody is home. Leave empty to keep using the setback temperature. Must be lower than the comfort temperature."
+          "away_temperature": "Setpoint while nobody is home. Leave empty to keep using the setback temperature. Must be lower than the comfort temperature.",
+          "heating_limit_temperature": "At or above this outdoor temperature the room stays at the setback temperature, even during comfort periods, and preheating is skipped. Normal heating resumes once it is 1 °C cooler. Uses the outdoor sensor, otherwise the weather entity temperature. Leave empty to disable."
         }
       }
     },
@@ -127,12 +129,14 @@
         "data": {
           "window_entity": "Window contact (optional)",
           "outdoor_temperature_entity": "Outdoor temperature sensor (optional)",
-          "weather_entity": "Weather forecast entity (optional)"
+          "weather_entity": "Weather forecast entity (optional)",
+          "heating_limit_temperature": "Outdoor heating limit (°C, optional)"
         },
         "data_description": {
           "window_entity": "When ON, setback is enforced. If configured but unavailable, the controller avoids writing a new target.",
           "outdoor_temperature_entity": "Optional outdoor sensor used to refine the conservative preheat estimate.",
-          "weather_entity": "Optional hourly weather forecast. Sunny daytime conditions can reduce the estimated preheat lead by at most 15 minutes."
+          "weather_entity": "Optional hourly weather forecast. Sunny daytime conditions can reduce the estimated preheat lead by at most 15 minutes.",
+          "heating_limit_temperature": "At or above this outdoor temperature the room stays at the setback temperature, even during comfort periods, and preheating is skipped. Normal heating resumes once it is 1 °C cooler. Uses the outdoor sensor, otherwise the weather entity temperature. Leave empty to disable."
         }
       }
     },

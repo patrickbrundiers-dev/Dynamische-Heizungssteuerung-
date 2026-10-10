@@ -99,6 +99,12 @@ Nach der Erstellung eines Raums kannst du über **Einstellungen → Geräte & Di
 
 Das ist bewusst eine konservative Heuristik und keine echte Strahlungs- oder Raumwärmesimulation. Bei Räumen mit wenig direkter Sonne kann sie den Einfluss überschätzen. Beobachte die Empfehlung erst bei ausgeschalteter Regelung und aktiviere sie nur, wenn sie zu deinem Raum passt.
 
+### Heizgrenze (Außentemperatur)
+
+Optional lässt sich im Editor auf der Seite **Fenster, Außentemperatur und Wetter** eine Heizgrenze setzen, z. B. 16 °C. Ist es draußen mindestens so warm, bleibt der Raum auf der Absenktemperatur, auch während Komfortzeiten, und es wird nicht vorgeheizt. Wieder normal geheizt wird erst, wenn die Außentemperatur 1 °C unter die Grenze fällt; so pendelt der Sollwert nicht, wenn die Temperatur um die Grenze schwankt. Fenster offen und Abwesenheit haben weiterhin Vorrang. Leer gelassen ist die Heizgrenze aus.
+
+Als Außentemperatur dient der Außensensor. Ist keiner gesetzt oder liefert er keinen Wert, wird die aktuelle Temperatur der Wetter-Entität verwendet; das gilt auch für die Vorheizschätzung. Ohne beide Werte wird normal geheizt. Der Statussensor zeigt im Attribut `heating_limit_reached`, ob die Grenze gerade greift.
+
 
 ### Personen, Präsenz und Geo-Fencing (Version 0.3.3)
 

@@ -27,7 +27,8 @@
           "presence_off_duration": "Präsenz-Reaktionszeit AUS (Sekunden)",
           "proximity_direction_entity": "Proximity-Richtungssensor (optional)",
           "proximity_max_age": "Maximales Alter der Standortdaten",
-          "away_temperature": "Abwesenheitstemperatur (°C, optional)"
+          "away_temperature": "Abwesenheitstemperatur (°C, optional)",
+          "heating_limit_temperature": "Heizgrenze Außentemperatur (°C, optional)"
         },
         "data_description": {
           "person_entities": "Komfortheizung ist erlaubt, wenn mindestens eine ausgewählte Person oder ein Geräte-Tracker zu Hause ist. Geräte-Tracker mit einfachem Zuhause/Nicht-zuhause-Status werden empfohlen.",
@@ -43,7 +44,8 @@
           "presence_off_duration": "Nach dem Ausschalten des Sensors bleibt Anwesenheit so lange gültig, bevor auf Absenkung gewechselt wird.",
           "proximity_direction_entity": "Wähle den passenden Richtungssensor. Unterstützte Zustände sind towards, arrived, away_from und stationary. Neue Proximity-Entitäten werden über Entfernungs- und Richtungssensor getrennt ausgewählt.",
           "proximity_max_age": "Hat sich der Entfernungssensor länger als diese Dauer nicht aktualisiert, gelten seine Standortdaten als veraltet. Daraus wird keine neue Heizentscheidung abgeleitet; ein Personen-/Gast-Tracker, der Zuhause bestätigt, hat weiterhin Vorrang.",
-          "away_temperature": "Sollwert, solange niemand zu Hause ist. Leer lassen, um wie bisher die Absenktemperatur zu verwenden. Muss unter der Komforttemperatur liegen."
+          "away_temperature": "Sollwert, solange niemand zu Hause ist. Leer lassen, um wie bisher die Absenktemperatur zu verwenden. Muss unter der Komforttemperatur liegen.",
+          "heating_limit_temperature": "Ab dieser Außentemperatur bleibt der Raum auf der Absenktemperatur, auch während Komfortzeiten; Vorheizen entfällt. Erst wenn es 1 °C kühler ist, wird wieder normal geheizt. Nutzt den Außensensor, sonst die Temperatur der Wetter-Entität. Leer lassen zum Abschalten."
         }
       }
     },
@@ -127,12 +129,14 @@
         "data": {
           "window_entity": "Fensterkontakt (optional)",
           "outdoor_temperature_entity": "Außentemperatursensor (optional)",
-          "weather_entity": "Wettervorhersage-Entität (optional)"
+          "weather_entity": "Wettervorhersage-Entität (optional)",
+          "heating_limit_temperature": "Heizgrenze Außentemperatur (°C, optional)"
         },
         "data_description": {
           "window_entity": "EIN erzwingt Absenkung. Ist ein ausgewählter Fensterkontakt nicht verfügbar, wird kein neuer Sollwert geschrieben.",
           "outdoor_temperature_entity": "Optionaler Außensensor verbessert die konservative Vorheizschätzung.",
-          "weather_entity": "Optionale stündliche Wetterprognose. Sonniges Wetter am Tag kann die Vorheizzeit um höchstens 15 Minuten verkürzen."
+          "weather_entity": "Optionale stündliche Wetterprognose. Sonniges Wetter am Tag kann die Vorheizzeit um höchstens 15 Minuten verkürzen.",
+          "heating_limit_temperature": "Ab dieser Außentemperatur bleibt der Raum auf der Absenktemperatur, auch während Komfortzeiten; Vorheizen entfällt. Erst wenn es 1 °C kühler ist, wird wieder normal geheizt. Nutzt den Außensensor, sonst die Temperatur der Wetter-Entität. Leer lassen zum Abschalten."
         }
       }
     },

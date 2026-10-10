@@ -111,7 +111,10 @@ async def _finish_editor_flow(
     )
     assert result["step_id"] == "environment"
 
-    env_keys = ("window_entity", "outdoor_temperature_entity", "weather_entity")
+    env_keys = (
+        "window_entity", "outdoor_temperature_entity", "weather_entity",
+        "heating_limit_temperature",
+    )
     env_input = {key: values[key] for key in env_keys if values.get(key)}
     for key, value in (environment or {}).items():
         if value is None:
@@ -389,3 +392,22 @@ async def test_editor_saves_rejects_and_clears_away_temperature(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["away_temperature"] is None
+
+
+@pytest.mark.asyncio
+async def test_editor_saves_and_clears_heating_limit(
+    hass, enable_custom_integrations
+):
+    """The environment page edits the heating limit; clearing it is kept."""
+    entry = _mock_room(hass)
+    result = await _finish_editor_flow(
+        hass, entry, environment={"heating_limit_temperature": 16.0}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["heating_limit_temperature"] == 16.0
+
+    result = await _finish_editor_flow(
+        hass, entry, environment={"heating_limit_temperature": None}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["heating_limit_temperature"] is None

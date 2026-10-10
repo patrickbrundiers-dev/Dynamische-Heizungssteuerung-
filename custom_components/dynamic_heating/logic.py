@@ -68,6 +68,7 @@ def decide_heating_target(
     present: bool = True,
     preheat_started: bool = False,
     away_temperature: float | None = None,
+    heating_limit_reached: bool = False,
 ) -> HeatingDecision:
     """Return the target and reason for the current conditions.
 
@@ -97,6 +98,11 @@ def decide_heating_target(
     if not present:
         return HeatingDecision(
             "Keine Anwesenheit – abgesenkt", "away", away_target, 0
+        )
+
+    if heating_limit_reached:
+        return HeatingDecision(
+            "Heizgrenze erreicht – abgesenkt", "heating_limit", eco_temperature, 0
         )
 
     if schedule_active:
@@ -170,6 +176,26 @@ def decide_heating_target(
         forecast_condition,
         solar_adjustment,
     )
+
+
+def evaluate_heating_limit(
+    outdoor_temperature: float | None,
+    limit_temperature: float | None,
+    currently_reached: bool,
+    hysteresis: float = 1.0,
+) -> bool:
+    """Return whether it is warm enough outside to stop comfort heating.
+
+    The limit is reached at ``limit_temperature`` and released only once the
+    outdoor temperature drops ``hysteresis`` below it, so a value hovering
+    around the limit does not toggle the setpoint. Without a limit or an
+    outdoor reading, heating continues as normal.
+    """
+    if limit_temperature is None or outdoor_temperature is None:
+        return False
+    if outdoor_temperature >= limit_temperature:
+        return True
+    return currently_reached and outdoor_temperature > limit_temperature - hysteresis
 
 
 def select_forecast_condition(
