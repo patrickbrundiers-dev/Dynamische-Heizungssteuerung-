@@ -23,6 +23,11 @@ DEFAULT_HEATING_RATE: Final = 1.0
 MIN_LEARNED_HEATING_RATE: Final = 0.2
 MAX_LEARNED_HEATING_RATE: Final = 4.0
 MIN_SAMPLE_SECONDS: Final = 300
+# A trend is evaluated only after the reading moved by at least two typical
+# 0.1 °C sensor steps; single steps are too coarse to estimate a rate.
+MIN_SAMPLE_DELTA: Final = 0.2
+MAX_HEATING_SAMPLE_DELTA: Final = 2.5
+MAX_COOLING_SAMPLE_DELTA: Final = 2.0
 
 # The cooling-rate estimate is deliberately bounded and learned only during
 # stable, closed-window setback periods. It is a forecasting aid, not a promise.
@@ -58,3 +63,7 @@ DEFAULT_PROXIMITY_MAX_AGE: Final = 900
 MAX_HEATING_SAMPLE_SECONDS: Final = 21600
 MAX_COOLING_SAMPLE_SECONDS: Final = 21600
 FORECAST_EVALUATION_GRACE_SECONDS: Final = 1800
+
+# A setpoint that was written successfully is not re-sent for this long, even if
+# the thermostat reports a slightly different value (rounding, slow devices).
+SETPOINT_RESEND_SECONDS: Final = 300

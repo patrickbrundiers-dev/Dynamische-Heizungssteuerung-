@@ -46,6 +46,10 @@ from .const import (
     DEFAULT_PROXIMITY_MAX_AGE,
     MAX_HEATING_SAMPLE_SECONDS,
     MAX_COOLING_SAMPLE_SECONDS,
+    MAX_HEATING_SAMPLE_DELTA,
+    MAX_COOLING_SAMPLE_DELTA,
+    MIN_SAMPLE_DELTA,
+    SETPOINT_RESEND_SECONDS,
     FORECAST_EVALUATION_GRACE_SECONDS,
     DEFAULT_PRESENCE_ON_DURATION,
     DEFAULT_PRESENCE_OFF_DURATION,
@@ -59,7 +63,7 @@ from .const import (
     MIN_LEARNED_HEATING_RATE,
     MIN_SAMPLE_SECONDS,
 )
-from .logic import decide_heating_target, select_forecast_condition
+from .logic import TrendSample, decide_heating_target, select_forecast_condition
 
 _LOGGER = logging.getLogger(__name__)
 _INVALID_STATES = {"unknown", "unavailable", None}
@@ -95,10 +99,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.heating_rate = DEFAULT_HEATING_RATE
         self.cooling_rate = DEFAULT_COOLING_RATE
         self._store = Store(hass, 1, f"{DOMAIN}_{entry_id}_learning")
-        self._sample_temperature: float | None = None
-        self._sample_time: datetime | None = None
-        self._cooling_sample_temperature: float | None = None
-        self._cooling_sample_time: datetime | None = None
+        self._heating_sample = TrendSample()
+        self._cooling_sample = TrendSample()
+        # Comfort event for which preheating already started (see logic).
+        self._preheat_event: datetime | None = None
+        # Last setpoint written successfully, to avoid re-sending it every
+        # update to thermostats that store a slightly different value.
+        self._last_written_target: float | None = None
+        self._last_written_at: datetime | None = None
         self._forecast_items: list[dict[str, Any]] = []
         self._forecast_fetched_at: datetime | None = None
         self._proximity_approaching_since: datetime | None = None
@@ -245,6 +253,30 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
         return value if math.isfinite(value) else None
 
+    @staticmethod
+    def _fit_to_thermostat(target: float, climate_state: State) -> float:
+        """Clamp to the thermostat limits and round to its setpoint step.
+
+        Without rounding, a thermostat with 0.5 °C steps stores 21.0 for a
+        requested 21.2 and the difference triggers a new write every update.
+        """
+        attributes = climate_state.attributes
+        try:
+            min_temp = float(attributes.get("min_temp", target))
+            max_temp = float(attributes.get("max_temp", target))
+        except (TypeError, ValueError):
+            min_temp = max_temp = target
+        if not min_temp <= max_temp:
+            min_temp = max_temp = target
+
+        try:
+            step = float(attributes.get("target_temp_step") or 0)
+        except (TypeError, ValueError):
+            step = 0
+        if math.isfinite(step) and step > 0:
+            target = round(round(target / step) * step, 2)
+        return max(min_temp, min(target, max_temp))
+
     def _state(self, key: str) -> State | None:
         entity_id = self.config.get(key)
         return self.hass.states.get(entity_id) if entity_id else None
@@ -382,10 +414,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now = dt_util.utcnow()
 
         if window_open or not present:
-            self._sample_temperature = None
-            self._sample_time = None
-            self._cooling_sample_temperature = None
-            self._cooling_sample_time = None
+            self._heating_sample.reset()
+            self._cooling_sample.reset()
             self._last_learning_status = (
                 "Lernen pausiert: Fenster offen" if window_open
                 else "Lernen pausiert: keine Anwesenheit"
@@ -393,42 +423,39 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         if is_heating:
-            self._cooling_sample_temperature = None
-            self._cooling_sample_time = None
+            self._cooling_sample.reset()
             if setpoint_value is None or room_temperature >= setpoint_value - 0.1:
-                self._sample_temperature = None
-                self._sample_time = None
+                self._heating_sample.reset()
                 self._last_learning_status = "Warte auf aktive Heizphase unter Solltemperatur"
                 return
 
-            if self._sample_temperature is None or self._sample_time is None:
-                self._sample_temperature = room_temperature
-                self._sample_time = now
+            outcome, observed_rate = self._heating_sample.observe(
+                room_temperature,
+                now,
+                direction=1,
+                min_seconds=MIN_SAMPLE_SECONDS,
+                max_seconds=MAX_HEATING_SAMPLE_SECONDS,
+                min_delta=MIN_SAMPLE_DELTA,
+                max_delta=MAX_HEATING_SAMPLE_DELTA,
+            )
+            if outcome == "started":
                 self._last_learning_type = "heating"
                 self._last_learning_status = "Sammle Aufheizmessung"
                 return
-
-            elapsed = (now - self._sample_time).total_seconds()
-            if elapsed < MIN_SAMPLE_SECONDS:
+            if outcome == "collecting":
                 self._last_learning_status = "Sammle weitere Aufheizdaten"
                 return
-            baseline = self._sample_temperature
-            self._sample_temperature = room_temperature
-            self._sample_time = now
-            delta = room_temperature - baseline
-
-            if elapsed > MAX_HEATING_SAMPLE_SECONDS:
+            if outcome == "too_long":
                 self._rejected_samples += 1
                 self._last_learning_status = "Aufheizmessung verworfen: Messintervall zu lang"
                 await self._save_learning()
                 return
-            if not 0.05 <= delta <= 2.5:
+            if outcome == "implausible" or observed_rate is None:
                 self._rejected_samples += 1
                 self._last_learning_status = "Aufheizmessung verworfen: Temperaturänderung unplausibel"
                 await self._save_learning()
                 return
 
-            observed_rate = delta / (elapsed / 3600)
             self._last_observed_heating_rate = round(observed_rate, 3)
             if not MIN_LEARNED_HEATING_RATE <= observed_rate <= MAX_LEARNED_HEATING_RATE:
                 self._rejected_samples += 1
@@ -446,8 +473,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._save_learning()
             return
 
-        self._sample_temperature = None
-        self._sample_time = None
+        self._heating_sample.reset()
         can_learn_cooling = (
             setpoint_value is not None
             and room_temperature > setpoint_value + 0.2
@@ -455,42 +481,37 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             and not schedule_active
         )
         if not can_learn_cooling:
-            self._cooling_sample_temperature = None
-            self._cooling_sample_time = None
+            self._cooling_sample.reset()
             self._last_learning_status = "Warte auf stabile Abkühlphase im Absenkbetrieb"
             return
 
-        if (
-            self._cooling_sample_temperature is None
-            or self._cooling_sample_time is None
-        ):
-            self._cooling_sample_temperature = room_temperature
-            self._cooling_sample_time = now
+        outcome, observed_rate = self._cooling_sample.observe(
+            room_temperature,
+            now,
+            direction=-1,
+            min_seconds=MIN_COOLING_SAMPLE_SECONDS,
+            max_seconds=MAX_COOLING_SAMPLE_SECONDS,
+            min_delta=MIN_SAMPLE_DELTA,
+            max_delta=MAX_COOLING_SAMPLE_DELTA,
+        )
+        if outcome == "started":
             self._last_learning_type = "cooling"
             self._last_learning_status = "Sammle Abkühlmessung"
             return
-
-        elapsed = (now - self._cooling_sample_time).total_seconds()
-        if elapsed < MIN_COOLING_SAMPLE_SECONDS:
+        if outcome == "collecting":
             self._last_learning_status = "Sammle weitere Abkühldaten"
             return
-        baseline = self._cooling_sample_temperature
-        self._cooling_sample_temperature = room_temperature
-        self._cooling_sample_time = now
-        delta = room_temperature - baseline
-
-        if elapsed > MAX_COOLING_SAMPLE_SECONDS:
+        if outcome == "too_long":
             self._rejected_samples += 1
             self._last_learning_status = "Abkühlmessung verworfen: Messintervall zu lang"
             await self._save_learning()
             return
-        if not -2.0 <= delta <= -0.05:
+        if outcome == "implausible" or observed_rate is None:
             self._rejected_samples += 1
             self._last_learning_status = "Abkühlmessung verworfen: Temperaturänderung unplausibel"
             await self._save_learning()
             return
 
-        observed_rate = -delta / (elapsed / 3600)
         self._last_observed_cooling_rate = round(observed_rate, 3)
         if not MIN_LEARNED_COOLING_RATE <= observed_rate <= MAX_LEARNED_COOLING_RATE:
             self._rejected_samples += 1
@@ -1035,6 +1056,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         next_event = self._parse_next_event(schedule_state)
+        if self._preheat_event is not None and self._preheat_event != next_event:
+            self._preheat_event = None
         forecast_items = await self._async_get_forecast_items()
         forecast_condition = select_forecast_condition(
             forecast_items, next_event, dt_util.now()
@@ -1057,7 +1080,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
             window_open=window_open,
             present=present,
+            preheat_started=self._preheat_event is not None,
         )
+        if decision.mode == "preheat":
+            self._preheat_event = next_event
 
         self._update_pending_forecast(
             now=dt_util.utcnow(),
@@ -1068,17 +1094,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             window_open=window_open,
         )
 
-        target_temperature = decision.target_temperature
-        # Respect the temperature limits advertised by the thermostat.
-        try:
-            min_temp = float(climate_state.attributes.get("min_temp", target_temperature))
-            max_temp = float(climate_state.attributes.get("max_temp", target_temperature))
-            if min_temp <= max_temp:
-                target_temperature = max(
-                    min_temp, min(target_temperature, max_temp)
-                )
-        except (TypeError, ValueError):
-            pass
+        target_temperature = self._fit_to_thermostat(
+            decision.target_temperature, climate_state
+        )
 
         result: dict[str, Any] = {
             "status": decision.status,
@@ -1118,7 +1136,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 current_setpoint_value = float(current_setpoint)
             except (TypeError, ValueError):
                 current_setpoint_value = None
-            if (
+            now = dt_util.utcnow()
+            recently_written = (
+                self._last_written_target == round(target_temperature, 1)
+                and self._last_written_at is not None
+                and (now - self._last_written_at).total_seconds()
+                < SETPOINT_RESEND_SECONDS
+            )
+            if not recently_written and (
                 current_setpoint_value is None
                 or abs(current_setpoint_value - target_temperature) >= 0.2
             ):
@@ -1145,5 +1170,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         "Thermostat konnte Sollwert nicht übernehmen – "
                         "erneuter Versuch beim nächsten Update"
                     )
+                else:
+                    self._last_written_target = round(target_temperature, 1)
+                    self._last_written_at = now
+        else:
+            self._last_written_target = None
+            self._last_written_at = None
 
         return result

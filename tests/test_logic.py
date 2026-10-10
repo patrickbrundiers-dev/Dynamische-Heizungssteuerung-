@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 from custom_components.dynamic_heating.logic import (
+    TrendSample,
     calculate_lead_minutes,
     decide_heating_target,
 )
@@ -202,3 +203,82 @@ def test_select_forecast_condition_chooses_nearest_hour_and_rejects_stale() -> N
     ]
     assert select_forecast_condition(forecast, now + timedelta(minutes=55), now) == "cloudy"
     assert select_forecast_condition(forecast, now + timedelta(hours=6), now) is None
+
+
+def _near_comfort_decision(*, preheat_started: bool):
+    now = datetime.now(UTC)
+    return decide_heating_target(
+        now=now,
+        schedule_active=False,
+        next_event=now + timedelta(minutes=10),
+        room_temperature=20.9,
+        outdoor_temperature=5.0,
+        comfort_temperature=21.0,
+        eco_temperature=18.0,
+        heating_rate_c_per_hour=1.0,
+        max_preheat_minutes=120,
+        preheat_started=preheat_started,
+    )
+
+
+def test_started_preheat_holds_comfort_until_the_event() -> None:
+    """A warm room must not drop back to eco between preheat and comfort."""
+    assert _near_comfort_decision(preheat_started=False).mode == "eco"
+    held = _near_comfort_decision(preheat_started=True)
+    assert held.mode == "preheat"
+    assert held.target_temperature == 21.0
+
+
+def _observe_heating(sample: TrendSample, temperature: float, now: datetime):
+    return sample.observe(
+        temperature,
+        now,
+        direction=1,
+        min_seconds=300,
+        max_seconds=21600,
+        min_delta=0.2,
+        max_delta=2.5,
+    )
+
+
+def test_trend_sample_is_not_biased_by_coarse_sensor_steps() -> None:
+    """0.5 °C/h with 0.1 °C sensor steps, polled every 10 s, reads as 0.5 °C/h."""
+    start = datetime(2026, 1, 1, 6, 0, tzinfo=UTC)
+    sample = TrendSample()
+    results = []
+    # The run starts mid-step: the true temperature is 18.04 and reads 18.0.
+    for second in range(0, 3 * 3600, 10):
+        true_temperature = 18.04 + 0.5 * second / 3600
+        reading = round(true_temperature, 1)
+        outcome, rate = _observe_heating(
+            sample, reading, start + timedelta(seconds=second)
+        )
+        if outcome == "complete":
+            results.append(rate)
+
+    assert results
+    for rate in results:
+        assert abs(rate - 0.5) < 0.05
+
+
+def test_trend_sample_rejects_jumps_and_overlong_windows() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    sample = TrendSample()
+    assert _observe_heating(sample, 18.0, start)[0] == "started"
+    assert _observe_heating(sample, 18.1, start + timedelta(seconds=10))[0] == "started"
+    assert _observe_heating(sample, 20.7, start + timedelta(seconds=20))[0] == "implausible"
+
+    sample.reset()
+    _observe_heating(sample, 18.0, start)
+    _observe_heating(sample, 18.1, start + timedelta(seconds=10))
+    assert _observe_heating(sample, 18.1, start + timedelta(hours=7))[0] == "too_long"
+
+
+def test_trend_sample_restarts_when_the_room_moves_the_wrong_way() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    sample = TrendSample()
+    _observe_heating(sample, 18.0, start)
+    _observe_heating(sample, 18.1, start + timedelta(seconds=10))
+    outcome, _ = _observe_heating(sample, 17.9, start + timedelta(minutes=10))
+    assert outcome == "collecting"
+    assert sample.temperature == 17.9

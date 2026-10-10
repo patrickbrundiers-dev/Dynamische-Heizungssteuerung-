@@ -280,8 +280,7 @@ async def test_cooling_rate_is_learned_from_a_stable_setback_period(
     climate_state = hass.states.get("climate.living_room")
 
     # Replace the first setup sample to use deterministic test timestamps.
-    coordinator._cooling_sample_temperature = None
-    coordinator._cooling_sample_time = None
+    coordinator._cooling_sample.reset()
     start = dt_util.utcnow()
 
     with patch(
@@ -297,12 +296,26 @@ async def test_cooling_rate_is_learned_from_a_stable_setback_period(
             eco_temperature=18.0,
         )
 
+    # The window starts at the first change of the sensor reading.
     with patch(
         "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
-        return_value=start + timedelta(minutes=30),
+        return_value=start + timedelta(seconds=10),
     ):
         await coordinator._learn(
-            18.7,
+            18.9,
+            climate_state,
+            window_open=False,
+            present=True,
+            schedule_active=False,
+            eco_temperature=18.0,
+        )
+
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=10, minutes=30),
+    ):
+        await coordinator._learn(
+            18.6,
             climate_state,
             window_open=False,
             present=True,
@@ -728,10 +741,18 @@ async def test_implausible_heating_sample_is_rejected_not_clamped(
         )
     with patch(
         "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
-        return_value=start + timedelta(seconds=300),
+        return_value=start + timedelta(seconds=10),
     ):
         await coordinator._learn(
-            20.6, climate, window_open=False, present=True,
+            18.1, climate, window_open=False, present=True,
+            schedule_active=False, eco_temperature=18.0
+        )
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=310),
+    ):
+        await coordinator._learn(
+            20.7, climate, window_open=False, present=True,
             schedule_active=False, eco_temperature=18.0
         )
 
@@ -771,10 +792,18 @@ async def test_plausible_heating_sample_updates_model_and_quality_counters(
         )
     with patch(
         "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
-        return_value=start + timedelta(hours=1),
+        return_value=start + timedelta(seconds=10),
     ):
         await coordinator._learn(
-            18.5, climate, window_open=False, present=True,
+            18.1, climate, window_open=False, present=True,
+            schedule_active=False, eco_temperature=18.0
+        )
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(hours=1, seconds=10),
+    ):
+        await coordinator._learn(
+            18.6, climate, window_open=False, present=True,
             schedule_active=False, eco_temperature=18.0
         )
 
@@ -913,3 +942,49 @@ async def test_geofence_stationary_direction_resets_approach_timer(
     assert coordinator.data["present"] is False
     assert coordinator.data["proximity_approach_attempts"] == 2
 
+
+@pytest.mark.asyncio
+async def test_setpoint_is_rounded_to_thermostat_step_and_not_resent(
+    hass, enable_custom_integrations
+):
+    """A 0.5 °C thermostat gets a value it can store, and only once."""
+    _set_up_test_entities(hass)
+    climate_state = hass.states.get("climate.living_room")
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {**climate_state.attributes, "target_temp_step": 0.5},
+    )
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config[CONF_COMFORT_TEMPERATURE] = 21.2
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        # The thermostat has not reported the new setpoint yet.
+        await coordinator.async_refresh()
+
+    assert coordinator.data["target_temperature"] == 21.0
+    assert calls == [
+        (
+            "climate",
+            "set_temperature",
+            {"entity_id": "climate.living_room", "temperature": 21.0},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_started_preheat_continues_when_room_warms_up(
+    hass, enable_custom_integrations
+):
+    """Preheating keeps the comfort target until the schedule starts."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    assert coordinator.data["mode"] == "preheat"
+
+    hass.states.async_set("sensor.living_room_temperature", "20.9")
+    await coordinator.async_refresh()
+
+    assert coordinator.data["mode"] == "preheat"
+    assert coordinator.data["target_temperature"] == 21.0
