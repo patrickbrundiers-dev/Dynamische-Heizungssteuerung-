@@ -67,3 +67,7 @@ FORECAST_EVALUATION_GRACE_SECONDS: Final = 1800
 # A setpoint that was written successfully is not re-sent for this long, even if
 # the thermostat reports a slightly different value (rounding, slow devices).
 SETPOINT_RESEND_SECONDS: Final = 300
+
+# Thermostats without hvac_action count as heating when the setpoint is at least
+# this far above the room temperature (used for learning only).
+INFERRED_HEATING_MARGIN: Final = 0.5

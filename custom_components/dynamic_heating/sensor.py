@@ -313,6 +313,7 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "solar_adjustment_minutes",
             "decision_status",
             "control_error",
+            "manual_override",
             "heating_samples",
             "cooling_samples",
             "rejected_samples",

@@ -988,3 +988,99 @@ async def test_started_preheat_continues_when_room_warms_up(
 
     assert coordinator.data["mode"] == "preheat"
     assert coordinator.data["target_temperature"] == 21.0
+
+
+def _set_climate(hass, state="heat", **attributes):
+    current = hass.states.get("climate.living_room")
+    hass.states.async_set(
+        "climate.living_room", state, {**current.attributes, **attributes}
+    )
+
+
+@pytest.mark.asyncio
+async def test_manual_setpoint_change_pauses_control_until_mode_changes(
+    hass, enable_custom_integrations
+):
+    """A setpoint changed at the thermostat is kept until the decision changes."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        assert [call[2]["temperature"] for call in calls] == [21.0]
+
+        # The thermostat confirms the written value, then someone turns it down.
+        _set_climate(hass, temperature=21.0)
+        await coordinator.async_refresh()
+        _set_climate(hass, temperature=19.5)
+        await coordinator.async_refresh()
+
+        assert coordinator.data["manual_override"] is True
+        assert "Manuell übersteuert" in coordinator.data["status"]
+        assert len(calls) == 1
+
+        # Opening the window changes the decision and control resumes.
+        hass.states.async_set("binary_sensor.living_room_window", "on")
+        await coordinator.async_refresh()
+
+    assert coordinator.data["manual_override"] is False
+    assert [call[2]["temperature"] for call in calls] == [21.0, 18.0]
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_setpoint_is_not_taken_as_manual_change(
+    hass, enable_custom_integrations
+):
+    """A thermostat still reporting the old value right after a write is no override."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        await coordinator.async_refresh()
+
+    assert coordinator.data["manual_override"] is False
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_switched_off_thermostat_is_not_written(
+    hass, enable_custom_integrations
+):
+    """A thermostat turned off by the user keeps its state."""
+    _set_up_test_entities(hass)
+    _set_climate(hass, state="off")
+    _, coordinator = await _setup_integration(hass)
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert calls == []
+    assert "ausgeschaltet" in coordinator.data["status"]
+
+
+@pytest.mark.asyncio
+async def test_heating_is_inferred_without_hvac_action(
+    hass, enable_custom_integrations
+):
+    """Thermostats without hvac_action still provide heating samples."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    hass.states.async_set(
+        "climate.living_room", "heat", {"temperature": 21.0, "min_temp": 7}
+    )
+    climate = hass.states.get("climate.living_room")
+
+    assert coordinator._is_heating(climate, 18.0, 21.0) is True
+    assert coordinator._is_heating(climate, 20.8, 21.0) is False
+    _set_climate(hass, hvac_action="idle")
+    assert coordinator._is_heating(
+        hass.states.get("climate.living_room"), 18.0, 21.0
+    ) is False
+    hass.states.async_set("climate.living_room", "off", {"temperature": 21.0})
+    assert coordinator._is_heating(
+        hass.states.get("climate.living_room"), 18.0, 21.0
+    ) is False

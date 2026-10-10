@@ -49,6 +49,7 @@ from .const import (
     MAX_HEATING_SAMPLE_DELTA,
     MAX_COOLING_SAMPLE_DELTA,
     MIN_SAMPLE_DELTA,
+    INFERRED_HEATING_MARGIN,
     SETPOINT_RESEND_SECONDS,
     FORECAST_EVALUATION_GRACE_SECONDS,
     DEFAULT_PRESENCE_ON_DURATION,
@@ -107,6 +108,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # update to thermostats that store a slightly different value.
         self._last_written_target: float | None = None
         self._last_written_at: datetime | None = None
+        # True once the thermostat reported the setpoint we wrote; only then
+        # can a different setpoint be attributed to a manual change.
+        self._setpoint_confirmed = False
+        # (mode, target) during which a manual setpoint change is respected.
+        self._manual_override: tuple[str, float] | None = None
         self._forecast_items: list[dict[str, Any]] = []
         self._forecast_fetched_at: datetime | None = None
         self._proximity_approaching_since: datetime | None = None
@@ -277,6 +283,29 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             target = round(round(target / step) * step, 2)
         return max(min_temp, min(target, max_temp))
 
+    @staticmethod
+    def _is_heating(
+        climate_state: State | None,
+        room_temperature: float,
+        setpoint: float | None,
+    ) -> bool:
+        """Return whether the thermostat is heating.
+
+        Some thermostats do not report ``hvac_action``. For those, a heating
+        mode with a setpoint clearly above the room counts as a heating phase;
+        the margin keeps the valve's own control band out of the measurement.
+        """
+        if climate_state is None:
+            return False
+        action = climate_state.attributes.get("hvac_action")
+        if action is not None:
+            return action == "heating"
+        return (
+            climate_state.state in ("heat", "heat_cool", "auto")
+            and setpoint is not None
+            and setpoint - room_temperature >= INFERRED_HEATING_MARGIN
+        )
+
     def _state(self, key: str) -> State | None:
         entity_id = self.config.get(key)
         return self.hass.states.get(entity_id) if entity_id else None
@@ -410,7 +439,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Learn from plausible temperature trends and reject outlier samples."""
         attributes = climate_state.attributes if climate_state else {}
         setpoint_value = self._stored_float(attributes.get("temperature"))
-        is_heating = attributes.get("hvac_action") == "heating"
+        is_heating = self._is_heating(climate_state, room_temperature, setpoint_value)
         now = dt_util.utcnow()
 
         if window_open or not present:
@@ -983,6 +1012,39 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "Anwesenheit erkannt" if present else "Keine Anwesenheit – abgesenkt"
         )
 
+    def _forget_written_setpoint(self) -> None:
+        self._last_written_target = None
+        self._last_written_at = None
+        self._setpoint_confirmed = False
+
+    def _track_manual_override(
+        self,
+        current_setpoint: float | None,
+        override_key: tuple[str, float],
+    ) -> None:
+        """Detect a setpoint changed at the thermostat and pause until the
+        decision (mode or target) changes."""
+        if self._manual_override is not None:
+            if self._manual_override == override_key:
+                return
+            # The decision moved on: resume control and write the new target.
+            self._manual_override = None
+            self._forget_written_setpoint()
+            return
+
+        written = self._last_written_target
+        if written is None or current_setpoint is None:
+            return
+        if abs(current_setpoint - written) < 0.2:
+            self._setpoint_confirmed = True
+        elif self._setpoint_confirmed:
+            self._manual_override = override_key
+            _LOGGER.info(
+                "Setpoint of %s changed manually to %.1f; pausing control",
+                self.config[CONF_CLIMATE_ENTITY],
+                current_setpoint,
+            )
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Read Home Assistant states, calculate a target and optionally apply it."""
         room_temperature = _as_float(self._state(CONF_ROOM_TEMPERATURE_ENTITY))
@@ -1119,6 +1181,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "enabled": self.enabled,
             "decision_status": decision.status,
             "control_error": False,
+            "manual_override": False,
             "proximity_status": self._proximity_status,
             "proximity_distance_m": self._proximity_distance_m,
             "proximity_direction": self._proximity_direction,
@@ -1137,6 +1200,20 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except (TypeError, ValueError):
                 current_setpoint_value = None
             now = dt_util.utcnow()
+            override_key = (decision.mode, round(target_temperature, 1))
+            self._track_manual_override(current_setpoint_value, override_key)
+            if climate_state.state == "off":
+                result["status"] = (
+                    "Thermostat ausgeschaltet – keine Sollwertänderung"
+                )
+                return result
+            if self._manual_override is not None:
+                result["manual_override"] = True
+                result["status"] = (
+                    "Manuell übersteuert – Regelung pausiert bis zum "
+                    "nächsten Moduswechsel"
+                )
+                return result
             recently_written = (
                 self._last_written_target == round(target_temperature, 1)
                 and self._last_written_at is not None
@@ -1173,8 +1250,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 else:
                     self._last_written_target = round(target_temperature, 1)
                     self._last_written_at = now
+                    self._setpoint_confirmed = False
         else:
-            self._last_written_target = None
-            self._last_written_at = None
+            self._forget_written_setpoint()
+            self._manual_override = None
 
         return result
