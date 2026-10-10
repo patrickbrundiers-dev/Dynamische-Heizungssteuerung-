@@ -20,6 +20,7 @@ from .const import (
     CONF_ECO_TEMPERATURE,
     CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_HEATING_LIMIT_TEMPERATURE,
+    CONF_HEATING_SEASON_ENTITY,
     CONF_WINDOW_CLOSE_DELAY,
     CONF_WINDOW_OPEN_DELAY,
     CONF_WINDOW_TEMPERATURE,
@@ -1145,6 +1146,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         away_temperature = None if away_value is None else float(away_value)
         window_value = self.config.get(CONF_WINDOW_TEMPERATURE)
         frost_value = self.config.get(CONF_FROST_PROTECTION_TEMPERATURE)
+        heating_season = True
+        season_id = self.config.get(CONF_HEATING_SEASON_ENTITY)
+        if season_id:
+            season_state = self.hass.states.get(season_id)
+            # An unknown season keeps heating; frost risk outweighs savings.
+            if self._valid(season_state):
+                heating_season = season_state.state == "on"
+        try:
+            off_temperature = float(climate_state.attributes.get("min_temp"))
+        except (TypeError, ValueError):
+            off_temperature = None
         schedule_active = schedule_state.state == "on"
         limit_value = self.config.get(CONF_HEATING_LIMIT_TEMPERATURE)
         self._heating_limit_reached = evaluate_heating_limit(
@@ -1203,6 +1215,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             frost_protection_temperature=(
                 None if frost_value is None else float(frost_value)
             ),
+            heating_season=heating_season,
+            off_temperature=off_temperature,
         )
         if decision.mode == "preheat":
             self._preheat_event = next_event
@@ -1237,6 +1251,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "next_event": next_event.isoformat() if next_event else None,
             "window_open": window_open,
             "window_contact_open": window_contact_open,
+            "heating_season": heating_season,
             "heating_limit_reached": self._heating_limit_reached,
             "present": present,
             "presence_status": presence_status,

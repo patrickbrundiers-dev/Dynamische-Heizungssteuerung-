@@ -115,7 +115,7 @@ async def _finish_editor_flow(
 
     env_keys = (
         "window_entity", "outdoor_temperature_entity", "weather_entity",
-        "heating_limit_temperature", "window_temperature",
+        "heating_limit_temperature", "window_temperature", "heating_season_entity",
     )
     env_input = {key: values[key] for key in env_keys if values.get(key)}
     for key, value in (environment or {}).items():
@@ -456,3 +456,22 @@ async def test_editor_rejects_window_temperature_above_comfort(
     )
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "window_must_be_below_comfort"}
+
+
+@pytest.mark.asyncio
+async def test_editor_saves_and_clears_heating_season_entity(
+    hass, enable_custom_integrations
+):
+    """The winter-mode entity is optional and can be removed again."""
+    entry = _mock_room(hass)
+    result = await _finish_editor_flow(
+        hass, entry, environment={"heating_season_entity": "binary_sensor.wintermodus"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["heating_season_entity"] == "binary_sensor.wintermodus"
+
+    result = await _finish_editor_flow(
+        hass, entry, environment={"heating_season_entity": None}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["heating_season_entity"] is None

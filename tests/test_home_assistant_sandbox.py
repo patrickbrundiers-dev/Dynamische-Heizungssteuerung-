@@ -1230,3 +1230,33 @@ async def test_frost_protection_floor_is_written(hass, enable_custom_integration
     assert coordinator.data["mode"] == "window"
     assert coordinator.data["target_temperature"] == 12.0
     assert [call[2]["temperature"] for call in calls] == [12.0]
+
+
+@pytest.mark.asyncio
+async def test_heating_season_off_stops_heating_and_unknown_keeps_it(
+    hass, enable_custom_integrations
+):
+    """Winter mode off writes the thermostat minimum; unavailable keeps heating."""
+    _set_up_test_entities(hass)
+    hass.states.async_set(
+        "schedule.living_room_comfort",
+        "on",
+        {"next_event": (dt_util.now() + timedelta(hours=2)).isoformat()},
+    )
+    hass.states.async_set("binary_sensor.winter_mode", "off")
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["heating_season_entity"] = "binary_sensor.winter_mode"
+    min_temp = hass.states.get("climate.living_room").attributes.get("min_temp", 7)
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        assert coordinator.data["mode"] == "season_off"
+        assert coordinator.data["heating_season"] is False
+
+        hass.states.async_set("binary_sensor.winter_mode", "unavailable")
+        await coordinator.async_refresh()
+
+    assert coordinator.data["mode"] == "comfort"
+    assert coordinator.data["heating_season"] is True
+    assert [call[2]["temperature"] for call in calls] == [float(min_temp), 21.0]

@@ -432,3 +432,18 @@ def test_window_debounce_waits_for_open_and_close_delays() -> None:
     # Without delays the contact is followed directly.
     assert evaluate_window_open(True, 0, False, 0, 0)
     assert not evaluate_window_open(False, 0, True, 0, 0)
+
+
+def test_heating_season_off_uses_thermostat_minimum_or_frost_floor() -> None:
+    off = _decide(schedule_active=True, heating_season=False, off_temperature=5.0)
+    assert off.mode == "season_off"
+    assert off.target_temperature == 5.0
+
+    frost = _decide(
+        schedule_active=True,
+        heating_season=False,
+        off_temperature=5.0,
+        frost_protection_temperature=12.0,
+    )
+    assert frost.mode == "season_off"
+    assert frost.target_temperature == 12.0

@@ -32,7 +32,8 @@
           "window_open_delay": "Fenster: Reaktionszeit beim Öffnen",
           "window_close_delay": "Fenster: Wartezeit nach dem Schließen",
           "window_temperature": "Temperatur bei offenem Fenster (°C, optional)",
-          "frost_protection_temperature": "Frostschutztemperatur (°C, optional)"
+          "frost_protection_temperature": "Frostschutztemperatur (°C, optional)",
+          "heating_season_entity": "Heizperiode / Wintermodus (optional)"
         },
         "data_description": {
           "person_entities": "Komfortheizung ist erlaubt, wenn mindestens eine ausgewählte Person oder ein Geräte-Tracker zu Hause ist. Geräte-Tracker mit einfachem Zuhause/Nicht-zuhause-Status werden empfohlen.",
@@ -53,7 +54,8 @@
           "window_open_delay": "Erst wenn das Fenster so lange offen ist, wird abgesenkt. Kurzes Öffnen oder Durchzug ändert den Sollwert nicht. 0 = sofort.",
           "window_close_delay": "Nach dem Schließen bleibt die Fensterabsenkung so lange bestehen, damit sich die Raumluft beruhigt. 0 = sofort.",
           "window_temperature": "Eigener Sollwert bei offenem Fenster, z. B. 15 °C. Leer lassen, um wie bisher die Absenk- bzw. Abwesenheitstemperatur zu verwenden. Muss unter der Komforttemperatur liegen.",
-          "frost_protection_temperature": "Kein Sollwert geht unter diesen Wert, auch nicht bei offenem Fenster oder Abwesenheit, z. B. 12 °C. Leer lassen zum Abschalten. Muss unter der Komforttemperatur liegen."
+          "frost_protection_temperature": "Kein Sollwert geht unter diesen Wert, auch nicht bei offenem Fenster oder Abwesenheit, z. B. 12 °C. Leer lassen zum Abschalten. Muss unter der Komforttemperatur liegen.",
+          "heating_season_entity": "Schalter oder Sensor für die Heizperiode, z. B. ein Wintermodus. Ist er AUS, wird nicht geheizt: der Sollwert geht auf die Frostschutztemperatur oder, ohne sie, auf das Minimum des Thermostats. Ist die Entität nicht verfügbar, wird normal weitergeheizt. Leer lassen zum Abschalten."
         }
       }
     },
@@ -145,7 +147,8 @@
           "heating_limit_temperature": "Heizgrenze Außentemperatur (°C, optional)",
           "window_open_delay": "Fenster: Reaktionszeit beim Öffnen",
           "window_close_delay": "Fenster: Wartezeit nach dem Schließen",
-          "window_temperature": "Temperatur bei offenem Fenster (°C, optional)"
+          "window_temperature": "Temperatur bei offenem Fenster (°C, optional)",
+          "heating_season_entity": "Heizperiode / Wintermodus (optional)"
         },
         "data_description": {
           "window_entity": "EIN erzwingt Absenkung. Ist ein ausgewählter Fensterkontakt nicht verfügbar, wird kein neuer Sollwert geschrieben.",
@@ -154,7 +157,8 @@
           "heating_limit_temperature": "Ab dieser Außentemperatur bleibt der Raum auf der Absenktemperatur, auch während Komfortzeiten; Vorheizen entfällt. Erst wenn es 1 °C kühler ist, wird wieder normal geheizt. Nutzt den Außensensor, sonst die Temperatur der Wetter-Entität. Leer lassen zum Abschalten.",
           "window_open_delay": "Erst wenn das Fenster so lange offen ist, wird abgesenkt. Kurzes Öffnen oder Durchzug ändert den Sollwert nicht. 0 = sofort.",
           "window_close_delay": "Nach dem Schließen bleibt die Fensterabsenkung so lange bestehen, damit sich die Raumluft beruhigt. 0 = sofort.",
-          "window_temperature": "Eigener Sollwert bei offenem Fenster, z. B. 15 °C. Leer lassen, um wie bisher die Absenk- bzw. Abwesenheitstemperatur zu verwenden. Muss unter der Komforttemperatur liegen."
+          "window_temperature": "Eigener Sollwert bei offenem Fenster, z. B. 15 °C. Leer lassen, um wie bisher die Absenk- bzw. Abwesenheitstemperatur zu verwenden. Muss unter der Komforttemperatur liegen.",
+          "heating_season_entity": "Schalter oder Sensor für die Heizperiode, z. B. ein Wintermodus. Ist er AUS, wird nicht geheizt: der Sollwert geht auf die Frostschutztemperatur oder, ohne sie, auf das Minimum des Thermostats. Ist die Entität nicht verfügbar, wird normal weitergeheizt. Leer lassen zum Abschalten."
         }
       }
     },
