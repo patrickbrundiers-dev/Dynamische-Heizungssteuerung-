@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from custom_components.dynamic_heating.logic import (
     TrendSample,
     calculate_lead_minutes,
+    calibration_offset,
     decide_heating_target,
     evaluate_heating_limit,
     evaluate_window_open,
@@ -447,3 +448,9 @@ def test_heating_season_off_uses_thermostat_minimum_or_frost_floor() -> None:
     )
     assert frost.mode == "season_off"
     assert frost.target_temperature == 12.0
+
+
+def test_calibration_offset_follows_valve_error_and_is_bounded() -> None:
+    assert calibration_offset(20.0, 23.0, 10.0) == 3.0
+    assert calibration_offset(21.0, 20.0, 10.0) == -1.0
+    assert calibration_offset(10.0, 40.0, 10.0) == 10.0

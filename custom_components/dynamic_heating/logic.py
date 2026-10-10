@@ -425,3 +425,17 @@ def evaluate_window_open(
     if contact_open:
         return previously_open or seconds_since_change >= open_delay_seconds
     return previously_open and seconds_since_change < close_delay_seconds
+
+
+def calibration_offset(
+    room_temperature: float,
+    thermostat_temperature: float,
+    max_offset: float,
+) -> float:
+    """Offset that makes a thermostat regulate on the room sensor.
+
+    A valve that reads 23 °C near the radiator while the room has 20 °C
+    closes 3 °C too early, so its setpoint is raised by that difference.
+    """
+    offset = thermostat_temperature - room_temperature
+    return max(-max_offset, min(offset, max_offset))

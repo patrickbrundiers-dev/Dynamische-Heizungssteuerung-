@@ -88,6 +88,15 @@ FORECAST_EVALUATION_GRACE_SECONDS: Final = 1800
 # the thermostat reports a slightly different value (rounding, slow devices).
 SETPOINT_RESEND_SECONDS: Final = 300
 
+# Setpoint calibration with the room sensor (as Better Thermostat's
+# target-temperature based calibration): the thermostat measures near the
+# radiator, so its setpoint is shifted by (thermostat - room) temperature.
+CONF_CALIBRATION: Final = "calibration"
+# The offset is refreshed at most this often so the setpoint does not follow
+# every small reading of the valve's own sensor.
+CALIBRATION_INTERVAL_SECONDS: Final = 600
+MAX_CALIBRATION_OFFSET: Final = 10.0
+
 # Thermostats without hvac_action count as heating when the setpoint is at least
 # this far above the room temperature (used for learning only).
 INFERRED_HEATING_MARGIN: Final = 0.5

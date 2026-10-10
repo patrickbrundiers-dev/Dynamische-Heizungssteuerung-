@@ -16,7 +16,9 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_AWAY_TEMPERATURE,
+    CALIBRATION_INTERVAL_SECONDS,
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
+    CONF_CALIBRATION,
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
     CONF_ECO_TEMPERATURE,
@@ -62,6 +64,7 @@ from .const import (
     DEFAULT_WINDOW_CLOSE_DELAY,
     DEFAULT_WINDOW_OPEN_DELAY,
     HEATING_LIMIT_HYSTERESIS,
+    MAX_CALIBRATION_OFFSET,
     SETPOINT_RESEND_SECONDS,
     FORECAST_EVALUATION_GRACE_SECONDS,
     DEFAULT_PRESENCE_ON_DURATION,
@@ -78,6 +81,7 @@ from .const import (
 )
 from .logic import (
     TrendSample,
+    calibration_offset,
     decide_heating_target,
     evaluate_heating_limit,
     evaluate_window_open,
@@ -141,6 +145,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # re-sending it every update to thermostats that store a slightly
         # different value and to detect manual changes.
         self._written: dict[str, _WrittenSetpoint] = {}
+        # Per thermostat: calibration offset and when it was computed.
+        self._calibration: dict[str, tuple[float, datetime]] = {}
         # (mode, target) during which a manual setpoint change is respected.
         self._manual_override: tuple[str, float] | None = None
         self._forecast_items: list[dict[str, Any]] = []
@@ -1110,8 +1116,44 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._written[entity_id] = _WrittenSetpoint(target, now)
         return True
 
+    def _calibrated(
+        self,
+        entity_id: str,
+        state: State,
+        target: float,
+        room_temperature: float,
+        now: datetime,
+    ) -> float:
+        """Shift ``target`` by the valve's measurement error, if enabled."""
+        if not self.config.get(CONF_CALIBRATION):
+            return target
+        cached = self._calibration.get(entity_id)
+        if cached is None or (
+            (now - cached[1]).total_seconds() >= CALIBRATION_INTERVAL_SECONDS
+        ):
+            try:
+                valve_temperature = float(state.attributes.get("current_temperature"))
+            except (TypeError, ValueError):
+                valve_temperature = None
+            if valve_temperature is None or not math.isfinite(valve_temperature):
+                # Without the valve's reading, use the plain target.
+                self._calibration.pop(entity_id, None)
+                return target
+            cached = (
+                calibration_offset(
+                    room_temperature, valve_temperature, MAX_CALIBRATION_OFFSET
+                ),
+                now,
+            )
+            self._calibration[entity_id] = cached
+        return target + cached[0]
+
     async def _apply_target(
-        self, decision_mode: str, target: float, result: dict[str, Any]
+        self,
+        decision_mode: str,
+        target: float,
+        room_temperature: float,
+        result: dict[str, Any],
     ) -> None:
         """Write the decision to every thermostat of the room."""
         override_key = (decision_mode, round(target, 1))
@@ -1161,11 +1203,20 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         now = dt_util.utcnow()
         failed = False
+        # Outside the heating season the valve stays at its minimum.
+        calibrate = decision_mode != "season_off"
+        setpoints: dict[str, float] = {}
         for entity_id, state in active.items():
-            if not await self._write_setpoint(
-                entity_id, state, self._fit_to_thermostat(target, state), now
-            ):
+            setpoint = self._fit_to_thermostat(
+                self._calibrated(entity_id, state, target, room_temperature, now)
+                if calibrate
+                else target,
+                state,
+            )
+            setpoints[entity_id] = setpoint
+            if not await self._write_setpoint(entity_id, state, setpoint, now):
                 failed = True
+        result["thermostat_setpoints"] = setpoints
         if failed:
             result["control_error"] = True
             result["status"] = (
@@ -1366,10 +1417,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if self.enabled and decision.target_temperature is not None:
             await self._apply_target(
-                decision.mode, decision.target_temperature, result
+                decision.mode, decision.target_temperature, room_temperature, result
             )
         else:
             self._written.clear()
+            self._calibration.clear()
             self._manual_override = None
 
         return result
