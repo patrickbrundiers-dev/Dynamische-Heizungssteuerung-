@@ -37,7 +37,7 @@ Alternativ manuell:
 6. Im Schedule-Helfer alle gewünschten Komfort-Zeitfenster pro Wochentag konfigurieren. Komfort- und Absenktemperatur werden pro Regler eingestellt.
 7. Zuerst die Status-, Temperatur- und Prognosesensoren beobachten. Den Schalter **Regelung aktiv** erst einschalten, wenn die Prognose plausibel ist und AHC das Thermostat nicht mehr steuert.
 
-Die Regelung wird nach einem Home-Assistant-Neustart aus Sicherheitsgründen wieder deaktiviert und muss bewusst erneut eingeschaltet werden. Das ist beabsichtigt, damit ein Update oder Neustart nicht unbemerkt eine Regelung aktiviert.
+Eine neu eingerichtete Regelung startet ausgeschaltet und muss bewusst eingeschaltet werden. Ab Version 0.4.1 behält der Schalter danach seinen Zustand über Neustarts und Änderungen im Raum-Editor hinweg.
 
 ### Temperaturwerte und Lernmodell
 
@@ -216,3 +216,8 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 - Bei offenem Fenster oder manueller Übersteuerung wird die Wartung auf die nächste passende Stunde verschoben. Sie läuft nur bei eingeschalteter Regelung. Der Zeitpunkt der letzten Wartung wird gespeichert und übersteht Neustarts.
 - Der Statussensor zeigt während der Wartung „Ventilwartung – Ventile öffnen/schließen“ und das Attribut `valve_maintenance`.
 - Mit den Versionen 0.3.6 bis 0.4.0 kann die Integration die Aufgaben von Advanced Heating Control, Climate Group Helper und Better Thermostat übernehmen: Thermostatköpfe direkt als Haupt- und weitere Thermostate wählen, Kalibrierung und Ventilwartung einschalten. Vorher die alte Steuerung für diesen Raum abschalten, damit nicht zwei Regler dieselben Ventile stellen.
+
+## Version 0.4.1: Schalter „Regelung aktiv“ bleibt erhalten
+
+- Der Schalter **Regelung aktiv** behält seinen letzten Zustand über Home-Assistant-Neustarts, Updates und Änderungen im Raum-Editor. Vorher war er danach immer aus. Steuert die Integration die Ventile allein, wären sie sonst nach jedem Neustart auf dem zuletzt geschriebenen Sollwert stehen geblieben.
+- Neu eingerichtete Räume starten weiterhin ausgeschaltet.
