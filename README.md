@@ -190,3 +190,9 @@ Alle neuen Kalibrierungswerte sind aggregierte Kennzahlen. Die Integration speic
 - **Frostschutztemperatur:** Kein Sollwert geht unter diesen Wert, auch nicht bei offenem Fenster oder Abwesenheit, z. B. 12 °C. Der Status zeigt dann den Zusatz „(Frostschutz)“.
 
 Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur und Wetter**, der Frostschutz auf der Seite **Raum und Heizverhalten**. Der Statussensor zeigt mit `window_contact_open` den Rohzustand des Kontakts und mit `window_open` den entprellten Zustand, nach dem geregelt wird.
+
+## Version 0.3.7: Heizperiode / Wintermodus
+
+- **Heizperiode (optional):** Ein Schalter oder Sensor (z. B. `binary_sensor.wintermodus` oder ein `input_boolean`) legt fest, ob überhaupt geheizt wird. Ist er AUS, geht der Sollwert auf die Frostschutztemperatur oder, ohne sie, auf das Minimum des Thermostats; Status „Heizperiode aus – nicht geheizt“. Ist die Entität nicht verfügbar, wird normal weitergeheizt.
+- Die Heizperiode ergänzt die Heizgrenze: die Heizgrenze reagiert auf die aktuelle Außentemperatur, die Heizperiode schaltet saisonal ganz ab.
+- **Editor:** Optionale Entitäten wie Fensterkontakt, Außensensor, Wetter oder Gastmodus lassen sich jetzt im Raum-Editor wieder entfernen. Vorher wurde ein geleertes Feld beim Speichern mit dem alten Wert neu befüllt.

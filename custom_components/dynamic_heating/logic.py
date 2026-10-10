@@ -71,31 +71,43 @@ def decide_heating_target(
     heating_limit_reached: bool = False,
     window_temperature: float | None = None,
     frost_protection_temperature: float | None = None,
+    heating_season: bool = True,
+    off_temperature: float | None = None,
 ) -> HeatingDecision:
     """Return the target and reason for the current conditions.
 
     ``window_temperature`` replaces the setback target while a window is open.
     ``frost_protection_temperature`` is a floor no decision may go below.
+    Outside the ``heating_season`` the room is not heated: the target is
+    ``off_temperature`` (the thermostat minimum), raised by frost protection.
     """
-    decision = _decide(
-        now=now,
-        schedule_active=schedule_active,
-        next_event=next_event,
-        room_temperature=room_temperature,
-        outdoor_temperature=outdoor_temperature,
-        comfort_temperature=comfort_temperature,
-        eco_temperature=eco_temperature,
-        heating_rate_c_per_hour=heating_rate_c_per_hour,
-        max_preheat_minutes=max_preheat_minutes,
-        cooling_rate_c_per_hour=cooling_rate_c_per_hour,
-        forecast_condition=forecast_condition,
-        window_open=window_open,
-        present=present,
-        preheat_started=preheat_started,
-        away_temperature=away_temperature,
-        heating_limit_reached=heating_limit_reached,
-        window_temperature=window_temperature,
-    )
+    if not heating_season:
+        decision = HeatingDecision(
+            "Heizperiode aus – nicht geheizt",
+            "season_off",
+            off_temperature if off_temperature is not None else eco_temperature,
+            0,
+        )
+    else:
+        decision = _decide(
+            now=now,
+            schedule_active=schedule_active,
+            next_event=next_event,
+            room_temperature=room_temperature,
+            outdoor_temperature=outdoor_temperature,
+            comfort_temperature=comfort_temperature,
+            eco_temperature=eco_temperature,
+            heating_rate_c_per_hour=heating_rate_c_per_hour,
+            max_preheat_minutes=max_preheat_minutes,
+            cooling_rate_c_per_hour=cooling_rate_c_per_hour,
+            forecast_condition=forecast_condition,
+            window_open=window_open,
+            present=present,
+            preheat_started=preheat_started,
+            away_temperature=away_temperature,
+            heating_limit_reached=heating_limit_reached,
+            window_temperature=window_temperature,
+        )
     if (
         frost_protection_temperature is not None
         and decision.target_temperature is not None

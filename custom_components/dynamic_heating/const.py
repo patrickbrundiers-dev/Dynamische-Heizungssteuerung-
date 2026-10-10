@@ -29,6 +29,10 @@ DEFAULT_WINDOW_OPEN_DELAY: Final = 0
 DEFAULT_WINDOW_CLOSE_DELAY: Final = 0
 # Optional floor that no setpoint goes below (window, away, eco).
 CONF_FROST_PROTECTION_TEMPERATURE: Final = "frost_protection_temperature"
+# Optional on/off entity for the heating season (e.g. a winter-mode sensor).
+# While it is off the room is not heated: the setpoint goes to the frost
+# protection temperature, or the thermostat minimum without one.
+CONF_HEATING_SEASON_ENTITY: Final = "heating_season_entity"
 
 DEFAULT_COMFORT_TEMPERATURE: Final = 21.0
 DEFAULT_ECO_TEMPERATURE: Final = 18.0

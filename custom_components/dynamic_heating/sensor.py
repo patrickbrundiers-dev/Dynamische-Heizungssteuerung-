@@ -298,6 +298,7 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "next_event",
             "window_open",
             "window_contact_open",
+            "heating_season",
             "heating_limit_reached",
             "present",
             "presence_status",

@@ -16,6 +16,7 @@ from .const import (
     CONF_ECO_TEMPERATURE,
     CONF_FROST_PROTECTION_TEMPERATURE,
     CONF_HEATING_LIMIT_TEMPERATURE,
+    CONF_HEATING_SEASON_ENTITY,
     CONF_MAX_PREHEAT_MINUTES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PRESENCE_ENTITY,
@@ -211,6 +212,9 @@ def _user_schema() -> vol.Schema:
                 selector.EntitySelectorConfig(domain="weather")
             ),
             vol.Optional(CONF_HEATING_LIMIT_TEMPERATURE): _temperature_selector(10, 25),
+            vol.Optional(CONF_HEATING_SEASON_ENTITY): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])
+            ),
             vol.Required(
                 CONF_COMFORT_TEMPERATURE, default=DEFAULT_COMFORT_TEMPERATURE
             ): _temperature_selector(16, 25),
@@ -298,13 +302,14 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
 
     @staticmethod
     def _entity_field(key: str, domain: str | list[str], current: dict, *, multiple=False):
-        """Create an optional selector with a readable saved-value default."""
-        if current.get(key):
-            field = vol.Optional(key, default=current[key])
-        else:
-            field = vol.Optional(key)
+        """Create an optional selector.
+
+        Saved values are shown as suggested values, not as a schema default:
+        a default would refill a field the user cleared, so it could never be
+        removed again.
+        """
         return (
-            field,
+            vol.Optional(key),
             selector.EntitySelector(
                 selector.EntitySelectorConfig(
                     domain=domain,
@@ -405,6 +410,9 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         for item in (
             self._entity_field(CONF_OUTDOOR_TEMPERATURE_ENTITY, "sensor", current),
             self._entity_field(CONF_WEATHER_ENTITY, "weather", current),
+            self._entity_field(
+                CONF_HEATING_SEASON_ENTITY, ["binary_sensor", "input_boolean"], current
+            ),
         ):
             schema[item[0]] = item[1]
         schema[vol.Optional(CONF_HEATING_LIMIT_TEMPERATURE)] = _temperature_selector(10, 25)
@@ -533,7 +541,8 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             )
         if user_input is not None:
             current.update(user_input)
-            for key in (CONF_WINDOW_ENTITY, CONF_OUTDOOR_TEMPERATURE_ENTITY, CONF_WEATHER_ENTITY):
+            for key in (CONF_WINDOW_ENTITY, CONF_OUTDOOR_TEMPERATURE_ENTITY, CONF_WEATHER_ENTITY,
+                        CONF_HEATING_SEASON_ENTITY):
                 current[key] = user_input.get(key) or None
             for key in (CONF_WINDOW_OPEN_DELAY, CONF_WINDOW_CLOSE_DELAY):
                 current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
