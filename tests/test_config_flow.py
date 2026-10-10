@@ -66,6 +66,8 @@ async def _finish_editor_flow(
             "max_preheat_minutes",
         )
     }
+    if "calibration" in values:
+        first["calibration"] = values["calibration"]
     if values.get("additional_climate_entities"):
         first["additional_climate_entities"] = values["additional_climate_entities"]
     if values.get("frost_protection_temperature") is not None:
@@ -497,3 +499,12 @@ async def test_editor_saves_additional_thermostats_without_primary(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["additional_climate_entities"] == ["climate.living_room_2"]
+
+
+@pytest.mark.asyncio
+async def test_editor_saves_calibration_flag(hass, enable_custom_integrations):
+    """Calibration can be switched on in the room editor."""
+    entry = _mock_room(hass)
+    result = await _finish_editor_flow(hass, entry, basic={"calibration": True})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["calibration"] is True

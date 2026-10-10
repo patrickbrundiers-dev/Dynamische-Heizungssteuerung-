@@ -1331,3 +1331,67 @@ async def test_manual_change_on_additional_thermostat_pauses_room(
 
     assert coordinator.data["manual_override"] is True
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_calibration_shifts_each_valve_by_its_measurement_error(
+    hass, enable_custom_integrations
+):
+    """A valve reading warmer than the room gets a higher setpoint."""
+    _set_up_test_entities(hass)
+    hass.states.async_set(
+        "schedule.living_room_comfort",
+        "on",
+        {"next_event": (dt_util.now() + timedelta(hours=2)).isoformat()},
+    )
+    hass.states.async_set(
+        "climate.living_room_2",
+        "heat",
+        {"temperature": 18.0, "current_temperature": 21.0, "min_temp": 5,
+         "max_temp": 30, "target_temp_step": 0.5},
+    )
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_climate_entities"] = ["climate.living_room_2"]
+    coordinator.config["calibration"] = True
+    start = dt_util.utcnow()
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        with patch(
+            "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+            return_value=start,
+        ):
+            await coordinator.async_refresh()
+        # Room 18 °C, valve 21 °C: comfort 21 becomes 24 at that valve. The
+        # primary reports no own temperature and keeps the plain target.
+        assert coordinator.data["thermostat_setpoints"] == {
+            "climate.living_room": 21.0,
+            "climate.living_room_2": 24.0,
+        }
+
+        # A new valve reading inside the interval does not move the setpoint.
+        hass.states.async_set(
+            "climate.living_room_2",
+            "heat",
+            {"temperature": 24.0, "current_temperature": 22.0, "min_temp": 5,
+             "max_temp": 30, "target_temp_step": 0.5},
+        )
+        with patch(
+            "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+            return_value=start + timedelta(minutes=5),
+        ):
+            await coordinator.async_refresh()
+        assert coordinator.data["thermostat_setpoints"]["climate.living_room_2"] == 24.0
+
+        with patch(
+            "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+            return_value=start + timedelta(minutes=11),
+        ):
+            await coordinator.async_refresh()
+
+    assert coordinator.data["thermostat_setpoints"]["climate.living_room_2"] == 25.0
+    assert [
+        call[2]["temperature"]
+        for call in calls
+        if call[2]["entity_id"] == "climate.living_room_2"
+    ] == [24.0, 25.0]

@@ -202,3 +202,10 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 - **Weitere Thermostate im Raum (optional):** Auf der Seite **Raum und Heizverhalten** lassen sich zusätzliche Heizkörperthermostate desselben Raums auswählen. Alle erhalten denselben Sollwert wie das Hauptthermostat, so wie eine Climate-Gruppe im Sync-Modus „lock“. Damit kann die Integration die Thermostatköpfe direkt ansteuern statt über eine Gruppe.
 - Ist ein weiteres Thermostat nicht verfügbar, wird es übersprungen; der Status nennt die Anzahl, das Attribut `unavailable_thermostats` die Entitäten. Ist das Hauptthermostat nicht verfügbar, wird wie bisher gar nichts geschrieben.
 - Ein ausgeschaltetes Thermostat wird nicht beschrieben. Eine manuelle Sollwertänderung an irgendeinem Thermostat des Raums pausiert die Regelung bis zum nächsten Moduswechsel.
+
+## Version 0.3.9: Kalibrierung mit dem Raumfühler
+
+- **Sollwert mit Raumfühler kalibrieren (optional):** Heizkörperthermostate messen direkt am Heizkörper und schließen deshalb zu früh. Ist die Option auf der Seite **Raum und Heizverhalten** aktiv, wird der Sollwert jedes Thermostats um die Differenz zwischen seiner eigenen Temperatur (`current_temperature`) und dem Raumfühler verschoben, wie die zieltemperaturbasierte Kalibrierung von Better Thermostat. Beispiel: Raum 18 °C, Ventil 21 °C, Ziel 21 °C → das Ventil bekommt 24 °C.
+- Die Abweichung wird pro Thermostat höchstens alle 10 Minuten neu berechnet und auf ±10 °C sowie die Grenzen und Schrittweite des Thermostats begrenzt. Meldet ein Thermostat keine eigene Temperatur, erhält es den unkalibrierten Sollwert. Außerhalb der Heizperiode wird nicht kalibriert.
+- Der Statussensor zeigt im Attribut `thermostat_setpoints` den tatsächlich an jedes Thermostat gesendeten Sollwert.
+- **Wichtig:** Nicht einschalten, wenn das gewählte Thermostat bereits ein Better-Thermostat ist; sonst wird doppelt kalibriert.

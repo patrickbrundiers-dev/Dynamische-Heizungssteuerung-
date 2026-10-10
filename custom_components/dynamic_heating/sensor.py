@@ -299,6 +299,8 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "window_open",
             "window_contact_open",
             "heating_season",
+            "thermostat_setpoints",
+            "unavailable_thermostats",
             "heating_limit_reached",
             "present",
             "presence_status",
