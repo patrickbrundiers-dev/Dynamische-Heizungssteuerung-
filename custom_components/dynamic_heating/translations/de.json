@@ -36,7 +36,8 @@
           "heating_season_entity": "Heizperiode / Wintermodus (optional)",
           "additional_climate_entities": "Weitere Thermostate im Raum (optional)",
           "calibration": "Sollwert mit Raumfühler kalibrieren",
-          "valve_maintenance": "Wöchentliche Ventilwartung"
+          "valve_maintenance": "Wöchentliche Ventilwartung",
+          "hysteresis": "Hysterese der Kalibrierung"
         },
         "data_description": {
           "person_entities": "Komfortheizung ist erlaubt, wenn mindestens eine ausgewählte Person oder ein Geräte-Tracker zu Hause ist. Geräte-Tracker mit einfachem Zuhause/Nicht-zuhause-Status werden empfohlen.",
@@ -61,7 +62,8 @@
           "heating_season_entity": "Schalter oder Sensor für die Heizperiode, z. B. ein Wintermodus. Ist er AUS, wird nicht geheizt: der Sollwert geht auf die Frostschutztemperatur oder, ohne sie, auf das Minimum des Thermostats. Ist die Entität nicht verfügbar, wird normal weitergeheizt. Leer lassen zum Abschalten.",
           "additional_climate_entities": "Weitere Heizkörperthermostate desselben Raums. Sie erhalten denselben Sollwert wie das Hauptthermostat, so wie eine Climate-Gruppe. Ein nicht verfügbares weiteres Thermostat wird übersprungen; eine manuelle Änderung an einem davon pausiert die Regelung für den Raum.",
           "calibration": "Das Thermostat misst direkt am Heizkörper. Ist dies aktiv, wird sein Sollwert um die Differenz zwischen Thermostat- und Raumtemperatur verschoben (wie die zieltemperaturbasierte Kalibrierung von Better Thermostat), damit es nach dem Raumfühler regelt. Die Abweichung wird höchstens alle 10 Minuten neu berechnet. Nicht einschalten, wenn das gewählte Thermostat bereits ein Better-Thermostat ist.",
-          "valve_maintenance": "Gegen Verkalkung werden die Ventile einmal pro Woche gegen 11 Uhr für 5 Minuten ganz geöffnet und danach 5 Minuten ganz geschlossen (Maximal- bzw. Minimaltemperatur des Thermostats), wie bei Better Thermostat. Bei offenem Fenster oder manueller Übersteuerung wird sie verschoben. Nur bei aktiver Regelung."
+          "valve_maintenance": "Gegen Verkalkung werden die Ventile einmal pro Woche gegen 11 Uhr für 5 Minuten ganz geöffnet und danach 5 Minuten ganz geschlossen (Maximal- bzw. Minimaltemperatur des Thermostats), wie bei Better Thermostat. Bei offenem Fenster oder manueller Übersteuerung wird sie verschoben. Nur bei aktiver Regelung.",
+          "hysteresis": "Eine neu berechnete Kalibrierung wird nur übernommen, wenn sie sich um mindestens diesen Wert geändert hat. So werden die Thermostate nicht bei jeder kleinen Temperaturschwankung nachgestellt. 0 schaltet die Hysterese ab."
         }
       }
     },
@@ -90,7 +92,8 @@
           "frost_protection_temperature": "Frostschutztemperatur (°C, optional)",
           "additional_climate_entities": "Weitere Thermostate im Raum (optional)",
           "calibration": "Sollwert mit Raumfühler kalibrieren",
-          "valve_maintenance": "Wöchentliche Ventilwartung"
+          "valve_maintenance": "Wöchentliche Ventilwartung",
+          "hysteresis": "Hysterese der Kalibrierung"
         },
         "data_description": {
           "climate_entity": "Wähle die Climate-Entität, deren Sollwert dieser Raumregler verändern darf. Vermeide weitere Automationen, die gleichzeitig dasselbe Thermostat steuern.",
@@ -102,7 +105,8 @@
           "frost_protection_temperature": "Kein Sollwert geht unter diesen Wert, auch nicht bei offenem Fenster oder Abwesenheit, z. B. 12 °C. Leer lassen zum Abschalten. Muss unter der Komforttemperatur liegen.",
           "additional_climate_entities": "Weitere Heizkörperthermostate desselben Raums. Sie erhalten denselben Sollwert wie das Hauptthermostat, so wie eine Climate-Gruppe. Ein nicht verfügbares weiteres Thermostat wird übersprungen; eine manuelle Änderung an einem davon pausiert die Regelung für den Raum.",
           "calibration": "Das Thermostat misst direkt am Heizkörper. Ist dies aktiv, wird sein Sollwert um die Differenz zwischen Thermostat- und Raumtemperatur verschoben (wie die zieltemperaturbasierte Kalibrierung von Better Thermostat), damit es nach dem Raumfühler regelt. Die Abweichung wird höchstens alle 10 Minuten neu berechnet. Nicht einschalten, wenn das gewählte Thermostat bereits ein Better-Thermostat ist.",
-          "valve_maintenance": "Gegen Verkalkung werden die Ventile einmal pro Woche gegen 11 Uhr für 5 Minuten ganz geöffnet und danach 5 Minuten ganz geschlossen (Maximal- bzw. Minimaltemperatur des Thermostats), wie bei Better Thermostat. Bei offenem Fenster oder manueller Übersteuerung wird sie verschoben. Nur bei aktiver Regelung."
+          "valve_maintenance": "Gegen Verkalkung werden die Ventile einmal pro Woche gegen 11 Uhr für 5 Minuten ganz geöffnet und danach 5 Minuten ganz geschlossen (Maximal- bzw. Minimaltemperatur des Thermostats), wie bei Better Thermostat. Bei offenem Fenster oder manueller Übersteuerung wird sie verschoben. Nur bei aktiver Regelung.",
+          "hysteresis": "Eine neu berechnete Kalibrierung wird nur übernommen, wenn sie sich um mindestens diesen Wert geändert hat. So werden die Thermostate nicht bei jeder kleinen Temperaturschwankung nachgestellt. 0 schaltet die Hysterese ab."
         }
       },
       "presence": {

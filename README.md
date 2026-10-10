@@ -221,3 +221,8 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 
 - Der Schalter **Regelung aktiv** behält seinen letzten Zustand über Home-Assistant-Neustarts, Updates und Änderungen im Raum-Editor. Vorher war er danach immer aus. Steuert die Integration die Ventile allein, wären sie sonst nach jedem Neustart auf dem zuletzt geschriebenen Sollwert stehen geblieben.
 - Neu eingerichtete Räume starten weiterhin ausgeschaltet.
+
+## Version 0.4.2: Hysterese und Ersatzwert bei Fühlerausfall
+
+- **Hysterese der Kalibrierung:** Eine neu berechnete Kalibrierung wird nur übernommen, wenn sie sich um mindestens 0,5 °C geändert hat (einstellbar auf der Seite **Raum und Heizverhalten**, 0 schaltet ab). Die Thermostate werden so nicht bei jeder kleinen Temperaturschwankung nachgestellt; das schont Batterie und Ventilmotor.
+- **Ersatzwert bei Ausfall des Raumfühlers:** Ist der Raumfühler nicht verfügbar, regelt die Integration mit dem Mittelwert der Thermostat-Temperaturen weiter, wie der „degraded mode“ von Better Thermostat. Der Status nennt den Ersatzwert, das Attribut `room_temperature_source` ist dann `thermostats`. In dieser Zeit wird weder gelernt noch die Kalibrierung neu berechnet. Melden auch die Thermostate keine Temperatur, wird wie bisher nichts geschrieben.

@@ -1515,3 +1515,115 @@ async def test_valve_maintenance_opens_closes_and_resumes(
         7.0,
         coordinator.data["target_temperature"],
     ]
+
+
+@pytest.mark.asyncio
+async def test_calibration_hysteresis_ignores_small_offset_changes(
+    hass, enable_custom_integrations
+):
+    """Offset changes below the hysteresis do not re-adjust the valve."""
+    _set_up_test_entities(hass)
+    hass.states.async_set(
+        "schedule.living_room_comfort",
+        "on",
+        {"next_event": (dt_util.now() + timedelta(hours=2)).isoformat()},
+    )
+    hass.states.async_set(
+        "climate.living_room_2",
+        "heat",
+        {"temperature": 18.0, "current_temperature": 21.0, "min_temp": 5,
+         "max_temp": 30, "target_temp_step": 0.5},
+    )
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_climate_entities"] = ["climate.living_room_2"]
+    coordinator.config["calibration"] = True
+    coordinator.config["hysteresis"] = 0.5
+    start = dt_util.utcnow()
+
+    async def refresh_with_valve_at(
+        valve: float, minutes: int, setpoint: float = 24.0
+    ) -> None:
+        hass.states.async_set(
+            "climate.living_room_2",
+            "heat",
+            {"temperature": setpoint, "current_temperature": valve, "min_temp": 5,
+             "max_temp": 30, "target_temp_step": 0.5},
+        )
+        with patch(
+            "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+            return_value=start + timedelta(minutes=minutes),
+        ):
+            await coordinator.async_refresh()
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await refresh_with_valve_at(21.0, 0, setpoint=18.0)
+        # +0.4 °C after the interval: inside the hysteresis, no new setpoint.
+        await refresh_with_valve_at(21.4, 11)
+        assert coordinator.data["thermostat_setpoints"]["climate.living_room_2"] == 24.0
+        # +0.8 °C against the adopted offset: re-adjusted.
+        await refresh_with_valve_at(21.8, 22)
+
+    assert [
+        call[2]["temperature"]
+        for call in calls
+        if call[2]["entity_id"] == "climate.living_room_2"
+    ] == [24.0, 25.0]
+
+
+@pytest.mark.asyncio
+async def test_unavailable_room_sensor_falls_back_to_thermostat_readings(
+    hass, enable_custom_integrations
+):
+    """Without the room sensor, the valves' own mean temperature is used."""
+    _set_up_test_entities(hass)
+    hass.states.async_set(
+        "schedule.living_room_comfort",
+        "on",
+        {"next_event": (dt_util.now() + timedelta(hours=2)).isoformat()},
+    )
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {"temperature": 18.0, "current_temperature": 19.0, "min_temp": 7,
+         "max_temp": 28},
+    )
+    hass.states.async_set(
+        "climate.living_room_2",
+        "heat",
+        {"temperature": 18.0, "current_temperature": 20.0, "min_temp": 5,
+         "max_temp": 30},
+    )
+    hass.states.async_set("sensor.living_room_temperature", "unavailable")
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_climate_entities"] = ["climate.living_room_2"]
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert coordinator.data["mode"] == "comfort"
+    assert coordinator.data["room_temperature"] == 19.5
+    assert coordinator.data["room_temperature_source"] == "thermostats"
+    assert "Ersatzwert" in coordinator.data["status"]
+    assert sorted(call[2]["entity_id"] for call in calls) == [
+        "climate.living_room",
+        "climate.living_room_2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_no_room_sensor_and_no_thermostat_reading_waits(
+    hass, enable_custom_integrations
+):
+    """Without any temperature at all, nothing is written."""
+    _set_up_test_entities(hass)
+    hass.states.async_set("sensor.living_room_temperature", "unavailable")
+    _, coordinator = await _setup_integration(hass)
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert coordinator.data["mode"] == "waiting"
+    assert calls == []

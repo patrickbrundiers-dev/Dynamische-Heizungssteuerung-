@@ -13,6 +13,8 @@ from .const import (
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_AWAY_TEMPERATURE,
     CONF_CALIBRATION,
+    CONF_HYSTERESIS,
+    DEFAULT_HYSTERESIS,
     CONF_VALVE_MAINTENANCE,
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
@@ -114,6 +116,15 @@ def _temperature_selector(minimum: float, maximum: float) -> selector.NumberSele
     )
 
 
+def _hysteresis_selector() -> selector.NumberSelector:
+    """Deadband in Celsius for re-adjusting the valves."""
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=0, max=2, step=0.1, mode="slider", unit_of_measurement="°C"
+        )
+    )
+
+
 def _away_below_comfort(values: dict, comfort: float) -> bool:
     """An optional away temperature must stay below the comfort target."""
     away = values.get(CONF_AWAY_TEMPERATURE)
@@ -144,6 +155,9 @@ def _user_schema() -> vol.Schema:
             ),
             vol.Optional(CONF_CALIBRATION, default=False): selector.BooleanSelector(),
             vol.Optional(CONF_VALVE_MAINTENANCE, default=False): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_HYSTERESIS, default=DEFAULT_HYSTERESIS
+            ): _hysteresis_selector(),
             vol.Required(CONF_ROOM_TEMPERATURE_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
@@ -353,6 +367,10 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 CONF_VALVE_MAINTENANCE,
                 default=bool(current.get(CONF_VALVE_MAINTENANCE, False)),
             ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_HYSTERESIS,
+                default=float(current.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS)),
+            ): _hysteresis_selector(),
             vol.Required(
                 CONF_ROOM_TEMPERATURE_ENTITY,
                 default=current[CONF_ROOM_TEMPERATURE_ENTITY],

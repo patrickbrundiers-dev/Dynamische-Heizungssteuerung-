@@ -441,6 +441,27 @@ def calibration_offset(
     return max(-max_offset, min(offset, max_offset))
 
 
+def apply_hysteresis(
+    previous: float | None, new: float, hysteresis: float
+) -> float:
+    """Keep ``previous`` unless ``new`` moved at least ``hysteresis`` away."""
+    if previous is None or abs(new - previous) >= hysteresis:
+        return new
+    return previous
+
+
+def fallback_room_temperature(readings: list[float | None]) -> float | None:
+    """Mean of the thermostats' own readings when the room sensor is gone.
+
+    Better Thermostat calls this degraded mode: regulating on the radiator
+    temperature is less accurate, but better than not regulating at all.
+    """
+    values = [value for value in readings if value is not None]
+    if not values:
+        return None
+    return round(sum(values) / len(values), 1)
+
+
 def valve_maintenance_due(
     last_run: datetime | None,
     now: datetime,

@@ -4,11 +4,13 @@ from datetime import UTC, datetime, timedelta
 
 from custom_components.dynamic_heating.logic import (
     TrendSample,
+    apply_hysteresis,
     calculate_lead_minutes,
     calibration_offset,
     decide_heating_target,
     evaluate_heating_limit,
     evaluate_window_open,
+    fallback_room_temperature,
     valve_maintenance_due,
     valve_maintenance_phase,
 )
@@ -474,3 +476,17 @@ def test_valve_maintenance_opens_then_closes_then_ends() -> None:
     assert valve_maintenance_phase(start, start, 300) == "open"
     assert valve_maintenance_phase(start, start + timedelta(seconds=301), 300) == "close"
     assert valve_maintenance_phase(start, start + timedelta(seconds=600), 300) is None
+
+
+def test_hysteresis_keeps_previous_value_for_small_changes() -> None:
+    assert apply_hysteresis(None, 2.3, 0.5) == 2.3
+    assert apply_hysteresis(2.0, 2.4, 0.5) == 2.0
+    assert apply_hysteresis(2.0, 2.5, 0.5) == 2.5
+    assert apply_hysteresis(2.0, 1.4, 0.5) == 1.4
+    assert apply_hysteresis(2.0, 2.1, 0.0) == 2.1
+
+
+def test_fallback_room_temperature_averages_available_readings() -> None:
+    assert fallback_room_temperature([18.6, None, 19.2]) == 18.9
+    assert fallback_room_temperature([None, None]) is None
+    assert fallback_room_temperature([]) is None

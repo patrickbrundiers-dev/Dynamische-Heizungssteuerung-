@@ -19,6 +19,8 @@ from .const import (
     CALIBRATION_INTERVAL_SECONDS,
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_CALIBRATION,
+    CONF_HYSTERESIS,
+    DEFAULT_HYSTERESIS,
     CONF_VALVE_MAINTENANCE,
     CONF_CLIMATE_ENTITY,
     CONF_COMFORT_TEMPERATURE,
@@ -85,7 +87,9 @@ from .const import (
 )
 from .logic import (
     TrendSample,
+    apply_hysteresis,
     calibration_offset,
+    fallback_room_temperature,
     decide_heating_target,
     evaluate_heating_limit,
     evaluate_window_open,
@@ -136,6 +140,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.config = config
         self.entry_id = entry_id
         self.enabled = False
+        # True while the room sensor is unavailable and the thermostats'
+        # own readings stand in for it.
+        self._room_fallback = False
         self.heating_rate = DEFAULT_HEATING_RATE
         self.cooling_rate = DEFAULT_COOLING_RATE
         self._store = Store(hass, 1, f"{DOMAIN}_{entry_id}_learning")
@@ -1091,6 +1098,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ids.append(entity_id)
         return ids
 
+    def _thermostat_temperature(self, entity_id: str) -> float | None:
+        """The thermostat's own temperature reading, if it reports one."""
+        state = self.hass.states.get(entity_id)
+        if not self._valid(state):
+            return None
+        return self._stored_float(state.attributes.get("current_temperature"))
+
     def _changed_manually(self, entity_id: str, state: State) -> bool:
         """True when a confirmed setpoint was changed at the thermostat."""
         written = self._written.get(entity_id)
@@ -1148,6 +1162,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self.config.get(CONF_CALIBRATION):
             return target
         cached = self._calibration.get(entity_id)
+        if self._room_fallback:
+            # The room value is derived from the valves themselves, so a new
+            # offset would be meaningless; keep the last one.
+            return target + (0.0 if cached is None else cached[0])
         if cached is None or (
             (now - cached[1]).total_seconds() >= CALIBRATION_INTERVAL_SECONDS
         ):
@@ -1159,9 +1177,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # Without the valve's reading, use the plain target.
                 self._calibration.pop(entity_id, None)
                 return target
+            offset = calibration_offset(
+                room_temperature, valve_temperature, MAX_CALIBRATION_OFFSET
+            )
+            hysteresis = float(
+                self.config.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS) or 0
+            )
             cached = (
-                calibration_offset(
-                    room_temperature, valve_temperature, MAX_CALIBRATION_OFFSET
+                apply_hysteresis(
+                    None if cached is None else cached[0], offset, hysteresis
                 ),
                 now,
             )
@@ -1308,6 +1332,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         climate_state = self._state(CONF_CLIMATE_ENTITY)
         outdoor_temperature = self._outdoor_temperature()
 
+        self._room_fallback = room_temperature is None
+        if self._room_fallback:
+            room_temperature = fallback_room_temperature(
+                [self._thermostat_temperature(entity_id) for entity_id in self._thermostat_ids()]
+            )
         if room_temperature is None:
             return self._waiting_result(
                 "Temperatursensor nicht verfügbar – keine Sollwertänderung",
@@ -1387,22 +1416,24 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             HEATING_LIMIT_HYSTERESIS,
         )
 
-        await self._evaluate_pending_forecast(
-            now=dt_util.utcnow(),
-            room_temperature=room_temperature,
-            schedule_active=schedule_active,
-            present=present,
-            window_open=window_open,
-        )
+        # Valve readings are not the room temperature: never learn from them.
+        if not self._room_fallback:
+            await self._evaluate_pending_forecast(
+                now=dt_util.utcnow(),
+                room_temperature=room_temperature,
+                schedule_active=schedule_active,
+                present=present,
+                window_open=window_open,
+            )
 
-        await self._learn(
-            room_temperature,
-            climate_state,
-            window_open=window_open,
-            present=present,
-            schedule_active=schedule_active,
-            eco_temperature=eco_temperature,
-        )
+            await self._learn(
+                room_temperature,
+                climate_state,
+                window_open=window_open,
+                present=present,
+                schedule_active=schedule_active,
+                eco_temperature=eco_temperature,
+            )
 
         next_event = self._parse_next_event(schedule_state)
         if self._preheat_event is not None and self._preheat_event != next_event:
@@ -1442,14 +1473,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if decision.mode == "preheat":
             self._preheat_event = next_event
 
-        self._update_pending_forecast(
-            now=dt_util.utcnow(),
-            next_event=next_event,
-            projected_temperature=decision.projected_temperature,
-            schedule_active=schedule_active,
-            present=present,
-            window_open=window_open,
-        )
+        if not self._room_fallback:
+            self._update_pending_forecast(
+                now=dt_util.utcnow(),
+                next_event=next_event,
+                projected_temperature=decision.projected_temperature,
+                schedule_active=schedule_active,
+                present=present,
+                window_open=window_open,
+            )
 
         target_temperature = self._fit_to_thermostat(
             decision.target_temperature, climate_state
@@ -1461,6 +1493,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "target_temperature": target_temperature,
             "current_setpoint": self._climate_setpoint(climate_state),
             "room_temperature": room_temperature,
+            "room_temperature_source": (
+                "thermostats" if self._room_fallback else "sensor"
+            ),
             "outdoor_temperature": outdoor_temperature,
             "heating_rate": self.heating_rate,
             "cooling_rate": self.cooling_rate,
@@ -1487,6 +1522,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             **self._learning_diagnostics(),
         }
 
+        if self._room_fallback:
+            result["status"] = (
+                f"{result['status']} – Raumfühler nicht verfügbar, "
+                "Ersatzwert aus den Thermostaten"
+            )
         result["valve_maintenance"] = None
         if self.enabled and await self._run_valve_maintenance(window_open, result):
             return result
