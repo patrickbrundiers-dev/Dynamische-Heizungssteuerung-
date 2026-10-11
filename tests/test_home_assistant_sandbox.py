@@ -1880,6 +1880,48 @@ async def test_room_temperature_is_fed_to_external_sensor_thermostats(
 
 
 @pytest.mark.asyncio
+async def test_valve_falls_back_to_own_sensor_when_value_cannot_be_sent(
+    hass, enable_custom_integrations
+):
+    """A failed value send undoes the switch and is retried next cycle."""
+    _set_up_test_entities(hass)
+    _set_up_aqara_trv(hass)
+    entry, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_climate_entities"] = ["climate.living_room_aqara"]
+    coordinator.config["external_temperature"] = True
+
+    calls = []
+    number_ok = False
+
+    async def fake_call(domain, service, data):
+        calls.append((domain, service, data))
+        if domain == "select":
+            current = hass.states.get(data["entity_id"])
+            hass.states.async_set(data["entity_id"], data["option"], current.attributes)
+        return domain != "number" or number_ok
+
+    coordinator._call = fake_call
+    coordinator.enabled = True
+    await coordinator._sync_external_temperature()
+
+    assert [(c[0], c[2].get("option")) for c in calls] == [
+        ("select", "external"),
+        ("number", None),
+        ("select", "internal"),
+    ]
+    assert coordinator._external_fed == set()
+
+    calls.clear()
+    number_ok = True
+    await coordinator._sync_external_temperature()
+    assert [(c[0], c[2].get("option")) for c in calls] == [
+        ("select", "external"),
+        ("number", None),
+    ]
+    assert coordinator._external_fed == {"climate.living_room_aqara"}
+
+
+@pytest.mark.asyncio
 async def test_external_sensor_is_released_when_control_stops_or_unloads(
     hass, enable_custom_integrations
 ):

@@ -1735,6 +1735,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         "set_value",
                         {"entity_id": number_id, "value": room_temperature},
                     ):
+                        # Retry on the next cycle; until then the valve keeps
+                        # its own sensor instead of a stale external value.
+                        self._external_sent.pop(number_id, None)
+                        if switched:
+                            await self._call(
+                                "select",
+                                "select_option",
+                                {"entity_id": select_id, "option": "internal"},
+                            )
                         continue
                     self._external_sent[number_id] = (room_temperature, now)
                 fed.add(entity_id)
