@@ -62,7 +62,11 @@ async def async_setup_entry(
         return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
     async_add_entities(
-        [QuickModeSelect(coordinator, entry), QuickDurationSelect(coordinator, entry)]
+        [
+            QuickModeSelect(coordinator, entry),
+            QuickDurationSelect(coordinator, entry),
+            ScheduleSelect(coordinator, entry),
+        ]
     )
 
 
@@ -125,6 +129,43 @@ class QuickDurationSelect(CoordinatorEntity[DynamicHeatingCoordinator], SelectEn
     async def async_select_option(self, option: str) -> None:
         """Use the picked duration, also for a mode that is already running."""
         await self.coordinator.async_set_quick_duration(_DURATIONS[option])
+
+
+class ScheduleSelect(CoordinatorEntity[DynamicHeatingCoordinator], SelectEntity):
+    """Which of the room's comfort schedules is in use."""
+
+    _attr_name = "Zeitplan"
+    _attr_icon = "mdi:calendar-multiple"
+
+    def __init__(
+        self, coordinator: DynamicHeatingCoordinator, entry: ConfigEntry
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_schedule"
+        self._attr_has_entity_name = True
+        self._attr_device_info = device_info(entry)
+
+    @property
+    def options(self) -> list[str]:
+        return [name for _, name in self.coordinator.schedule_options()]
+
+    @property
+    def current_option(self) -> str | None:
+        active = self.coordinator.active_schedule
+        for entity_id, name in self.coordinator.schedule_options():
+            if entity_id == active:
+                return name
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | None]:
+        return {"entity_id": self.coordinator.active_schedule}
+
+    async def async_select_option(self, option: str) -> None:
+        for entity_id, name in self.coordinator.schedule_options():
+            if name == option:
+                await self.coordinator.async_set_schedule(entity_id)
+                return
 
 
 _HOUSE_LABELS = {

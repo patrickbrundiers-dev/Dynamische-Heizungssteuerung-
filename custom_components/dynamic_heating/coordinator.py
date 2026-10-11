@@ -18,6 +18,21 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_ADDITIONAL_SCHEDULE_ENTITIES,
+    CONF_AGGRESSIVE_OFFSET,
+    CONF_AGGRESSIVE_RANGE,
+    CONF_AWAY_OFFSET,
+    CONF_AWAY_SCHEDULE_MODE,
+    CONF_DISABLE_TRV_WINDOW_DETECTION,
+    CONF_ECO_SCHEDULE_ENTITY,
+    CONF_FROST_AFTER_ABSENCE,
+    CONF_SYNC_MANUAL_CHANGE,
+    DEFAULT_AGGRESSIVE_OFFSET,
+    DEFAULT_FROST_AFTER_ABSENCE,
+    DEFAULT_SYNC_MANUAL_CHANGE,
+    EVENT_MODE_CHANGED,
+    QUICK_MAINTENANCE,
+    TRV_WINDOW_DETECTION_SUFFIX,
     CONF_AWAY_TEMPERATURE,
     CALIBRATION_INTERVAL_SECONDS,
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
@@ -142,6 +157,8 @@ from .const import (
 )
 from .logic import (
     TrendSample,
+    aggressive_setpoint,
+    select_schedule,
     apply_hysteresis,
     calibration_offset,
     fallback_room_temperature,
@@ -269,6 +286,18 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Temperature of the manual mode (set on the room thermostat entity).
         self.quick_temperature: float | None = None
         self._next_event: datetime | None = None
+        # Comfort schedule picked with the "Zeitplan" select (None = first).
+        self.schedule_choice: str | None = None
+        # Why nobody counts as present: "none", "room_empty" (somebody is
+        # home, the room is empty) or "house_empty"; and since when nobody
+        # has been home, for frost protection after a long absence.
+        self._absence = "none"
+        self._absent_since: datetime | None = None
+        # Last (mode, target) announced on the event bus.
+        self._last_event_key: tuple[Any, Any] | None = None
+        # Per thermostat switch: when turning off its own window detection
+        # was last tried, so a failing device is not called every cycle.
+        self._trv_window_attempts: dict[str, datetime] = {}
         # Mode, boost, alerts and the presence decision survive a restart.
         self._state_store = Store(hass, 1, f"{DOMAIN}_{entry_id}_state")
         self._saved_state: dict[str, Any] | None = None
@@ -326,6 +355,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 for key, (since, sent) in self._alerts.items()
             },
             "sensor_present": self._sensor_present,
+            "schedule_choice": self.schedule_choice,
+            "absent_since": (
+                self._absent_since.isoformat() if self._absent_since else None
+            ),
         }
 
     def _save_runtime_state(self) -> None:
@@ -435,6 +468,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         self._alerts[str(key)] = (since, bool(value[1]))
         if isinstance(stored.get("sensor_present"), bool):
             self._sensor_present = stored["sensor_present"]
+        if isinstance(stored.get("schedule_choice"), str):
+            self.schedule_choice = stored["schedule_choice"]
+        self._absent_since = moment(stored.get("absent_since"))
         week = stored.get("week")
         if isinstance(week, dict):
             for key, default in self._empty_week().items():
@@ -1418,6 +1454,23 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             present = household_present
 
+        if present:
+            self._absence = "none"
+        elif household_present or not has_household_source:
+            # Somebody is home (or only the room sensor is known): the room
+            # itself is empty.
+            self._absence = "room_empty"
+        else:
+            self._absence = "house_empty"
+        # A long absence: nobody home, or no presence in a room known only by
+        # its sensor.
+        long_absence = not present and (
+            self._absence == "house_empty" or not has_household_source
+        )
+        if not long_absence:
+            self._absent_since = None
+        elif self._absent_since is None:
+            self._absent_since = dt_util.utcnow()
         return present, (
             "Anwesenheit erkannt" if present else "Keine Anwesenheit – abgesenkt"
         )
@@ -1658,16 +1711,46 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # written so the target is sent again once it is reachable.
             self._written.pop(entity_id, None)
 
+        sync_manual = self.config.get(
+            CONF_SYNC_MANUAL_CHANGE, DEFAULT_SYNC_MANUAL_CHANGE
+        )
         if self._manual_override is None:
             for entity_id, state in available.items():
-                if self._changed_manually(entity_id, state):
+                if not self._changed_manually(entity_id, state):
+                    continue
+                manual = (
+                    self._adopt_manual_change(entity_id, state)
+                    if sync_manual and decision_mode != "maintenance"
+                    else None
+                )
+                if manual is not None:
+                    # The whole room follows the valve that was turned.
+                    _LOGGER.info(
+                        "Setpoint of %s turned to %s; holding %.1f °C in the room",
+                        entity_id,
+                        state.attributes.get("temperature"),
+                        manual,
+                    )
+                    self._written.clear()
+                    decision_mode, target = "quick_manual", manual
+                    value = f"{manual:g}".replace(".", ",")
+                    result["mode"] = decision_mode
+                    result["target_temperature"] = manual
+                    result["quick_mode"] = QUICK_MANUAL
+                    result["quick_until"] = (
+                        self.quick_until.isoformat() if self.quick_until else None
+                    )
+                    result["status"] = result["decision_status"] = (
+                        f"{value} °C am Thermostat eingestellt"
+                    )
+                else:
                     self._manual_override = override_key
                     _LOGGER.info(
                         "Setpoint of %s changed manually to %s; pausing control",
                         entity_id,
                         state.attributes.get("temperature"),
                     )
-                    break
+                break
         if self._manual_override is not None:
             result["manual_override"] = True
             result["status"] = (
@@ -1687,14 +1770,28 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         now = dt_util.utcnow()
         failed = False
-        # Outside the heating season the valve stays at its minimum.
-        calibrate = decision_mode != "season_off"
+        # Outside the heating season the valve stays at its minimum, and
+        # maintenance opens it fully: neither is calibrated or pushed.
+        calibrate = decision_mode not in ("season_off", "maintenance")
+        sent = target
+        band = self.config.get(CONF_AGGRESSIVE_RANGE)
+        if calibrate and band is not None:
+            sent = aggressive_setpoint(
+                target,
+                room_temperature,
+                float(band),
+                float(
+                    self.config.get(CONF_AGGRESSIVE_OFFSET)
+                    or DEFAULT_AGGRESSIVE_OFFSET
+                ),
+            )
+            result["aggressive_setpoint"] = sent
         setpoints: dict[str, float] = {}
         for entity_id, state in active.items():
             setpoint = self._fit_to_thermostat(
-                self._calibrated(entity_id, state, target, room_temperature, now)
+                self._calibrated(entity_id, state, sent, room_temperature, now)
                 if calibrate
-                else target,
+                else sent,
                 state,
             )
             setpoints[entity_id] = setpoint
@@ -1833,6 +1930,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         frost_value: object,
         off_temperature: float | None,
         away_temperature: float | None = None,
+        max_temperature: float | None = None,
     ) -> tuple[str, str, float] | None:
         """The (mode, status, target) of a hand-picked quick mode, if any."""
         if self.quick_mode != QUICK_AUTO and self.quick_until is not None and (
@@ -1861,6 +1959,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "quick_manual",
                 f"{value} °C von Hand{until}",
                 self.quick_temperature,
+            )
+        if self.quick_mode == QUICK_MAINTENANCE:
+            return (
+                "quick_maintenance",
+                f"Wartung – Ventile voll geöffnet{until}",
+                max_temperature if max_temperature is not None else 30.0,
             )
         if self.quick_mode == QUICK_COMFORT:
             return "quick_comfort", f"Komfort von Hand{until}", comfort_temperature
@@ -1891,6 +1995,52 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else eco_temperature
         )
         return "quick_off", f"Aus von Hand{until}", off
+
+    def schedule_options(self) -> list[tuple[str, str]]:
+        """The room's comfort schedules as (entity_id, name), first = default."""
+        ids = [self.config.get(CONF_SCHEDULE_ENTITY)]
+        extra = self.config.get(CONF_ADDITIONAL_SCHEDULE_ENTITIES) or []
+        if isinstance(extra, str):
+            extra = [extra]
+        ids += [entity_id for entity_id in extra if entity_id not in ids]
+        return [
+            (entity_id, self._friendly_name(entity_id))
+            for entity_id in ids
+            if entity_id
+        ]
+
+    @property
+    def active_schedule(self) -> str | None:
+        """Entity id of the comfort schedule in use."""
+        options = self.schedule_options()
+        if not options:
+            return None
+        return select_schedule(options, self.schedule_choice)
+
+    async def async_set_schedule(self, entity_id: str) -> None:
+        """Use another of the room's comfort schedules."""
+        self.schedule_choice = entity_id
+        self._preheat_event = None
+        await self.async_refresh()
+
+    def _adopt_manual_change(self, entity_id: str, state: State) -> float | None:
+        """Take a setpoint turned at a valve as quick mode Manuell.
+
+        Returns the room temperature it stands for (calibration offset
+        removed), or None when the value can't be read.
+        """
+        setpoint = self._climate_setpoint(state)
+        if setpoint is None:
+            return None
+        cached = self._calibration.get(entity_id)
+        if cached is not None and entity_id not in self._external_fed:
+            setpoint -= cached[0]
+        temperature = round(setpoint * 2) / 2
+        self.boost_until = None
+        self.quick_mode = QUICK_MANUAL
+        self.quick_temperature = temperature
+        self.quick_until = self._quick_end()
+        return temperature
 
     def _window_drop(self, room_temperature: float) -> bool:
         """An open window guessed from a fast temperature drop."""
@@ -2010,7 +2160,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Run one control cycle and attach the thermostats' health."""
         await self._sync_external_temperature()
+        await self._sync_trv_window_detection()
         result = await self._async_control_cycle()
+        self._announce_mode(result)
         result["thermostat_warnings"] = self._thermostat_warnings()
         result["heating_problem"] = self.heating_problem
         await self._send_notifications(result)
@@ -2022,6 +2174,73 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._track_week(result)
         self._save_runtime_state()
         return result
+
+    def _announce_mode(self, result: dict[str, Any]) -> None:
+        """Fire an event when the decided mode or target changed."""
+        key = (result.get("mode"), result.get("target_temperature"))
+        previous = self._last_event_key
+        self._last_event_key = key
+        # The first cycle after a start is no change.
+        if previous is None or previous == key or key[0] is None:
+            return
+        self.hass.bus.async_fire(
+            EVENT_MODE_CHANGED,
+            {
+                "entry_id": self.entry_id,
+                "room": self.room_name,
+                "mode": key[0],
+                "previous_mode": previous[0],
+                "target_temperature": key[1],
+                "previous_target_temperature": previous[1],
+                "status": result.get("status"),
+                "present": result.get("present"),
+                "window_open": result.get("window_open"),
+                "active_schedule": result.get("active_schedule"),
+                "quick_mode": result.get("quick_mode"),
+            },
+        )
+
+    def _trv_window_switches(self) -> list[str]:
+        """The thermostats' own window-detection switches."""
+        registry = er.async_get(self.hass)
+        switches: list[str] = []
+        for entity_id in self._thermostat_ids():
+            entry = registry.async_get(entity_id)
+            if entry is None or not entry.device_id:
+                continue
+            switches.extend(
+                device_entry.entity_id
+                for device_entry in er.async_entries_for_device(
+                    registry, entry.device_id
+                )
+                if device_entry.domain == "switch"
+                and device_entry.entity_id.endswith(TRV_WINDOW_DETECTION_SUFFIX)
+            )
+        return switches
+
+    async def _sync_trv_window_detection(self) -> None:
+        """Keep the valves' own window detection off where a contact exists.
+
+        Only while control is on and the room has a window contact; a switch
+        that could not be turned off is tried again after an hour.
+        """
+        if not (
+            self.enabled
+            and self.config.get(CONF_DISABLE_TRV_WINDOW_DETECTION)
+            and self.config.get(CONF_WINDOW_ENTITY)
+        ):
+            return
+        now = dt_util.utcnow()
+        for switch_id in self._trv_window_switches():
+            state = self.hass.states.get(switch_id)
+            if state is None or state.state != "on":
+                continue
+            last = self._trv_window_attempts.get(switch_id)
+            if last is not None and now - last < timedelta(hours=1):
+                continue
+            self._trv_window_attempts[switch_id] = now
+            if await self._call("switch", "turn_off", {"entity_id": switch_id}):
+                _LOGGER.info("Turned off the own window detection of %s", switch_id)
 
     def _room_name(self) -> str:
         """The area of the room's main thermostat, else the entry title."""
@@ -2244,7 +2463,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_control_cycle(self) -> dict[str, Any]:
         """Read Home Assistant states, calculate a target and optionally apply it."""
         room_temperature = self._room_temperature()
-        schedule_state = self._state(CONF_SCHEDULE_ENTITY)
+        schedule_id = self.active_schedule
+        schedule_state = self.hass.states.get(schedule_id) if schedule_id else None
         climate_state = self._state(CONF_CLIMATE_ENTITY)
         outdoor_temperature = self._outdoor_temperature()
 
@@ -2326,6 +2546,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         eco_temperature = float(
             self.config.get(CONF_ECO_TEMPERATURE, DEFAULT_ECO_TEMPERATURE)
         )
+        eco_schedule = self._state(CONF_ECO_SCHEDULE_ENTITY)
+        slot_eco = (
+            schedule_comfort_temperature(
+                eco_schedule.attributes.get(SCHEDULE_TEMPERATURE_ATTRIBUTE)
+            )
+            if self._valid(eco_schedule) and eco_schedule.state == "on"
+            else None
+        )
+        if slot_eco is not None:
+            # Never above comfort: eco is the setback.
+            eco_temperature = min(slot_eco, comfort_temperature)
         away_value = self.config.get(CONF_AWAY_TEMPERATURE)
         away_temperature = None if away_value is None else float(away_value)
         window_value = self.config.get(CONF_WINDOW_TEMPERATURE)
@@ -2341,6 +2572,45 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             off_temperature = float(climate_state.attributes.get("min_temp"))
         except (TypeError, ValueError):
             off_temperature = None
+        try:
+            max_temperature = float(climate_state.attributes.get("max_temp"))
+        except (TypeError, ValueError):
+            max_temperature = None
+        reduced_comfort: tuple[str, float] | None = None
+        away_offset = self.config.get(CONF_AWAY_OFFSET)
+        if away_offset and (
+            self._absence == "room_empty"
+            or (
+                self._absence == "house_empty"
+                and self.config.get(CONF_AWAY_SCHEDULE_MODE)
+            )
+        ):
+            reduced = max(eco_temperature, comfort_temperature - float(away_offset))
+            value = f"{float(away_offset):g}".replace(".", ",")
+            reduced_comfort = (
+                (
+                    f"Raum leer – Komfort minus {value} °C"
+                    if self._absence == "room_empty"
+                    else f"Niemand zuhause – Komfort minus {value} °C"
+                ),
+                reduced,
+            )
+        long_absence_temperature: float | None = None
+        frost_after = int(
+            self.config.get(CONF_FROST_AFTER_ABSENCE) or DEFAULT_FROST_AFTER_ABSENCE
+        )
+        if (
+            frost_after > 0
+            and self._absent_since is not None
+            and (dt_util.utcnow() - self._absent_since).total_seconds() >= frost_after
+        ):
+            long_absence_temperature = (
+                float(frost_value)
+                if frost_value is not None
+                else off_temperature
+                if off_temperature is not None
+                else eco_temperature
+            )
         schedule_active = schedule_state.state == "on"
         limit_value = self.config.get(CONF_HEATING_LIMIT_TEMPERATURE)
         self._heating_limit_reached = evaluate_heating_limit(
@@ -2379,6 +2649,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         forecast_temperature = select_forecast_temperature(
             forecast_items, next_event, dt_util.now()
         )
+        quick = self._quick_target(
+            comfort_temperature,
+            eco_temperature,
+            frost_value,
+            off_temperature,
+            away_temperature,
+            max_temperature,
+        )
+        maintenance_temperature: float | None = None
+        if quick is not None and quick[0] == "quick_maintenance":
+            maintenance_temperature = quick[2]
         decision = decide_heating_target(
             now=dt_util.now(),
             schedule_active=schedule_active,
@@ -2408,13 +2689,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             heating_season=heating_season,
             off_temperature=off_temperature,
             boost_temperature=boost_temperature,
-            quick_mode=self._quick_target(
-                comfort_temperature,
-                eco_temperature,
-                frost_value,
-                off_temperature,
-                away_temperature,
-            ) or self._house_target(
+            maintenance_temperature=maintenance_temperature,
+            reduced_comfort=reduced_comfort,
+            long_absence_temperature=long_absence_temperature,
+            quick_mode=(None if maintenance_temperature is not None else quick)
+            or self._house_target(
                 comfort_temperature=comfort_temperature,
                 eco_temperature=eco_temperature,
                 away_temperature=away_temperature,
@@ -2429,6 +2708,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 decision,
                 status=f"Temperatursturz – Fenster vermutlich offen (bis {end} Uhr)",
             )
+        if decision.mode == "maintenance" and quick is not None:
+            decision = replace(decision, status=quick[1])
         if decision.mode == "boost":
             end = dt_util.as_local(self.boost_until).strftime("%H:%M")
             decision = replace(decision, status=f"Boost bis {end} Uhr")
@@ -2467,6 +2748,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "forecast_temperature": forecast_temperature,
             "solar_adjustment_minutes": decision.solar_adjustment_minutes,
             "schedule_active": schedule_active,
+            "active_schedule": schedule_id,
+            "eco_temperature": eco_temperature,
+            "schedule_eco_temperature": slot_eco,
+            "absence": self._absence,
+            "absent_since": (
+                self._absent_since.isoformat() if self._absent_since else None
+            ),
             "next_event": next_event.isoformat() if next_event else None,
             "window_open": window_open,
             "window_contact_open": window_contact_open,
@@ -2500,7 +2788,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Ersatzwert aus den Thermostaten"
             )
         result["valve_maintenance"] = None
-        if self.enabled and await self._run_valve_maintenance(window_open, result):
+        if (
+            self.enabled
+            and decision.mode != "maintenance"
+            and await self._run_valve_maintenance(window_open, result)
+        ):
             return result
         if self.enabled and decision.target_temperature is not None:
             await self._apply_target(
@@ -2512,7 +2804,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 target_temperature,
                 room_temperature,
                 watch=bool(result.get("thermostat_setpoints"))
-                and not (window_open or result["manual_override"]),
+                and not (window_open or result["manual_override"])
+                and decision.mode != "maintenance",
             )
         else:
             self._update_heating_watchdog(None, room_temperature, watch=False)

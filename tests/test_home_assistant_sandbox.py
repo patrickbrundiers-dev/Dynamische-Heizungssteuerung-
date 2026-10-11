@@ -12,6 +12,8 @@ from homeassistant.util import dt as dt_util
 from homeassistant.core import State
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
+    async_capture_events,
+    async_mock_service,
     mock_restore_cache,
 )
 
@@ -1233,6 +1235,8 @@ async def test_manual_setpoint_change_pauses_control_until_mode_changes(
     """A setpoint changed at the thermostat is kept until the decision changes."""
     _set_up_test_entities(hass)
     _, coordinator = await _setup_integration(hass)
+    # Without syncing, a turned valve only pauses control.
+    coordinator.config["sync_manual_change"] = False
 
     with _capture_climate_calls(hass) as calls:
         coordinator.enabled = True
@@ -1540,10 +1544,10 @@ async def test_additional_thermostats_get_the_same_target(
 
 
 @pytest.mark.asyncio
-async def test_manual_change_on_additional_thermostat_pauses_room(
+async def test_turned_valve_sets_the_whole_room_to_manual(
     hass, enable_custom_integrations
 ):
-    """A manual change on any thermostat of the room pauses control."""
+    """A valve turned by hand passes its setpoint to the room as Manuell."""
     _set_up_test_entities(hass)
     _set_trv(hass, "climate.living_room_2")
     _, coordinator = await _setup_integration(hass)
@@ -1558,8 +1562,18 @@ async def test_manual_change_on_additional_thermostat_pauses_room(
         _set_trv(hass, "climate.living_room_2", temperature=23.0)
         await coordinator.async_refresh()
 
-    assert coordinator.data["manual_override"] is True
-    assert len(calls) == 2
+    assert coordinator.data["manual_override"] is False
+    assert coordinator.quick_mode == "manual"
+    assert coordinator.quick_temperature == 23.0
+    assert coordinator.data["mode"] == "quick_manual"
+    assert "am Thermostat eingestellt" in coordinator.data["status"]
+    # The other thermostat follows; the turned one already has the value.
+    assert calls[-1][2] == {"entity_id": "climate.living_room", "temperature": 23.0}
+    assert len(calls) == 3
+
+    await coordinator.async_refresh()
+    assert coordinator.data["mode"] == "quick_manual"
+    assert coordinator.data["target_temperature"] == 23.0
 
 
 @pytest.mark.asyncio
@@ -2770,3 +2784,237 @@ async def test_room_thermostat_entity_sets_temperature_presets_and_off(
     await hass.async_block_till_done()
     assert coordinator.data["mode"] == "quick_manual"
     assert coordinator.data["target_temperature"] == target
+
+
+def _comfort_now(hass, entity_id="schedule.living_room_comfort", **attributes):
+    hass.states.async_set(
+        entity_id,
+        "on",
+        {"next_event": (dt_util.now() + timedelta(hours=2)).isoformat(), **attributes},
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_room_heats_to_reduced_comfort(hass, enable_custom_integrations):
+    """Somebody home but the room empty: comfort minus the offset, not eco."""
+    _set_up_test_entities(hass)
+    _comfort_now(hass)
+    hass.states.async_set("person.patrick", "home")
+    hass.states.async_set("binary_sensor.someone_home", "off")
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["person_entities"] = ["person.patrick"]
+    coordinator.config["away_offset"] = 2.0
+
+    await coordinator.async_refresh()
+    assert coordinator.data["mode"] == "away_reduced"
+    assert coordinator.data["target_temperature"] == 19.0
+    assert coordinator.data["absence"] == "room_empty"
+
+    # Nobody home: the setback, unless the schedule mode asks otherwise.
+    hass.states.async_set("person.patrick", "not_home")
+    await coordinator.async_refresh()
+    assert coordinator.data["mode"] == "away"
+    assert coordinator.data["target_temperature"] == 18.0
+    coordinator.config["away_schedule_mode"] = True
+    await coordinator.async_refresh()
+    assert coordinator.data["mode"] == "away_reduced"
+    assert "Niemand zuhause" in coordinator.data["status"]
+
+
+@pytest.mark.asyncio
+async def test_long_absence_drops_to_frost_protection(
+    hass, enable_custom_integrations
+):
+    """After the configured absence the room holds frost protection."""
+    _set_up_test_entities(hass)
+    _comfort_now(hass)
+    hass.states.async_set("person.patrick", "not_home")
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["person_entities"] = ["person.patrick"]
+    coordinator.config["frost_protection_temperature"] = 9.0
+    coordinator.config["frost_after_absence"] = 3600
+
+    await coordinator.async_refresh()
+    assert coordinator.data["mode"] == "away"
+    assert coordinator.data["absent_since"] is not None
+
+    coordinator._absent_since = dt_util.utcnow() - timedelta(hours=2)
+    await coordinator.async_refresh()
+    assert coordinator.data["mode"] == "long_absence"
+    assert coordinator.data["target_temperature"] == 9.0
+
+    hass.states.async_set("person.patrick", "home")
+    await coordinator.async_refresh()
+    assert coordinator.data["mode"] == "comfort"
+    assert coordinator.data["absent_since"] is None
+
+
+@pytest.mark.asyncio
+async def test_schedule_select_switches_the_comfort_schedule(
+    hass, enable_custom_integrations
+):
+    """A second schedule picked in the Zeitplan select drives the room."""
+    _set_up_test_entities(hass)
+    hass.states.async_set(
+        "schedule.living_room_holidays",
+        "on",
+        {
+            "friendly_name": "Ferien",
+            "next_event": (dt_util.now() + timedelta(hours=2)).isoformat(),
+        },
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Test Wohnzimmer",
+        unique_id="climate.living_room",
+        data={
+            **_config_data(),
+            "additional_schedule_entities": ["schedule.living_room_holidays"],
+        },
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    select_id = er.async_get(hass).async_get_entity_id(
+        "select", DOMAIN, f"{entry.entry_id}_schedule"
+    )
+    assert hass.states.get(select_id).attributes["options"] == [
+        "schedule.living_room_comfort",
+        "Ferien",
+    ]
+    assert coordinator.data["schedule_active"] is False
+
+    await hass.services.async_call(
+        "select", "select_option", {"entity_id": select_id, "option": "Ferien"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert coordinator.data["active_schedule"] == "schedule.living_room_holidays"
+    assert coordinator.data["mode"] == "comfort"
+    assert hass.states.get(select_id).state == "Ferien"
+
+
+@pytest.mark.asyncio
+async def test_eco_schedule_block_sets_the_setback(hass, enable_custom_integrations):
+    """An active eco schedule block with a temperature replaces eco."""
+    _set_up_test_entities(hass)
+    hass.states.async_set(
+        "schedule.living_room_comfort",
+        "off",
+        {"next_event": (dt_util.now() + timedelta(hours=8)).isoformat()},
+    )
+    hass.states.async_set("schedule.night_eco", "on", {"temperature": 16})
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["eco_schedule_entity"] = "schedule.night_eco"
+
+    await coordinator.async_refresh()
+    assert coordinator.data["mode"] == "eco"
+    assert coordinator.data["target_temperature"] == 16.0
+    assert coordinator.data["schedule_eco_temperature"] == 16.0
+
+    hass.states.async_set("schedule.night_eco", "off")
+    await coordinator.async_refresh()
+    assert coordinator.data["target_temperature"] == 18.0
+
+
+@pytest.mark.asyncio
+async def test_maintenance_mode_opens_valves_with_window_open(
+    hass, enable_custom_integrations
+):
+    """Wartung sends the thermostat maximum even with an open window."""
+    _set_up_test_entities(hass, window_state="on")
+    _, coordinator = await _setup_integration(hass)
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_set_quick_mode("maintenance")
+
+    assert coordinator.data["mode"] == "maintenance"
+    assert coordinator.data["target_temperature"] == 28.0
+    assert "Wartung" in coordinator.data["status"]
+    assert [call[2]["temperature"] for call in calls] == [28.0]
+
+
+@pytest.mark.asyncio
+async def test_mode_change_fires_an_event(hass, enable_custom_integrations):
+    """Automations can react to a changed mode without polling sensors."""
+    _set_up_test_entities(hass)
+    events = async_capture_events(hass, "dynamic_heating_mode_changed")
+    _, coordinator = await _setup_integration(hass)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert events == []
+
+    hass.states.async_set("binary_sensor.living_room_window", "on")
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    assert events[0].data["mode"] == "window"
+    assert events[0].data["previous_mode"] != "window"
+    assert events[0].data["entry_id"] == coordinator.entry_id
+
+
+@pytest.mark.asyncio
+async def test_aggressive_mode_pushes_the_sent_setpoint(
+    hass, enable_custom_integrations
+):
+    """Far below the target, target plus offset is sent; the shown target stays."""
+    _set_up_test_entities(hass)
+    _comfort_now(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["aggressive_range"] = 0.3
+    coordinator.config["aggressive_offset"] = 2.0
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert coordinator.data["target_temperature"] == 21.0
+    assert coordinator.data["aggressive_setpoint"] == 23.0
+    assert [call[2]["temperature"] for call in calls] == [23.0]
+
+
+@pytest.mark.asyncio
+async def test_thermostat_window_detection_is_turned_off(
+    hass, enable_custom_integrations
+):
+    """With a window contact the valve's own window detection is switched off."""
+    _set_up_test_entities(hass)
+    trv_entry = MockConfigEntry(domain="mqtt")
+    trv_entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=trv_entry.entry_id, identifiers={("mqtt", "trv_1")}
+    )
+    registry = er.async_get(hass)
+    for domain, unique_id, object_id in (
+        ("climate", "trv_1_climate", "living_room_trv"),
+        ("switch", "trv_1_window", "living_room_trv_window_detection"),
+    ):
+        registry.async_get_or_create(
+            domain,
+            "mqtt",
+            unique_id,
+            suggested_object_id=object_id,
+            device_id=device.id,
+            config_entry=trv_entry,
+        )
+    _set_trv(hass, "climate.living_room_trv")
+    hass.states.async_set("switch.living_room_trv_window_detection", "on")
+    _, coordinator = await _setup_integration(hass)
+    # Registered after setup: loading the switch platform replaces services.
+    turn_off = async_mock_service(hass, "switch", "turn_off")
+    coordinator.config["additional_climate_entities"] = ["climate.living_room_trv"]
+
+    await coordinator.async_refresh()
+    assert turn_off == []
+
+    coordinator.config["disable_trv_window_detection"] = True
+    coordinator.enabled = True
+    await coordinator.async_refresh()
+    await coordinator.async_refresh()
+
+    assert [call.data["entity_id"] for call in turn_off] == [
+        "switch.living_room_trv_window_detection"
+    ]

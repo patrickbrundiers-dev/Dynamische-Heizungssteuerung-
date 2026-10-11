@@ -140,7 +140,12 @@
           "boost_duration": "Boost duration",
           "home_temperature": "\"Home\" temperature",
           "activity_temperature": "\"Activity\" temperature",
-          "sleep_temperature": "\"Sleep\" temperature"
+          "sleep_temperature": "\"Sleep\" temperature",
+          "additional_schedule_entities": "More schedules (optional)",
+          "eco_schedule_entity": "Eco schedule (optional)",
+          "sync_manual_change": "Turning a valve applies to the room",
+          "aggressive_range": "Aggressive mode: range (°C, optional)",
+          "aggressive_offset": "Aggressive mode: offset"
         },
         "data_description": {
           "climate_entity": "Select the climate entity this room controller may adjust. Avoid running another automation that writes targets to the same thermostat.",
@@ -159,7 +164,12 @@
           "boost_duration": "The boost turns itself off after this time.",
           "home_temperature": "Target of the \"Zuhause\" (home) button and mode, like Better Thermostat's home preset.",
           "activity_temperature": "Target of the \"Aktivität\" (activity) button and mode, like Better Thermostat's activity preset.",
-          "sleep_temperature": "Target of the \"Schlafen\" (sleep) button and mode, like Better Thermostat's sleep preset. \"Abwesend\" (away) uses the away temperature, or eco without one."
+          "sleep_temperature": "Target of the \"Schlafen\" (sleep) button and mode, like Better Thermostat's sleep preset. \"Abwesend\" (away) uses the away temperature, or eco without one.",
+          "additional_schedule_entities": "Further comfort schedules, e.g. holidays or home office. Pick the active one with the room's \"Zeitplan\" entity; without a choice the first schedule applies.",
+          "eco_schedule_entity": "Schedule helper whose blocks carry a temperature in their additional data (e.g. temperature: 17). While a block is active it replaces the setback temperature, at most up to the comfort temperature.",
+          "sync_manual_change": "A setpoint turned at a thermostat goes to every thermostat of the room and holds as quick mode Manuell for the chosen duration. Off: control only pauses until the next mode change.",
+          "aggressive_range": "When the room is more than this below or above the target, target plus or minus the offset is sent so sluggish valves open or close decisively. Leave empty to turn off.",
+          "aggressive_offset": "How far the sent setpoint is raised or lowered outside the range."
         }
       },
       "presence": {
@@ -174,7 +184,10 @@
           "presence_schedule_entity": "Schedule for indoor presence (optional)",
           "presence_on_duration": "Presence ON reaction delay",
           "presence_off_duration": "Presence OFF grace period",
-          "away_temperature": "Away temperature (°C, optional)"
+          "away_temperature": "Away temperature (°C, optional)",
+          "away_offset": "Setback while the room is empty (°C, optional)",
+          "away_schedule_mode": "Also when nobody is home",
+          "frost_after_absence": "Frost protection after absence"
         },
         "data_description": {
           "person_entities": "Comfort is allowed when at least one selected person or device tracker is home. Device trackers with simple home/not_home states are usually most predictable.",
@@ -185,7 +198,10 @@
           "presence_schedule_entity": "The indoor presence sensor is considered only while this schedule is ON. Leave blank to use the sensor all day.",
           "presence_on_duration": "Presence must remain ON for this long before it is accepted.",
           "presence_off_duration": "After OFF, retain the previous presence decision for this long to avoid quick setbacks.",
-          "away_temperature": "Setpoint while nobody is home. Leave empty to keep using the setback temperature. Must be lower than the comfort temperature."
+          "away_temperature": "Setpoint while nobody is home. Leave empty to keep using the setback temperature. Must be lower than the comfort temperature.",
+          "away_offset": "When somebody is home but not in the room and the schedule asks for comfort, heat to comfort minus this value instead of the setback (not below eco). Leave empty to turn off.",
+          "away_schedule_mode": "Use the reduced comfort also while nobody is home and the schedule asks for comfort. Otherwise the away temperature applies.",
+          "frost_after_absence": "After nobody has been home this long, drop to frost protection (without one, to the thermostat minimum). 0 turns it off."
         }
       },
       "geofencing": {
@@ -217,7 +233,8 @@
           "window_temperature": "Temperature while window is open (°C, optional)",
           "heating_season_entity": "Heating season / winter mode (optional)",
           "notify_service": "Push notification (optional)",
-          "window_drop_detection": "Detect windows without a contact"
+          "window_drop_detection": "Detect windows without a contact",
+          "disable_trv_window_detection": "Turn off the thermostats' window detection"
         },
         "data_description": {
           "window_entity": "When ON, setback is enforced. If configured but unavailable, the controller avoids writing a new target.",
@@ -229,7 +246,8 @@
           "window_temperature": "Own setpoint while a window is open, e.g. 15 °C. Leave empty to use the eco or away temperature as before. Must be below the comfort temperature.",
           "heating_season_entity": "Switch or sensor for the heating season, e.g. a winter mode. While it is OFF the room is not heated: the setpoint goes to the frost protection temperature or, without one, the thermostat minimum. If the entity is unavailable, heating continues normally. Leave empty to disable.",
           "notify_service": "Notify service for your phone, e.g. notify.mobile_app_phone. While control is on it reports thermostat problems or a failed room sensor after 30 minutes, blocked control after 30 minutes, heating problems, frost risk and a window open for over an hour in the heating season. Leave empty to turn off.",
-          "window_drop_detection": "When the room cools by 1 °C within 10 minutes it is lowered for 15 minutes as with an open window. Works in addition to a window contact."
+          "window_drop_detection": "When the room cools by 1 °C within 10 minutes it is lowered for 15 minutes as with an open window. Works in addition to a window contact.",
+          "disable_trv_window_detection": "While control is on and the room has a window contact, turn off the thermostats' own window detection (switch …_window_detection), so no valve closes on its own while the room should heat."
         }
       },
       "house_settings": {

@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta
 
 from custom_components.dynamic_heating.logic import (
     TrendSample,
+    aggressive_setpoint,
+    select_schedule,
     apply_hysteresis,
     calculate_lead_minutes,
     calibration_offset,
@@ -553,3 +555,70 @@ def test_preheat_is_timed_with_the_forecast_temperature() -> None:
     # A cold morning starts earlier than the current mild reading suggests.
     assert cold.preheat_minutes > mild.preheat_minutes
     assert cold.mode == "preheat"
+
+
+def _absent_decision(**kwargs):
+    now = datetime.now(UTC)
+    base = dict(
+        now=now,
+        schedule_active=True,
+        next_event=now + timedelta(hours=2),
+        room_temperature=19.0,
+        outdoor_temperature=5.0,
+        comfort_temperature=22.0,
+        eco_temperature=18.0,
+        heating_rate_c_per_hour=1.0,
+        max_preheat_minutes=120,
+        present=False,
+    )
+    base.update(kwargs)
+    return decide_heating_target(**base)
+
+
+def test_reduced_comfort_applies_only_while_the_schedule_asks_for_comfort() -> None:
+    reduced = ("Raum leer – Komfort minus 3 °C", 19.0)
+    decision = _absent_decision(reduced_comfort=reduced)
+    assert (decision.mode, decision.target_temperature) == ("away_reduced", 19.0)
+    off = _absent_decision(reduced_comfort=reduced, schedule_active=False)
+    assert (off.mode, off.target_temperature) == ("away", 18.0)
+    limit = _absent_decision(reduced_comfort=reduced, heating_limit_reached=True)
+    assert limit.mode == "away"
+    window = _absent_decision(reduced_comfort=reduced, window_open=True)
+    assert window.mode == "window"
+
+
+def test_long_absence_wins_over_reduced_comfort() -> None:
+    decision = _absent_decision(
+        reduced_comfort=("x", 19.0), long_absence_temperature=10.0
+    )
+    assert (decision.mode, decision.target_temperature) == ("long_absence", 10.0)
+    present = _absent_decision(present=True, long_absence_temperature=10.0)
+    assert present.mode == "comfort"
+
+
+def test_maintenance_opens_valves_despite_window_and_season() -> None:
+    decision = _absent_decision(
+        maintenance_temperature=30.0,
+        window_open=True,
+        heating_season=False,
+        frost_protection_temperature=8.0,
+    )
+    assert (decision.mode, decision.target_temperature) == ("maintenance", 30.0)
+
+
+def test_aggressive_setpoint_pushes_outside_the_band() -> None:
+    assert aggressive_setpoint(21.0, 20.0, 0.3, 2.0) == 23.0
+    assert aggressive_setpoint(21.0, 21.2, 0.3, 2.0) == 21.0
+    assert aggressive_setpoint(21.0, 21.5, 0.3, 2.0) == 19.0
+
+
+def test_schedule_selection_by_id_number_or_name() -> None:
+    schedules = [
+        ("schedule.school", "Schulzeit"),
+        ("schedule.holidays", "Ferien Leonie"),
+    ]
+    assert select_schedule(schedules, None) == "schedule.school"
+    assert select_schedule(schedules, "schedule.holidays") == "schedule.holidays"
+    assert select_schedule(schedules, "2") == "schedule.holidays"
+    assert select_schedule(schedules, "ferien") == "schedule.holidays"
+    assert select_schedule(schedules, "unbekannt") == "schedule.school"

@@ -293,3 +293,15 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 - **Presets** sind die Betriebsarten (*Komfort*, *Zuhause*, *Aktivität*, *Eco*, *Schlafen*, *Abwesend*, *Boost*); *Kein Preset* ist Automatik.
 - **Aus** setzt die Betriebsart *Aus* (Frostschutz), **Heizen** geht zurück auf Automatik.
 - Ein offenes Fenster und das Ende der Heizperiode haben weiter Vorrang.
+
+## Version 0.6.0: Ideen aus Advanced Heating Control
+
+- **Drehen am Ventil gilt für den Raum**: Wird an einem Thermostat gedreht, bekommen alle Thermostate des Raums diesen Wert. Er gilt als Betriebsart *Manuell* für die eingestellte Betriebsart-Dauer (Option *Drehen am Ventil gilt für den Raum*, standardmäßig an). Ausgeschaltet pausiert die Regelung wie bisher bis zum nächsten Moduswechsel.
+- **Abgestufte Abwesenheit**: Mit *Absenkung bei leerem Raum* heizt ein Raum, in dem gerade niemand ist, während jemand zuhause ist, zur Komfortzeit auf Komfort minus diesen Wert (nicht unter Eco) statt abzusenken. Optional gilt das auch, wenn niemand zuhause ist.
+- **Frostschutz nach Abwesenheit**: Ist so lange niemand zuhause wie unter *Frostschutz nach Abwesenheit* eingestellt, hält der Raum den Frostschutz. Der Beginn der Abwesenheit übersteht einen Neustart.
+- **Mehrere Zeitpläne**: Unter *Weitere Zeitpläne* lassen sich zusätzliche Komfort-Zeitpläne angeben (z. B. Ferien, Homeoffice). Die Auswahl-Entität **Zeitplan** des Raums legt fest, welcher gilt; Automationen können sie umschalten.
+- **Eco-Zeitplan**: Ein Zeitplan-Helfer, dessen Blöcke in den Zusatzdaten `temperature: 17` tragen, ersetzt während des Blocks die Absenktemperatur, z. B. nachts kühler als tagsüber.
+- **Betriebsart Wartung**: Öffnet alle Ventile voll (Thermostat-Maximum), auch bei offenem Fenster und außerhalb der Heizperiode, z. B. für Thermenwartung oder Schornsteinfeger. Gilt für die Betriebsart-Dauer.
+- **Ereignis `dynamic_heating_mode_changed`**: Bei jedem Wechsel von Modus oder Sollwert, mit `room`, `mode`, `previous_mode`, `target_temperature`, `status`, `present`, `window_open`, `active_schedule` und `quick_mode`.
+- **Aggressiv-Modus**: Liegt der Raum weiter als der eingestellte Bereich unter oder über dem Soll, wird Soll plus bzw. minus Versatz an die Ventile gesendet. Angezeigt wird weiter der eigentliche Sollwert. Standardmäßig aus.
+- **Fenstererkennung der Thermostate abschalten**: Bei aktiver Regelung und vorhandenem Fensterkontakt schaltet die Integration die eigenen Fenstererkennungs-Schalter der Thermostate (`…_window_detection`, z. B. Aqara E1) aus.
