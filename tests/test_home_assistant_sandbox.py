@@ -374,7 +374,6 @@ async def test_cooling_rate_is_learned_from_a_stable_setback_period(
             19.0,
             climate_state,
             window_open=False,
-            present=True,
             schedule_active=False,
             eco_temperature=18.0,
         )
@@ -388,7 +387,6 @@ async def test_cooling_rate_is_learned_from_a_stable_setback_period(
             18.9,
             climate_state,
             window_open=False,
-            present=True,
             schedule_active=False,
             eco_temperature=18.0,
         )
@@ -401,7 +399,6 @@ async def test_cooling_rate_is_learned_from_a_stable_setback_period(
             18.6,
             climate_state,
             window_open=False,
-            present=True,
             schedule_active=False,
             eco_temperature=18.0,
         )
@@ -867,7 +864,7 @@ async def test_implausible_heating_sample_is_rejected_not_clamped(
         return_value=start,
     ):
         await coordinator._learn(
-            18.0, climate, window_open=False, present=True,
+            18.0, climate, window_open=False,
             schedule_active=False, eco_temperature=18.0
         )
     with patch(
@@ -875,7 +872,7 @@ async def test_implausible_heating_sample_is_rejected_not_clamped(
         return_value=start + timedelta(seconds=10),
     ):
         await coordinator._learn(
-            18.1, climate, window_open=False, present=True,
+            18.1, climate, window_open=False,
             schedule_active=False, eco_temperature=18.0
         )
     with patch(
@@ -883,7 +880,7 @@ async def test_implausible_heating_sample_is_rejected_not_clamped(
         return_value=start + timedelta(seconds=310),
     ):
         await coordinator._learn(
-            20.7, climate, window_open=False, present=True,
+            20.7, climate, window_open=False,
             schedule_active=False, eco_temperature=18.0
         )
 
@@ -918,7 +915,7 @@ async def test_plausible_heating_sample_updates_model_and_quality_counters(
         return_value=start,
     ):
         await coordinator._learn(
-            18.0, climate, window_open=False, present=True,
+            18.0, climate, window_open=False,
             schedule_active=False, eco_temperature=18.0
         )
     with patch(
@@ -926,7 +923,7 @@ async def test_plausible_heating_sample_updates_model_and_quality_counters(
         return_value=start + timedelta(seconds=10),
     ):
         await coordinator._learn(
-            18.1, climate, window_open=False, present=True,
+            18.1, climate, window_open=False,
             schedule_active=False, eco_temperature=18.0
         )
     with patch(
@@ -934,7 +931,7 @@ async def test_plausible_heating_sample_updates_model_and_quality_counters(
         return_value=start + timedelta(hours=1, seconds=10),
     ):
         await coordinator._learn(
-            18.6, climate, window_open=False, present=True,
+            18.6, climate, window_open=False,
             schedule_active=False, eco_temperature=18.0
         )
 
@@ -1541,9 +1538,17 @@ async def test_valve_maintenance_opens_closes_and_resumes(
     )
 
     async def refresh_at(seconds: int) -> None:
+        at = start + timedelta(seconds=seconds)
+        # The room sensor keeps reporting at the simulated time.
+        hass.states.async_set(
+            "sensor.living_room_temperature",
+            hass.states.get("sensor.living_room_temperature").state,
+            force_update=True,
+            timestamp=at.timestamp(),
+        )
         with patch(
             "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
-            return_value=start + timedelta(seconds=seconds),
+            return_value=at,
         ):
             await coordinator.async_refresh()
 
@@ -1691,6 +1696,7 @@ async def test_thermostat_problems_are_reported(hass, enable_custom_integrations
     for domain, unique_id, object_id in (
         ("climate", "trv_1_climate", "living_room_trv"),
         ("sensor", "trv_1_battery", "living_room_battery"),
+        ("binary_sensor", "trv_1_fault", "living_room_valve_fault"),
         ("binary_sensor", "trv_1_alarm", "living_room_valve_alarm"),
     ):
         registry.async_get_or_create(
@@ -1704,6 +1710,12 @@ async def test_thermostat_problems_are_reported(hass, enable_custom_integrations
     hass.states.async_set(
         "sensor.living_room_battery", "15", {"device_class": "battery"}
     )
+    hass.states.async_set(
+        "binary_sensor.living_room_valve_fault",
+        "on",
+        {"device_class": "problem", "friendly_name": "Ventilfehler"},
+    )
+    # Aqara's valve alarm stays on for days while the valve works: ignored.
     hass.states.async_set(
         "binary_sensor.living_room_valve_alarm",
         "on",
@@ -1722,7 +1734,7 @@ async def test_thermostat_problems_are_reported(hass, enable_custom_integrations
     assert coordinator.data["thermostat_warnings"] == {
         "climate.living_room_trv": [
             "Batterie schwach (15 %)",
-            "meldet Problem (Ventilalarm)",
+            "meldet Problem (Ventilfehler)",
         ],
         "climate.living_room_3": ["nicht erreichbar"],
     }
@@ -1735,7 +1747,7 @@ async def test_thermostat_problems_are_reported(hass, enable_custom_integrations
         "sensor.living_room_battery", "80", {"device_class": "battery"}
     )
     hass.states.async_set(
-        "binary_sensor.living_room_valve_alarm", "off", {"device_class": "problem"}
+        "binary_sensor.living_room_valve_fault", "off", {"device_class": "problem"}
     )
     coordinator.config["additional_climate_entities"] = ["climate.living_room_trv"]
     await coordinator.async_refresh()
@@ -1973,3 +1985,121 @@ async def test_boost_switch_heats_and_ends_by_itself(
     assert coordinator.boost_until is None
     assert hass.states.get(boost_id).state == "off"
     assert calls[0][2]["temperature"] == 24.0
+
+
+@pytest.mark.asyncio
+async def test_thermostat_back_from_dropout_gets_the_target_again(
+    hass, enable_custom_integrations
+):
+    """A setpoint that changed during a dropout is resent, not taken as manual."""
+    _set_up_test_entities(hass)
+    _set_trv(hass, "climate.living_room_2")
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_climate_entities"] = ["climate.living_room_2"]
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        _set_climate(hass, temperature=21.0)
+        _set_trv(hass, "climate.living_room_2", temperature=21.0)
+        await coordinator.async_refresh()
+        calls.clear()
+
+        hass.states.async_set("climate.living_room_2", "unavailable")
+        await coordinator.async_refresh()
+        # Back with its own default setpoint after rejoining the network.
+        _set_trv(hass, "climate.living_room_2", temperature=17.0)
+        await coordinator.async_refresh()
+
+    assert coordinator.data["manual_override"] is False
+    assert [(call[2]["entity_id"], call[2]["temperature"]) for call in calls] == [
+        ("climate.living_room_2", 21.0)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_silent_room_sensor_falls_back_to_thermostats(
+    hass, enable_custom_integrations
+):
+    """A room sensor that stopped reporting is not trusted with its old value."""
+    _set_up_test_entities(hass)
+    _set_climate(hass, temperature=18.0)
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {**hass.states.get("climate.living_room").attributes, "current_temperature": 20.5},
+    )
+    _, coordinator = await _setup_integration(hass)
+
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=dt_util.utcnow() + timedelta(hours=7),
+    ):
+        await coordinator.async_refresh()
+
+    assert coordinator.data["room_temperature_source"] == "thermostats"
+    assert coordinator.data["room_temperature"] == 20.5
+
+
+@pytest.mark.asyncio
+async def test_heating_watchdog_flags_a_room_that_does_not_warm_up(
+    hass, enable_custom_integrations
+):
+    """Two hours well below the target without warming raise the heating problem."""
+    _set_up_test_entities(hass, room_temperature="18.0")
+    _, coordinator = await _setup_integration(hass)
+    start = dt_util.utcnow()
+
+    async def refresh_at(minutes: int, temperature: str) -> bool:
+        at = start + timedelta(minutes=minutes)
+        hass.states.async_set(
+            "sensor.living_room_temperature",
+            temperature,
+            force_update=True,
+            timestamp=at.timestamp(),
+        )
+        with patch(
+            "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+            return_value=at,
+        ):
+            await coordinator.async_refresh()
+        return coordinator.data["heating_problem"]
+
+    with _capture_climate_calls(hass):
+        coordinator.enabled = True
+        assert coordinator.data is not None
+        assert await refresh_at(0, "18.0") is False
+        assert await refresh_at(60, "18.1") is False
+        assert await refresh_at(121, "18.1") is True
+        # It warms up again: the problem clears.
+        assert await refresh_at(130, "18.5") is False
+        assert await refresh_at(200, "18.5") is False
+
+
+@pytest.mark.asyncio
+async def test_heating_watchdog_ignores_thermostats_switched_off(
+    hass, enable_custom_integrations
+):
+    """A thermostat switched off by hand is no heating problem."""
+    _set_up_test_entities(hass, room_temperature="18.0")
+    _, coordinator = await _setup_integration(hass)
+    _set_climate(hass, state="off")
+    start = dt_util.utcnow()
+
+    with _capture_climate_calls(hass):
+        coordinator.enabled = True
+        for minutes in (0, 60, 130):
+            at = start + timedelta(minutes=minutes)
+            hass.states.async_set(
+                "sensor.living_room_temperature",
+                "18.0",
+                force_update=True,
+                timestamp=at.timestamp(),
+            )
+            with patch(
+                "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+                return_value=at,
+            ):
+                await coordinator.async_refresh()
+
+    assert coordinator.data["heating_problem"] is False

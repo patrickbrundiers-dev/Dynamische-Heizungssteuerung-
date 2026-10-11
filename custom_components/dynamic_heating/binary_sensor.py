@@ -1,4 +1,4 @@
-"""Problem sensor for the thermostats of a dynamically heated room."""
+"""Problem sensors of a dynamically heated room."""
 
 from __future__ import annotations
 
@@ -23,9 +23,14 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the thermostat problem sensor."""
+    """Set up the thermostat and heating problem sensors."""
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
-    async_add_entities([ThermostatProblemSensor(coordinator, entry)])
+    async_add_entities(
+        [
+            ThermostatProblemSensor(coordinator, entry),
+            HeatingProblemSensor(coordinator, entry),
+        ]
+    )
 
 
 class ThermostatProblemSensor(
@@ -63,3 +68,33 @@ class ThermostatProblemSensor(
         if not self.coordinator.data:
             return None
         return {"warnings": self.coordinator.data.get("thermostat_warnings") or {}}
+
+
+class HeatingProblemSensor(
+    CoordinatorEntity[DynamicHeatingCoordinator], BinarySensorEntity
+):
+    """On while the room stays well below its target without warming up."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_name = "Heizproblem"
+    _attr_icon = "mdi:thermometer-alert"
+
+    def __init__(
+        self, coordinator: DynamicHeatingCoordinator, entry: ConfigEntry
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_heating_problem"
+        self._attr_has_entity_name = True
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dynamische Heizungssteuerung",
+            manufacturer="Community",
+            model="Adaptive Heating Controller",
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return whether the room fails to warm up."""
+        if not self.coordinator.data:
+            return None
+        return bool(self.coordinator.data.get("heating_problem"))
