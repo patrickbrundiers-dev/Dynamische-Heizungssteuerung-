@@ -137,7 +137,10 @@
           "valve_maintenance": "Wöchentliche Ventilwartung",
           "hysteresis": "Hysterese der Kalibrierung",
           "boost_temperature": "Boost-Temperatur",
-          "boost_duration": "Boost-Dauer"
+          "boost_duration": "Boost-Dauer",
+          "home_temperature": "Temperatur „Zuhause“",
+          "activity_temperature": "Temperatur „Aktivität“",
+          "sleep_temperature": "Temperatur „Schlafen“"
         },
         "data_description": {
           "climate_entity": "Wähle die Climate-Entität, deren Sollwert dieser Raumregler verändern darf. Vermeide weitere Automationen, die gleichzeitig dasselbe Thermostat steuern.",
@@ -153,7 +156,10 @@
           "valve_maintenance": "Gegen Verkalkung werden die Ventile einmal pro Woche gegen 11 Uhr für 5 Minuten ganz geöffnet und danach 5 Minuten ganz geschlossen (Maximal- bzw. Minimaltemperatur des Thermostats), wie bei Better Thermostat. Bei offenem Fenster oder manueller Übersteuerung wird sie verschoben. Nur bei aktiver Regelung.",
           "hysteresis": "Eine neu berechnete Kalibrierung wird nur übernommen, wenn sie sich um mindestens diesen Wert geändert hat. So werden die Thermostate nicht bei jeder kleinen Temperaturschwankung nachgestellt. 0 schaltet die Hysterese ab.",
           "boost_temperature": "Solltemperatur, solange der Schalter „Boost“ an ist. Der Boost hat Vorrang vor Zeitplan, Anwesenheit und Heizgrenze, nicht aber vor einem offenen Fenster oder ausgeschalteter Heizperiode.",
-          "boost_duration": "Nach dieser Zeit schaltet sich der Boost von selbst aus."
+          "boost_duration": "Nach dieser Zeit schaltet sich der Boost von selbst aus.",
+          "home_temperature": "Solltemperatur der Taste bzw. Betriebsart „Zuhause“ (wie das Preset „Home“ von Better Thermostat).",
+          "activity_temperature": "Solltemperatur der Taste bzw. Betriebsart „Aktivität“ (wie das Preset „Activity“ von Better Thermostat).",
+          "sleep_temperature": "Solltemperatur der Taste bzw. Betriebsart „Schlafen“ (wie das Preset „Sleep“ von Better Thermostat). „Abwesend“ nutzt die Abwesenheitstemperatur, ohne sie die Eco-Temperatur."
         }
       },
       "presence": {

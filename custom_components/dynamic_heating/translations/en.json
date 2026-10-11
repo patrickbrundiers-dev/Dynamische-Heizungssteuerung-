@@ -137,7 +137,10 @@
           "valve_maintenance": "Weekly valve maintenance",
           "hysteresis": "Calibration hysteresis",
           "boost_temperature": "Boost temperature",
-          "boost_duration": "Boost duration"
+          "boost_duration": "Boost duration",
+          "home_temperature": "\"Home\" temperature",
+          "activity_temperature": "\"Activity\" temperature",
+          "sleep_temperature": "\"Sleep\" temperature"
         },
         "data_description": {
           "climate_entity": "Select the climate entity this room controller may adjust. Avoid running another automation that writes targets to the same thermostat.",
@@ -153,7 +156,10 @@
           "valve_maintenance": "Against calcification the valves are fully opened for 5 minutes and then fully closed for 5 minutes once a week around 11:00 (thermostat maximum and minimum temperature), as in Better Thermostat. Postponed while a window is open or control is manually overridden. Only while control is active.",
           "hysteresis": "A recomputed calibration is only applied when it changed by at least this value, so the thermostats are not re-adjusted for every small temperature fluctuation. 0 disables the hysteresis.",
           "boost_temperature": "Target temperature while the \"Boost\" switch is on. Boost wins over schedule, presence and heating limit, but not over an open window or the heating season being off.",
-          "boost_duration": "The boost turns itself off after this time."
+          "boost_duration": "The boost turns itself off after this time.",
+          "home_temperature": "Target of the \"Zuhause\" (home) button and mode, like Better Thermostat's home preset.",
+          "activity_temperature": "Target of the \"Aktivität\" (activity) button and mode, like Better Thermostat's activity preset.",
+          "sleep_temperature": "Target of the \"Schlafen\" (sleep) button and mode, like Better Thermostat's sleep preset. \"Abwesend\" (away) uses the away temperature, or eco without one."
         }
       },
       "presence": {

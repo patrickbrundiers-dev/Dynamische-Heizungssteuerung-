@@ -17,13 +17,9 @@ from .const import (
     HOUSE_HOME,
     HOUSE_MODES,
     HOUSE_VACATION,
-    QUICK_AUTO,
-    QUICK_BOOST,
-    QUICK_COMFORT,
     QUICK_DURATIONS,
-    QUICK_ECO,
+    QUICK_LABELS,
     QUICK_MODES,
-    QUICK_OFF,
     QUICK_UNTIL_1H,
     QUICK_UNTIL_3H,
     QUICK_UNTIL_FOREVER,
@@ -33,13 +29,7 @@ from .const import (
 from .coordinator import DynamicHeatingCoordinator
 from .house_entities import HouseEntity
 
-_LABELS = {
-    QUICK_AUTO: "Automatik",
-    QUICK_COMFORT: "Komfort",
-    QUICK_ECO: "Eco",
-    QUICK_BOOST: "Boost",
-    QUICK_OFF: "Aus",
-}
+_LABELS = QUICK_LABELS
 _MODES = {label: mode for mode, label in _LABELS.items()}
 _DURATION_LABELS = {
     QUICK_UNTIL_SCHEDULE: "Bis Zeitplanwechsel",
@@ -51,7 +41,7 @@ _DURATION_LABELS = {
 _DURATIONS = {label: key for key, label in _DURATION_LABELS.items()}
 
 
-def _device_info(entry: ConfigEntry) -> DeviceInfo:
+def device_info(entry: ConfigEntry) -> DeviceInfo:
     return DeviceInfo(
         identifiers={(DOMAIN, entry.entry_id)},
         name="Dynamische Heizungssteuerung",
@@ -88,7 +78,7 @@ class QuickModeSelect(CoordinatorEntity[DynamicHeatingCoordinator], SelectEntity
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_quick_mode"
         self._attr_has_entity_name = True
-        self._attr_device_info = _device_info(entry)
+        self._attr_device_info = device_info(entry)
 
     @property
     def current_option(self) -> str:
@@ -123,7 +113,7 @@ class QuickDurationSelect(CoordinatorEntity[DynamicHeatingCoordinator], SelectEn
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_quick_duration"
         self._attr_has_entity_name = True
-        self._attr_device_info = _device_info(entry)
+        self._attr_device_info = device_info(entry)
 
     @property
     def current_option(self) -> str:

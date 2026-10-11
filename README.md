@@ -278,3 +278,10 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
   type: custom:dynamic-heating-card
   entity: select.dynamische_heizungssteuerung_betriebsart
   ```
+
+## Version 0.5.2: Tasten zur manuellen Übersteuerung wie bei Better Thermostat
+
+- **Neue Betriebsarten** wie die Presets von Better Thermostat: *Zuhause*, *Aktivität*, *Schlafen* und *Abwesend*, zusätzlich zu *Automatik*, *Komfort*, *Eco*, *Boost* und *Aus*. Sie gelten wie Komfort und Eco für die gewählte **Betriebsart-Dauer**; ein offenes Fenster und das Ende der Heizperiode haben weiter Vorrang.
+- **Temperaturen** (Editor, Seite **Raum und Heizverhalten**): *Zuhause* 20 °C, *Aktivität* 22 °C, *Schlafen* 18 °C als Standard. *Abwesend* nutzt die Abwesenheitstemperatur, ohne sie die Eco-Temperatur.
+- **Tasten je Raum**: Für jede Betriebsart gibt es eine Taste-Entität (z. B. `button.<raum>_schlafen`), die den Raum sofort umschaltet, auch für Automationen, Sprachassistenten oder NFC-Tags. Das Attribut `active` zeigt, ob diese Betriebsart gerade läuft.
+- **Raumkarte**: zeigt alle Betriebsarten als Tasten mit Symbol. Mit `modes:` lässt sich die Auswahl eingrenzen, z. B. `modes: [Automatik, Komfort, Schlafen, Abwesend, Boost]`.

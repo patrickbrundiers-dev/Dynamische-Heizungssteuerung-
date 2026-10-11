@@ -3,7 +3,7 @@
 from typing import Final
 
 DOMAIN: Final = "dynamic_heating"
-PLATFORMS: Final = ["binary_sensor", "select", "sensor", "switch"]
+PLATFORMS: Final = ["binary_sensor", "button", "select", "sensor", "switch"]
 
 CONF_CLIMATE_ENTITY: Final = "climate_entity"
 # Further thermostats of the same room; they get the same target.
@@ -161,7 +161,52 @@ QUICK_COMFORT: Final = "comfort"
 QUICK_ECO: Final = "eco"
 QUICK_BOOST: Final = "boost"
 QUICK_OFF: Final = "off"
-QUICK_MODES: Final = (QUICK_AUTO, QUICK_COMFORT, QUICK_ECO, QUICK_BOOST, QUICK_OFF)
+# Further presets as in Better Thermostat: away uses the away temperature
+# (or eco), sleep, home and activity have their own temperatures.
+QUICK_AWAY: Final = "away"
+QUICK_SLEEP: Final = "sleep"
+QUICK_HOME: Final = "home"
+QUICK_ACTIVITY: Final = "activity"
+QUICK_MODES: Final = (
+    QUICK_AUTO,
+    QUICK_COMFORT,
+    QUICK_HOME,
+    QUICK_ACTIVITY,
+    QUICK_ECO,
+    QUICK_SLEEP,
+    QUICK_AWAY,
+    QUICK_BOOST,
+    QUICK_OFF,
+)
+# German names of the quick modes, used by the select and the buttons.
+QUICK_LABELS: Final = {
+    QUICK_AUTO: "Automatik",
+    QUICK_COMFORT: "Komfort",
+    QUICK_HOME: "Zuhause",
+    QUICK_ACTIVITY: "Aktivität",
+    QUICK_ECO: "Eco",
+    QUICK_SLEEP: "Schlafen",
+    QUICK_AWAY: "Abwesend",
+    QUICK_BOOST: "Boost",
+    QUICK_OFF: "Aus",
+}
+QUICK_ICONS: Final = {
+    QUICK_AUTO: "mdi:calendar-clock",
+    QUICK_COMFORT: "mdi:sofa",
+    QUICK_HOME: "mdi:home",
+    QUICK_ACTIVITY: "mdi:run",
+    QUICK_ECO: "mdi:leaf",
+    QUICK_SLEEP: "mdi:bed",
+    QUICK_AWAY: "mdi:home-export-outline",
+    QUICK_BOOST: "mdi:fire",
+    QUICK_OFF: "mdi:snowflake",
+}
+CONF_SLEEP_TEMPERATURE: Final = "sleep_temperature"
+CONF_HOME_TEMPERATURE: Final = "home_temperature"
+CONF_ACTIVITY_TEMPERATURE: Final = "activity_temperature"
+DEFAULT_SLEEP_TEMPERATURE: Final = 18.0
+DEFAULT_HOME_TEMPERATURE: Final = 20.0
+DEFAULT_ACTIVITY_TEMPERATURE: Final = 22.0
 # How long a hand-picked Komfort/Eco/Aus holds.
 QUICK_UNTIL_SCHEDULE: Final = "schedule"
 QUICK_UNTIL_1H: Final = "1h"
