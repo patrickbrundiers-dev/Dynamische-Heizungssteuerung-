@@ -2,6 +2,15 @@
   "config": {
     "step": {
       "user": {
+        "title": "Dynamic heating",
+        "description": "What would you like to set up?",
+        "menu_options": {
+          "room": "Set up a new room",
+          "copy": "Create a room with the settings of another room",
+          "house": "House settings (house mode, vacation, overview)"
+        }
+      },
+      "room": {
         "title": "Dynamic Heating Control",
         "description": "Choose the thermostat, room temperature sensor and schedule helper. Control stays disabled after setup.",
         "data": {
@@ -37,7 +46,8 @@
           "calibration": "Calibrate setpoint with the room sensor",
           "external_temperature": "Send the room temperature to the thermostats",
           "valve_maintenance": "Weekly valve maintenance",
-          "hysteresis": "Calibration hysteresis"
+          "hysteresis": "Calibration hysteresis",
+          "window_drop_detection": "Detect windows without a contact"
         },
         "data_description": {
           "person_entities": "Comfort heating is allowed when at least one selected person or device tracker is home. Device trackers are recommended for simple home/not-home states.",
@@ -63,7 +73,37 @@
           "calibration": "The thermostat measures right at the radiator. When enabled, its setpoint is shifted by the difference between thermostat and room temperature (like Better Thermostat's target-temperature calibration) so it regulates on the room sensor. The difference is recomputed at most every 10 minutes. Do not enable when the selected thermostat already is a Better Thermostat.",
           "external_temperature": "For thermostats with an external temperature input (e.g. Aqara E1 via Zigbee2MQTT): the integration switches them to the external sensor and sends them the room sensor's temperature, like Better Thermostat. The valve then regulates on the room temperature itself, so no calibration is needed for these thermostats. While control is off or the room sensor is unavailable they are switched back to their own sensor.",
           "valve_maintenance": "Against calcification the valves are fully opened for 5 minutes and then fully closed for 5 minutes once a week around 11:00 (thermostat maximum and minimum temperature), as in Better Thermostat. Postponed while a window is open or control is manually overridden. Only while control is active.",
-          "hysteresis": "A recomputed calibration is only applied when it changed by at least this value, so the thermostats are not re-adjusted for every small temperature fluctuation. 0 disables the hysteresis."
+          "hysteresis": "A recomputed calibration is only applied when it changed by at least this value, so the thermostats are not re-adjusted for every small temperature fluctuation. 0 disables the hysteresis.",
+          "window_drop_detection": "When the room cools by 1 °C within 10 minutes it is lowered for 15 minutes as with an open window. Works in addition to a window contact."
+        }
+      },
+      "copy": {
+        "title": "Copy settings",
+        "description": "Schedule, temperatures, people, proximity zone, window delays, notifications and all other settings are taken from this room.",
+        "data": {
+          "source": "Template room"
+        }
+      },
+      "copy_room": {
+        "title": "Devices of the new room",
+        "description": "Everything else is taken from {source} and can be changed in the editor afterwards.",
+        "data": {
+          "climate_entity": "Thermostat",
+          "additional_climate_entities": "Further thermostats in the room (optional)",
+          "room_temperature_entity": "Room temperature sensor",
+          "schedule_entity": "Comfort schedule",
+          "window_entity": "Window contact (optional)",
+          "presence_entity": "Room presence sensor (optional)"
+        }
+      },
+      "house": {
+        "title": "House settings",
+        "description": "Creates the house mode (home, away, vacation), the vacation end and an overview of all rooms.",
+        "data": {
+          "notify_service": "Notify service (optional)"
+        },
+        "data_description": {
+          "notify_service": "For the weekly report, e.g. notify.mobile_app_phone."
         }
       }
     },
@@ -74,7 +114,8 @@
       "frost_must_be_below_comfort": "The frost protection temperature must be below the comfort temperature."
     },
     "abort": {
-      "already_configured": "A dynamic heating controller is already configured for this thermostat."
+      "already_configured": "A dynamic heating controller is already configured for this thermostat.",
+      "source_missing": "The template room no longer exists."
     }
   },
   "options": {
@@ -169,7 +210,8 @@
           "window_close_delay": "Window: wait time after closing",
           "window_temperature": "Temperature while window is open (°C, optional)",
           "heating_season_entity": "Heating season / winter mode (optional)",
-          "notify_service": "Push notification (optional)"
+          "notify_service": "Push notification (optional)",
+          "window_drop_detection": "Detect windows without a contact"
         },
         "data_description": {
           "window_entity": "When ON, setback is enforced. If configured but unavailable, the controller avoids writing a new target.",
@@ -180,7 +222,17 @@
           "window_close_delay": "After closing, the window setback is kept this long so the room air settles. 0 = immediately.",
           "window_temperature": "Own setpoint while a window is open, e.g. 15 °C. Leave empty to use the eco or away temperature as before. Must be below the comfort temperature.",
           "heating_season_entity": "Switch or sensor for the heating season, e.g. a winter mode. While it is OFF the room is not heated: the setpoint goes to the frost protection temperature or, without one, the thermostat minimum. If the entity is unavailable, heating continues normally. Leave empty to disable.",
-          "notify_service": "Notify service for your phone, e.g. notify.mobile_app_phone. While control is on it reports thermostat problems or a failed room sensor after 30 minutes, blocked control after 30 minutes, heating problems, frost risk and a window open for over an hour in the heating season. Leave empty to turn off."
+          "notify_service": "Notify service for your phone, e.g. notify.mobile_app_phone. While control is on it reports thermostat problems or a failed room sensor after 30 minutes, blocked control after 30 minutes, heating problems, frost risk and a window open for over an hour in the heating season. Leave empty to turn off.",
+          "window_drop_detection": "When the room cools by 1 °C within 10 minutes it is lowered for 15 minutes as with an open window. Works in addition to a window contact."
+        }
+      },
+      "house_settings": {
+        "title": "House settings",
+        "data": {
+          "notify_service": "Notify service (optional)"
+        },
+        "data_description": {
+          "notify_service": "For the weekly report, e.g. notify.mobile_app_phone."
         }
       }
     },

@@ -188,3 +188,29 @@ NOTIFY_WINDOW_SECONDS: Final = 3600
 # fallback limit below without frost protection).
 NOTIFY_FROST_MARGIN: Final = 1.0
 NOTIFY_FROST_FALLBACK_TEMPERATURE: Final = 10.0
+
+# House-wide settings live in their own config entry.
+CONF_ENTRY_TYPE: Final = "entry_type"
+ENTRY_TYPE_HOUSE: Final = "house"
+HOUSE_DATA_KEY: Final = "house"
+HOUSE_PLATFORMS: Final = ["button", "datetime", "select", "sensor"]
+HOUSE_HOME: Final = "home"
+HOUSE_AWAY: Final = "away"
+HOUSE_VACATION: Final = "vacation"
+HOUSE_MODES: Final = (HOUSE_HOME, HOUSE_AWAY, HOUSE_VACATION)
+
+# Window detection without a contact: the room cools this much this fast.
+CONF_WINDOW_DROP_DETECTION: Final = "window_drop_detection"
+WINDOW_DROP_DEGREES: Final = 1.0
+WINDOW_DROP_SECONDS: Final = 600
+# How long the room then stays lowered as with an open window.
+WINDOW_DROP_HOLD_SECONDS: Final = 900
+
+# Heat demand estimated from the gap to the target when the valves do not
+# report an opening: this gap counts as full demand.
+HEAT_DEMAND_FULL_GAP: Final = 2.0
+HEAT_DEMAND_KEYS: Final = ("pi_heating_demand", "valve_position", "position")
+
+# Weekly report of the house entry: Sunday evening.
+REPORT_WEEKDAY: Final = 6
+REPORT_HOUR: Final = 18

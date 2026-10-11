@@ -12,6 +12,7 @@ from custom_components.dynamic_heating.logic import (
     evaluate_window_open,
     fallback_room_temperature,
     schedule_comfort_temperature,
+    select_forecast_temperature,
     valve_maintenance_due,
     valve_maintenance_phase,
 )
@@ -528,3 +529,27 @@ def test_schedule_comfort_temperature_accepts_only_plausible_numbers() -> None:
     assert schedule_comfort_temperature(None) is None
     assert schedule_comfort_temperature("warm") is None
     assert schedule_comfort_temperature(45) is None
+
+
+def test_preheat_is_timed_with_the_forecast_temperature() -> None:
+    now = datetime(2026, 10, 12, 4, 0, tzinfo=UTC)
+    event = now + timedelta(minutes=100)
+    forecast = [
+        {"datetime": (now + timedelta(hours=h)).isoformat(), "temperature": 10 - h * 4}
+        for h in range(4)
+    ]
+    # Nearest point to the comfort start (in 1 h 40 min) is the one in 2 h.
+    assert select_forecast_temperature(forecast, event, now) == 2
+    assert select_forecast_temperature(forecast, now - timedelta(hours=1), now) is None
+    assert select_forecast_temperature([{"datetime": "x", "temperature": 3}], event, now) is None
+
+    common = dict(
+        now=now, schedule_active=False, next_event=event, room_temperature=19.0,
+        outdoor_temperature=10.0, comfort_temperature=21.0, eco_temperature=18.0,
+        heating_rate_c_per_hour=1.2, max_preheat_minutes=240,
+    )
+    mild = decide_heating_target(**common)
+    cold = decide_heating_target(**common, forecast_temperature=-5.0)
+    # A cold morning starts earlier than the current mild reading suggests.
+    assert cold.preheat_minutes > mild.preheat_minutes
+    assert cold.mode == "preheat"

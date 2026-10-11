@@ -262,3 +262,19 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 - **Proximity-Zone** (Editor, Seite 3): Es reicht, die Zone der Proximity-Integration (z. B. *Home*) auszuwählen. Die Entfernungs- und Richtungssensoren der Personen dieses Raums werden automatisch gefunden; andere Personen der Zone zählen nicht. Ohne eingetragene Personen gilt die Person, die der Zone am nächsten ist. Die Zone ist nur aktiv, solange keine dieser Personen zuhause ist. Ist mindestens eine zuhause, **schlummert** sie. Sind alle weg und die Standortdaten zu alt, bleibt der Raum abgesenkt, statt die Regelung anzuhalten. Die früheren Felder für Entfernungs- und Richtungssensor entfallen; bestehende Einstellungen gelten weiter, bis die Seite gespeichert wird.
 - **Neustartfest**: Betriebsart mit Endzeit, Boost, bereits gesendete Meldungen und die Entscheidung des Anwesenheitssensors bleiben über einen Neustart von Home Assistant erhalten.
 - **Betriebsart-Dauer** (Auswahl-Entität): *Bis Zeitplanwechsel*, *1 Stunde*, *3 Stunden*, *Bis morgen früh* (6 Uhr) oder *Dauerhaft*. Gilt für Komfort, Eco und Aus; eine laufende Betriebsart wird neu getaktet.
+
+## Version 0.5.1: Haus, Räume, Wetter, Wochenbericht und Raumkarte
+
+- **Haus-Einstellungen** (Integration hinzufügen → *Haus-Einstellungen*): **Hausmodus** *Zuhause*, *Abwesend* oder *Urlaub* für alle Räume. *Abwesend* senkt jeden Raum auf seine Abwesenheitstemperatur (sonst Eco). *Urlaub* hält den Frostschutz und heizt bis **Urlaub bis** rechtzeitig auf Komfort vor; danach steht der Hausmodus wieder auf Zuhause. Beim Wechsel auf Abwesend oder Urlaub werden von Hand gewählte Betriebsarten der Räume zurückgesetzt. Ein offenes Fenster hat weiter Vorrang.
+- **Raum kopieren** (Integration hinzufügen → *Raum mit den Einstellungen eines anderen Raums anlegen*): Nur Thermostate, Raumfühler, Zeitplan, Fensterkontakt und Anwesenheitssensor des neuen Raums werden abgefragt, alles andere kommt aus dem Vorlage-Raum.
+- **Übersicht**: Der Sensor *Räume heizen* des Hauses zählt die Räume, die gerade heizen, und listet jeden Raum mit Ist, Soll, Status und Problemen in seinen Attributen.
+- **Vorheizen mit Wettervorhersage**: Mit einer Wetter-Entität wird die Vorheizzeit mit der vorhergesagten Außentemperatur zum Komfortbeginn berechnet, also an kalten Morgen früher und an milden später. Sensor *Vorhergesagte Außentemperatur zum Komfortbeginn*.
+- **Fenster ohne Kontakt erkennen** (Editor, Seite 4): Fällt die Raumtemperatur innerhalb von 10 Minuten um 1 °C, wird der Raum 15 Minuten wie bei offenem Fenster abgesenkt.
+- **Wärmebedarf**: Sensor je Raum (0–100 %, aus den Ventilöffnungen oder aus dem Abstand zum Soll geschätzt) und *Wärmebedarf* des Hauses (höchster Raum, Durchschnitt und alle Räume als Attribute), z. B. für eine Therme.
+- **Wochenbericht**: Sonntags um 18 Uhr eine Meldung an den Benachrichtigungsdienst des Hauses (sonst den des ersten Raums) mit Heizstunden, Durchschnittstemperatur, offenen Fenstern beim Heizen und Meldungen je Raum. Taste *Wochenbericht senden* schickt ihn sofort.
+- **Raumkarte**: Die Integration bringt die Karte *Dynamische Heizung* mit. Im Dashboard *Karte hinzufügen* → *Dynamische Heizung*; es reicht die Betriebsart-Entität des Raums:
+
+  ```yaml
+  type: custom:dynamic-heating-card
+  entity: select.dynamische_heizungssteuerung_betriebsart
+  ```

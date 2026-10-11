@@ -16,7 +16,9 @@ from .const import (
     CONF_NOTIFY_SERVICE,
     CONF_BOOST_TEMPERATURE,
     CONF_CALIBRATION,
+    CONF_ENTRY_TYPE,
     CONF_EXTERNAL_TEMPERATURE,
+    ENTRY_TYPE_HOUSE,
     CONF_HYSTERESIS,
     DEFAULT_BOOST_DURATION,
     DEFAULT_BOOST_TEMPERATURE,
@@ -48,6 +50,7 @@ from .const import (
     CONF_SCHEDULE_ENTITY,
     CONF_WEATHER_ENTITY,
     CONF_WINDOW_CLOSE_DELAY,
+    CONF_WINDOW_DROP_DETECTION,
     CONF_WINDOW_ENTITY,
     CONF_WINDOW_OPEN_DELAY,
     CONF_WINDOW_TEMPERATURE,
@@ -140,6 +143,26 @@ def _zone_selector() -> selector.ConfigEntrySelector:
     )
 
 
+def _notify_selector(hass) -> selector.SelectSelector:
+    """Notify services of this Home Assistant, or a typed-in one."""
+    services = sorted(
+        f"notify.{name}"
+        for name in hass.services.async_services().get("notify", {})
+        if name not in ("send_message", "persistent_notification")
+    )
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=services,
+            custom_value=True,
+            mode=selector.SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
+def _house_schema(hass) -> vol.Schema:
+    return vol.Schema({vol.Optional(CONF_NOTIFY_SERVICE): _notify_selector(hass)})
+
+
 def _away_below_comfort(values: dict, comfort: float) -> bool:
     """An optional away temperature must stay below the comfort target."""
     away = values.get(CONF_AWAY_TEMPERATURE)
@@ -194,6 +217,9 @@ def _user_schema() -> vol.Schema:
                 default=_seconds_to_duration(DEFAULT_WINDOW_CLOSE_DELAY),
             ): _duration_selector(),
             vol.Optional(CONF_WINDOW_TEMPERATURE): _temperature_selector(5, 21),
+            vol.Optional(
+                CONF_WINDOW_DROP_DETECTION, default=False
+            ): selector.BooleanSelector(),
             vol.Optional(CONF_PERSON_ENTITIES): selector.EntitySelector(
                 selector.EntitySelectorConfig(
                     domain=["person", "device_tracker"], multiple=True
@@ -277,11 +303,117 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry):
-        """Return the editor for an existing room."""
+        """Return the editor for an existing room or the house settings."""
+        if config_entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HOUSE:
+            return HouseOptionsFlow()
         return DynamicHeatingOptionsFlow()
 
+    def _rooms(self) -> list[ConfigEntry]:
+        return [
+            entry
+            for entry in self.hass.config_entries.async_entries(DOMAIN)
+            if entry.data.get(CONF_ENTRY_TYPE) != ENTRY_TYPE_HOUSE
+        ]
+
     async def async_step_user(self, user_input=None):
-        """Handle the initial setup form."""
+        """Choose between a new room, a copy of a room and the house settings."""
+        options = ["room"]
+        if self._rooms():
+            options.append("copy")
+        if not any(
+            entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HOUSE
+            for entry in self.hass.config_entries.async_entries(DOMAIN)
+        ):
+            options.append("house")
+        return self.async_show_menu(step_id="user", menu_options=options)
+
+    async def async_step_house(self, user_input=None):
+        """Create the house-wide settings (house mode, vacation, overview)."""
+        await self.async_set_unique_id(ENTRY_TYPE_HOUSE)
+        self._abort_if_unique_id_configured()
+        if user_input is not None:
+            return self.async_create_entry(
+                title="Haus",
+                data={CONF_ENTRY_TYPE: ENTRY_TYPE_HOUSE},
+                options={
+                    CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE) or None
+                },
+            )
+        return self.async_show_form(
+            step_id="house", data_schema=_house_schema(self.hass)
+        )
+
+    async def async_step_copy(self, user_input=None):
+        """Pick the room whose settings the new room takes over."""
+        if user_input is not None:
+            self._copy_source = user_input["source"]
+            return await self.async_step_copy_room()
+        return self.async_show_form(
+            step_id="copy",
+            data_schema=vol.Schema({
+                vol.Required("source"): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            selector.SelectOptionDict(value=entry.entry_id, label=entry.title)
+                            for entry in self._rooms()
+                        ],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            }),
+        )
+
+    async def async_step_copy_room(self, user_input=None):
+        """The new room's own devices; everything else comes from the source."""
+        source = self.hass.config_entries.async_get_entry(self._copy_source)
+        if source is None:
+            return self.async_abort(reason="source_missing")
+        values = {**dict(source.data), **dict(source.options)}
+        if user_input is not None:
+            climate_entity = user_input[CONF_CLIMATE_ENTITY]
+            await self.async_set_unique_id(climate_entity)
+            self._abort_if_unique_id_configured()
+            data = {key: value for key, value in values.items() if value is not None}
+            for key in (
+                CONF_ADDITIONAL_CLIMATE_ENTITIES,
+                CONF_WINDOW_ENTITY,
+                CONF_PRESENCE_ENTITY,
+            ):
+                data.pop(key, None)
+            data.update(
+                {key: value for key, value in user_input.items() if value}
+            )
+            return self.async_create_entry(
+                title=f"Dynamische Heizung – {climate_entity}", data=data
+            )
+        schema = vol.Schema({
+            vol.Required(CONF_CLIMATE_ENTITY): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="climate")
+            ),
+            vol.Optional(CONF_ADDITIONAL_CLIMATE_ENTITIES): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="climate", multiple=True)
+            ),
+            vol.Required(CONF_ROOM_TEMPERATURE_ENTITY): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="sensor")
+            ),
+            vol.Required(
+                CONF_SCHEDULE_ENTITY, default=values.get(CONF_SCHEDULE_ENTITY)
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="schedule")),
+            vol.Optional(CONF_WINDOW_ENTITY): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="binary_sensor")
+            ),
+            vol.Optional(CONF_PRESENCE_ENTITY): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])
+            ),
+        })
+        return self.async_show_form(
+            step_id="copy_room",
+            data_schema=schema,
+            description_placeholders={"source": source.title},
+        )
+
+    async def async_step_room(self, user_input=None):
+        """Handle the form for a new room."""
         errors: dict[str, str] = {}
         if user_input is not None:
             climate_entity = user_input[CONF_CLIMATE_ENTITY]
@@ -304,7 +436,7 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(title=title, data=data)
 
         return self.async_show_form(
-            step_id="user", data_schema=_user_schema(), errors=errors
+            step_id="room", data_schema=_user_schema(), errors=errors
         )
 
 
@@ -464,6 +596,10 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         ):
             schema[item[0]] = item[1]
         schema[vol.Optional(CONF_WINDOW_TEMPERATURE)] = _temperature_selector(5, 21)
+        schema[vol.Optional(
+            CONF_WINDOW_DROP_DETECTION,
+            default=bool(current.get(CONF_WINDOW_DROP_DETECTION, False)),
+        )] = selector.BooleanSelector()
         for item in (
             self._entity_field(CONF_OUTDOOR_TEMPERATURE_ENTITY, "sensor", current),
             self._entity_field(CONF_WEATHER_ENTITY, "weather", current),
@@ -473,18 +609,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         ):
             schema[item[0]] = item[1]
         schema[vol.Optional(CONF_HEATING_LIMIT_TEMPERATURE)] = _temperature_selector(10, 25)
-        notify_services = sorted(
-            f"notify.{name}"
-            for name in self.hass.services.async_services().get("notify", {})
-            if name not in ("send_message", "persistent_notification")
-        )
-        schema[vol.Optional(CONF_NOTIFY_SERVICE)] = selector.SelectSelector(
-            selector.SelectSelectorConfig(
-                options=notify_services,
-                custom_value=True,
-                mode=selector.SelectSelectorMode.DROPDOWN,
-            )
-        )
+        schema[vol.Optional(CONF_NOTIFY_SERVICE)] = _notify_selector(self.hass)
         return vol.Schema(schema)
 
     def _show_step(
@@ -635,6 +760,9 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             for key in (CONF_WINDOW_OPEN_DELAY, CONF_WINDOW_CLOSE_DELAY):
                 current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
             current[CONF_WINDOW_TEMPERATURE] = user_input.get(CONF_WINDOW_TEMPERATURE)
+            current[CONF_WINDOW_DROP_DETECTION] = bool(
+                user_input.get(CONF_WINDOW_DROP_DETECTION, False)
+            )
             # A cleared field must override a value saved earlier.
             current[CONF_HEATING_LIMIT_TEMPERATURE] = user_input.get(
                 CONF_HEATING_LIMIT_TEMPERATURE
@@ -653,4 +781,24 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
 
         return self._show_step(
             "environment", self._environment_schema(current), current
+        )
+
+
+class HouseOptionsFlow(config_entries.OptionsFlowWithReload):
+    """Settings of the house entry."""
+
+    async def async_step_init(self, user_input=None):
+        return await self.async_step_house_settings()
+
+    async def async_step_house_settings(self, user_input=None):
+        if user_input is not None:
+            return self.async_create_entry(
+                title="",
+                data={CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE) or None},
+            )
+        return self.async_show_form(
+            step_id="house_settings",
+            data_schema=self.add_suggested_values_to_schema(
+                _house_schema(self.hass), dict(self.config_entry.options)
+            ),
         )

@@ -2459,3 +2459,185 @@ async def test_mode_boost_alerts_and_presence_survive_a_restart(
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
     assert hass.data[DOMAIN][entry.entry_id].boost_until is None
+
+
+async def _setup_house(hass):
+    house_entry = MockConfigEntry(
+        domain=DOMAIN, title="Haus", unique_id="house", data={"entry_type": "house"}
+    )
+    house_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(house_entry.entry_id)
+    await hass.async_block_till_done()
+    return house_entry, hass.data[DOMAIN]["house"]
+
+
+@pytest.mark.asyncio
+async def test_house_mode_away_and_vacation_for_all_rooms(
+    hass, enable_custom_integrations
+):
+    """Abwesend lowers every room, Urlaub holds frost protection and preheats in time."""
+    _set_up_test_entities(hass, room_temperature="20.0")
+    hass.states.async_set(
+        "schedule.living_room_comfort", "on",
+        {"next_event": (dt_util.now() + timedelta(hours=3)).isoformat()},
+    )
+    entry, coordinator = await _setup_integration(hass)
+    coordinator.config["frost_protection_temperature"] = 8.0
+    house_entry, house = await _setup_house(hass)
+    registry = er.async_get(hass)
+    mode_id = registry.async_get_entity_id(
+        "select", DOMAIN, f"{house_entry.entry_id}_house_mode"
+    )
+    until_id = registry.async_get_entity_id(
+        "datetime", DOMAIN, f"{house_entry.entry_id}_vacation_until"
+    )
+    overview_id = registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{house_entry.entry_id}_overview"
+    )
+    await coordinator.async_refresh()
+    assert coordinator.data["mode"] == "comfort"
+
+    # A hand-picked room mode is reset when the house goes away.
+    await coordinator.async_set_quick_mode("comfort")
+    await hass.services.async_call(
+        "select", "select_option", {"entity_id": mode_id, "option": "Abwesend"},
+        blocking=True,
+    )
+    assert coordinator.quick_mode == "auto"
+    assert coordinator.data["mode"] == "house_away"
+    assert coordinator.data["target_temperature"] == 18.0
+
+    # Urlaub without an end: frost protection.
+    await house.async_set_mode("vacation")
+    assert coordinator.data["mode"] == "house_vacation"
+    assert coordinator.data["target_temperature"] == 8.0
+
+    # Urlaub ending in two days: still frost protection.
+    await hass.services.async_call(
+        "datetime", "set_value",
+        {"entity_id": until_id, "datetime": dt_util.now() + timedelta(days=2)},
+        blocking=True,
+    )
+    assert coordinator.data["mode"] == "house_vacation"
+    assert coordinator.data["status"].startswith("Urlaub bis")
+
+    # Return in 20 minutes: heated up for it.
+    await house.async_set_vacation_until(dt_util.utcnow() + timedelta(minutes=20))
+    assert coordinator.data["mode"] == "house_return"
+    assert coordinator.data["target_temperature"] == 21.0
+
+    # After the return the house is back home and the room automatic.
+    with patch(
+        "custom_components.dynamic_heating.house.dt_util.utcnow",
+        return_value=dt_util.utcnow() + timedelta(minutes=21),
+    ):
+        await house._async_check_vacation()
+    assert house.mode == "home"
+    assert coordinator.data["mode"] == "comfort"
+    assert hass.states.get(mode_id).state == "Zuhause"
+
+    state = hass.states.get(overview_id)
+    assert state.attributes["house_mode"] == "home"
+    assert [room["entry_id"] for room in state.attributes["rooms"]] == [entry.entry_id]
+
+    # The house mode survives a restart.
+    await house.async_set_mode("away")
+    assert await hass.config_entries.async_reload(house_entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.data[DOMAIN]["house"].mode == "away"
+
+
+@pytest.mark.asyncio
+async def test_fast_temperature_drop_counts_as_open_window(
+    hass, enable_custom_integrations
+):
+    """Without a contact, a 1 °C drop in 10 minutes lowers the room for 15 minutes."""
+    _set_up_test_entities(hass, room_temperature="21.0")
+    hass.states.async_set(
+        "schedule.living_room_comfort", "on",
+        {"next_event": (dt_util.now() + timedelta(hours=3)).isoformat()},
+    )
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["window_entity"] = None
+    coordinator.config["window_drop_detection"] = True
+    coordinator.config["window_temperature"] = 12.0
+    start = dt_util.utcnow()
+
+    async def at(minutes, temperature):
+        moment = start + timedelta(minutes=minutes)
+        with patch(
+            "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+            return_value=moment,
+        ):
+            hass.states.async_set(
+                "sensor.living_room_temperature", temperature,
+                force_update=True, timestamp=moment.timestamp(),
+            )
+            await coordinator.async_refresh()
+        return coordinator.data
+
+    assert (await at(0, "21.0"))["mode"] == "comfort"
+    # A slow drop is normal cooling.
+    assert (await at(20, "20.4"))["mode"] == "comfort"
+    assert (await at(25, "20.0"))["mode"] == "comfort"
+    # 1 °C within a few minutes: window.
+    data = await at(28, "19.0")
+    assert data["mode"] == "window"
+    assert data["target_temperature"] == 12.0
+    assert data["status"].startswith("Temperatursturz")
+    assert (await at(40, "19.5"))["mode"] == "window"
+    # After the hold the room heats again.
+    assert (await at(44, "19.8"))["mode"] == "comfort"
+
+
+@pytest.mark.asyncio
+async def test_weekly_report_sums_up_every_room(hass, enable_custom_integrations):
+    """Hours heated, average temperature and open windows go to the phone."""
+    sent = []
+
+    async def capture(call):
+        sent.append(call.data)
+
+    hass.services.async_register("notify", "phone", capture)
+    _set_up_test_entities(hass, room_temperature="19.0")
+    hass.states.async_set(
+        "schedule.living_room_comfort", "on",
+        {"next_event": (dt_util.now() + timedelta(hours=3)).isoformat()},
+    )
+    _, coordinator = await _setup_integration(hass)
+    house_entry = MockConfigEntry(
+        domain=DOMAIN, title="Haus", unique_id="house",
+        data={"entry_type": "house"}, options={"notify_service": "notify.phone"},
+    )
+    house_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(house_entry.entry_id)
+    await hass.async_block_till_done()
+    house = hass.data[DOMAIN]["house"]
+
+    start = dt_util.utcnow()
+    with _capture_climate_calls(hass):
+        coordinator.enabled = True
+        for minute in range(0, 121):
+            moment = start + timedelta(minutes=minute)
+            window = "on" if 60 <= minute < 70 else "off"
+            with patch(
+                "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+                return_value=moment,
+            ):
+                hass.states.async_set(
+                    "sensor.living_room_temperature", "19.0",
+                    force_update=True, timestamp=moment.timestamp(),
+                )
+                hass.states.async_set("binary_sensor.living_room_window", window)
+                await coordinator.async_refresh()
+
+    assert coordinator.data["heat_demand"] == 100
+    assert coordinator.data["heat_demand_source"] == "geschätzt"
+    assert await house.async_send_report(reset=True)
+    message = sent[-1]["message"]
+    assert sent[-1]["title"] == "Wochenbericht Heizung"
+    assert "1× Fenster offen beim Heizen" in message
+    assert "Ø 19,0 °C" in message
+    assert "Hausmodus: Zuhause" in message
+    assert " h geheizt" in message
+    assert coordinator._week["window_events"] == 0

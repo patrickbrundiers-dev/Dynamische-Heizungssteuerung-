@@ -1,6 +1,10 @@
 {
   "domain": "dynamic_heating",
   "name": "Dynamische Heizungssteuerung",
+  "after_dependencies": [
+    "frontend",
+    "http"
+  ],
   "codeowners": [
     "@patrickbrundiers-dev"
   ],
@@ -8,5 +12,5 @@
   "documentation": "https://github.com/patrickbrundiers-dev/Dynamische-Heizungssteuerung-",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/patrickbrundiers-dev/Dynamische-Heizungssteuerung-/issues",
-  "version": "0.5.0"
+  "version": "0.5.1"
 }

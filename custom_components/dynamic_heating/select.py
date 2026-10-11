@@ -10,7 +10,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_ENTRY_TYPE,
     DOMAIN,
+    ENTRY_TYPE_HOUSE,
+    HOUSE_AWAY,
+    HOUSE_HOME,
+    HOUSE_MODES,
+    HOUSE_VACATION,
     QUICK_AUTO,
     QUICK_BOOST,
     QUICK_COMFORT,
@@ -25,6 +31,7 @@ from .const import (
     QUICK_UNTIL_SCHEDULE,
 )
 from .coordinator import DynamicHeatingCoordinator
+from .house_entities import HouseEntity
 
 _LABELS = {
     QUICK_AUTO: "Automatik",
@@ -58,7 +65,10 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the quick mode selection."""
+    """Set up the quick mode selection, or the house mode for the house entry."""
+    if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HOUSE:
+        async_add_entities([HouseModeSelect(entry.runtime_data, entry, "house_mode")])
+        return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
     async_add_entities(
         [QuickModeSelect(coordinator, entry), QuickDurationSelect(coordinator, entry)]
@@ -123,3 +133,26 @@ class QuickDurationSelect(CoordinatorEntity[DynamicHeatingCoordinator], SelectEn
     async def async_select_option(self, option: str) -> None:
         """Use the picked duration, also for a mode that is already running."""
         await self.coordinator.async_set_quick_duration(_DURATIONS[option])
+
+
+_HOUSE_LABELS = {
+    HOUSE_HOME: "Zuhause",
+    HOUSE_AWAY: "Abwesend",
+    HOUSE_VACATION: "Urlaub",
+}
+_HOUSE_MODES = {label: mode for mode, label in _HOUSE_LABELS.items()}
+
+
+class HouseModeSelect(HouseEntity, SelectEntity):
+    """Zuhause, Abwesend or Urlaub for every room at once."""
+
+    _attr_name = "Hausmodus"
+    _attr_icon = "mdi:home-switch"
+    _attr_options = [_HOUSE_LABELS[mode] for mode in HOUSE_MODES]
+
+    @property
+    def current_option(self) -> str:
+        return _HOUSE_LABELS[self.house.mode]
+
+    async def async_select_option(self, option: str) -> None:
+        await self.house.async_set_mode(_HOUSE_MODES[option])

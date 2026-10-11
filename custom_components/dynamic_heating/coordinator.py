@@ -41,6 +41,11 @@ from .const import (
     NOTIFY_FROST_MARGIN,
     NOTIFY_PROBLEM_DELAY_SECONDS,
     NOTIFY_WINDOW_SECONDS,
+    HEAT_DEMAND_FULL_GAP,
+    HEAT_DEMAND_KEYS,
+    HOUSE_AWAY,
+    HOUSE_DATA_KEY,
+    HOUSE_VACATION,
     QUICK_AUTO,
     QUICK_DURATIONS,
     QUICK_MODES,
@@ -83,7 +88,11 @@ from .const import (
     CONF_PRESENCE_OFF_DURATION,
     CONF_ROOM_TEMPERATURE_ENTITY,
     CONF_SCHEDULE_ENTITY,
+    CONF_WINDOW_DROP_DETECTION,
     CONF_WINDOW_ENTITY,
+    WINDOW_DROP_DEGREES,
+    WINDOW_DROP_HOLD_SECONDS,
+    WINDOW_DROP_SECONDS,
     CONF_WEATHER_ENTITY,
     DEFAULT_COMFORT_TEMPERATURE,
     DEFAULT_COOLING_RATE,
@@ -125,11 +134,14 @@ from .logic import (
     apply_hysteresis,
     calibration_offset,
     fallback_room_temperature,
+    calculate_lead_minutes,
     schedule_comfort_temperature,
     decide_heating_target,
     evaluate_heating_limit,
     evaluate_window_open,
+    detect_temperature_drop,
     select_forecast_condition,
+    select_forecast_temperature,
     valve_maintenance_due,
     valve_maintenance_phase,
 )
@@ -158,6 +170,17 @@ def _as_float(state: State | None) -> float | None:
     except (TypeError, ValueError):
         return None
     return value if math.isfinite(value) else None
+
+
+def _as_number(value: object) -> float | None:
+    """A finite number from an attribute value, else None."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -192,6 +215,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._heating_limit_reached = False
         # Debounced window state, kept so the close delay can run out.
         self._window_open = False
+        # Window detection from a temperature drop: recent room readings and
+        # until when the room is held as if a window were open.
+        self._temperature_samples: list[tuple[datetime, float]] = []
+        self._drop_until: datetime | None = None
         # Per thermostat: last setpoint written successfully, to avoid
         # re-sending it every update to thermostats that store a slightly
         # different value and to detect manual changes.
@@ -232,6 +259,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Mode, boost, alerts and the presence decision survive a restart.
         self._state_store = Store(hass, 1, f"{DOMAIN}_{entry_id}_state")
         self._saved_state: dict[str, Any] | None = None
+        self._week_saved_at: datetime | None = None
+        # Figures for the weekly report since its last sending.
+        self._week = self._empty_week()
+        self._week_last: datetime | None = None
+        self._week_window = False
         # Notifications: since when each alert condition holds and whether
         # it was already sent.
         self._alerts: dict[str, tuple[datetime, bool]] = {}
@@ -283,11 +315,74 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
     def _save_runtime_state(self) -> None:
-        """Write the runtime state when it changed (debounced)."""
+        """Write the runtime state when it changed (debounced).
+
+        The weekly figures change every cycle; they are written along, and on
+        their own at most every 15 minutes.
+        """
         state = self._runtime_state()
-        if state != self._saved_state:
+        now = dt_util.utcnow()
+        if state != self._saved_state or (
+            self._week_saved_at is None
+            or now - self._week_saved_at >= timedelta(minutes=15)
+        ):
             self._saved_state = state
-            self._state_store.async_delay_save(lambda: state, 2)
+            self._week_saved_at = now
+            data = {**state, "week": dict(self._week)}
+            self._state_store.async_delay_save(lambda: data, 2)
+
+    @staticmethod
+    def _empty_week() -> dict[str, Any]:
+        return {
+            "since": dt_util.utcnow().isoformat(),
+            "heating_s": 0.0,
+            "temperature_sum": 0.0,
+            "temperature_s": 0.0,
+            "window_events": 0,
+            "alerts": 0,
+        }
+
+    def _track_week(self, result: dict[str, Any]) -> None:
+        """Add this cycle to the weekly figures."""
+        now = dt_util.utcnow()
+        seconds = (
+            0.0 if self._week_last is None
+            else max(0.0, min((now - self._week_last).total_seconds(), 60.0))
+        )
+        self._week_last = now
+        room = result.get("room_temperature")
+        if room is not None and seconds:
+            self._week["temperature_sum"] += float(room) * seconds
+            self._week["temperature_s"] += seconds
+        if self.enabled and (result.get("heat_demand") or 0) > 0:
+            self._week["heating_s"] += seconds
+        window = bool(result.get("window_open")) and result.get("heating_season", True)
+        if window and not self._week_window:
+            self._week["window_events"] += 1
+        self._week_window = window
+
+    def week_summary(self) -> str:
+        """One line for the weekly report."""
+        week = self._week
+        hours = week["heating_s"] / 3600
+        parts = [f"{hours:.0f} h geheizt".replace(".", ",")]
+        if week["temperature_s"]:
+            average = week["temperature_sum"] / week["temperature_s"]
+            parts.append(f"Ø {average:.1f} °C".replace(".", ","))
+        if week["window_events"]:
+            parts.append(f"{week['window_events']}× Fenster offen beim Heizen")
+        if week["alerts"]:
+            parts.append(
+                f"{week['alerts']} Meldung" + ("en" if week["alerts"] > 1 else "")
+            )
+        if self._heating_samples == 0:
+            parts.append("Lernmodell sammelt noch Aufheizmessungen")
+        return f"{self.room_name}: " + ", ".join(parts)
+
+    def reset_week(self) -> None:
+        self._week = self._empty_week()
+        self._week_saved_at = None
+        self._save_runtime_state()
 
     async def async_load_state(self) -> None:
         """Restore mode, boost, alerts and presence from before a restart."""
@@ -320,7 +415,16 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         self._alerts[str(key)] = (since, bool(value[1]))
         if isinstance(stored.get("sensor_present"), bool):
             self._sensor_present = stored["sensor_present"]
+        week = stored.get("week")
+        if isinstance(week, dict):
+            for key, default in self._empty_week().items():
+                value = week.get(key, default)
+                if isinstance(default, str):
+                    self._week[key] = value if isinstance(value, str) else default
+                elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                    self._week[key] = type(default)(value)
         self._saved_state = self._runtime_state()
+        self._week_saved_at = now
 
     async def async_load_learning(self) -> None:
         """Restore learned rates, validating persisted values before using them."""
@@ -1725,6 +1829,121 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         return "quick_off", f"Aus von Hand{until}", off
 
+    def _window_drop(self, room_temperature: float) -> bool:
+        """An open window guessed from a fast temperature drop."""
+        if not self.config.get(CONF_WINDOW_DROP_DETECTION) or self._room_fallback:
+            self._temperature_samples.clear()
+            self._drop_until = None
+            return False
+        now = dt_util.utcnow()
+        if self._drop_until is not None:
+            if now < self._drop_until:
+                return True
+            self._drop_until = None
+        samples = [
+            sample
+            for sample in self._temperature_samples
+            if (now - sample[0]).total_seconds() <= WINDOW_DROP_SECONDS
+        ]
+        if not samples or samples[-1][1] != room_temperature:
+            samples.append((now, room_temperature))
+        self._temperature_samples = samples
+        if detect_temperature_drop(
+            samples, now, WINDOW_DROP_SECONDS, WINDOW_DROP_DEGREES
+        ):
+            _LOGGER.info("Temperature drop in %s: treating as open window", self.entry_id)
+            self._drop_until = now + timedelta(seconds=WINDOW_DROP_HOLD_SECONDS)
+            # A new detection needs a new drop.
+            self._temperature_samples = []
+            return True
+        return False
+
+    def _valve_openings(self) -> list[float]:
+        """Valve openings in percent, as far as the thermostats report them."""
+        registry = er.async_get(self.hass)
+        openings: list[float] = []
+        for entity_id in self._thermostat_ids():
+            state = self.hass.states.get(entity_id)
+            value = None
+            if state is not None:
+                for key in HEAT_DEMAND_KEYS:
+                    if key in state.attributes:
+                        value = _as_number(state.attributes.get(key))
+                        break
+            entry = registry.async_get(entity_id)
+            if value is None and entry is not None and entry.device_id:
+                for device_entry in er.async_entries_for_device(registry, entry.device_id):
+                    if device_entry.domain in ("sensor", "number") and any(
+                        key in device_entry.entity_id for key in HEAT_DEMAND_KEYS[:2]
+                    ):
+                        value = _as_float(self.hass.states.get(device_entry.entity_id))
+                        if value is not None:
+                            break
+            if value is not None:
+                openings.append(max(0.0, min(100.0, value)))
+        return openings
+
+    def _heat_demand(
+        self, target: float | None, room_temperature: float | None
+    ) -> tuple[int | None, str]:
+        """Heat demand of the room in percent and where it comes from."""
+        if not self.enabled or target is None or room_temperature is None:
+            return (0 if self.enabled else None), "keine Regelung"
+        openings = self._valve_openings()
+        if openings:
+            return round(sum(openings) / len(openings)), "Ventile"
+        gap = target - room_temperature
+        return round(max(0.0, min(1.0, gap / HEAT_DEMAND_FULL_GAP)) * 100), "geschätzt"
+
+    @property
+    def room_name(self) -> str:
+        return self._room_name()
+
+    def _house_target(
+        self,
+        *,
+        comfort_temperature: float,
+        eco_temperature: float,
+        away_temperature: float | None,
+        frost_value: object,
+        room_temperature: float,
+        outdoor_temperature: float | None,
+    ) -> tuple[str, str, float] | None:
+        """The (mode, status, target) the house mode asks for, if any.
+
+        Abwesend lowers to the away temperature (else eco). Urlaub holds frost
+        protection (else away/eco) and heats up in time for the return.
+        """
+        house = self.hass.data.get(DOMAIN, {}).get(HOUSE_DATA_KEY)
+        if house is None:
+            return None
+        setback = away_temperature if away_temperature is not None else eco_temperature
+        if house.mode == HOUSE_AWAY:
+            return "house_away", "Haus: Abwesend – abgesenkt", setback
+        if house.mode != HOUSE_VACATION:
+            return None
+        until = house.vacation_until
+        if until is not None:
+            lead = calculate_lead_minutes(
+                room_temperature,
+                comfort_temperature,
+                self.heating_rate,
+                outdoor_temperature,
+                int(self.config.get(CONF_MAX_PREHEAT_MINUTES, DEFAULT_MAX_PREHEAT_MINUTES)),
+            )
+            end = dt_util.as_local(until).strftime("%d.%m. %H:%M")
+            if dt_util.utcnow() >= until - timedelta(minutes=lead):
+                return (
+                    "house_return",
+                    f"Rückkehr aus dem Urlaub am {end} Uhr – vorgeheizt",
+                    comfort_temperature,
+                )
+            status = f"Urlaub bis {end} Uhr"
+        else:
+            status = "Urlaub"
+        target = float(frost_value) if frost_value is not None else setback
+        return "house_vacation", status, target
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Run one control cycle and attach the thermostats' health."""
         await self._sync_external_temperature()
@@ -1734,6 +1953,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._send_notifications(result)
         result["external_temperature_thermostats"] = sorted(self._external_fed)
         result["quick_duration"] = self.quick_duration
+        result["heat_demand"], result["heat_demand_source"] = self._heat_demand(
+            result.get("target_temperature"), result.get("room_temperature")
+        )
+        self._track_week(result)
         self._save_runtime_state()
         return result
 
@@ -1842,6 +2065,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 sent = await self._call(
                     domain, name, {"title": title, "message": message}
                 )
+                if sent:
+                    self._week["alerts"] += 1
             self._alerts[key] = (since, sent)
 
     def _external_temperature_entities(
@@ -2006,6 +2231,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 int(self.config.get(CONF_WINDOW_CLOSE_DELAY) or DEFAULT_WINDOW_CLOSE_DELAY),
             )
         self._window_open = window_open
+        window_drop = self._window_drop(room_temperature)
+        window_open = window_open or window_drop
 
         present, presence_status = self._evaluate_presence()
         if self._proximity_metrics_dirty:
@@ -2086,6 +2313,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         forecast_condition = select_forecast_condition(
             forecast_items, next_event, dt_util.now()
         )
+        forecast_temperature = select_forecast_temperature(
+            forecast_items, next_event, dt_util.now()
+        )
         decision = decide_heating_target(
             now=dt_util.now(),
             schedule_active=schedule_active,
@@ -2097,6 +2327,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             heating_rate_c_per_hour=self.heating_rate,
             cooling_rate_c_per_hour=self.cooling_rate,
             forecast_condition=forecast_condition,
+            forecast_temperature=forecast_temperature,
             max_preheat_minutes=int(
                 self.config.get(
                     CONF_MAX_PREHEAT_MINUTES, DEFAULT_MAX_PREHEAT_MINUTES
@@ -2116,8 +2347,21 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             boost_temperature=boost_temperature,
             quick_mode=self._quick_target(
                 comfort_temperature, eco_temperature, frost_value, off_temperature
+            ) or self._house_target(
+                comfort_temperature=comfort_temperature,
+                eco_temperature=eco_temperature,
+                away_temperature=away_temperature,
+                frost_value=frost_value,
+                room_temperature=room_temperature,
+                outdoor_temperature=outdoor_temperature,
             ),
         )
+        if decision.mode == "window" and window_drop and not self._window_open:
+            end = dt_util.as_local(self._drop_until).strftime("%H:%M")
+            decision = replace(
+                decision,
+                status=f"Temperatursturz – Fenster vermutlich offen (bis {end} Uhr)",
+            )
         if decision.mode == "boost":
             end = dt_util.as_local(self.boost_until).strftime("%H:%M")
             decision = replace(decision, status=f"Boost bis {end} Uhr")
@@ -2153,6 +2397,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "preheat_minutes": decision.preheat_minutes,
             "projected_temperature": decision.projected_temperature,
             "forecast_condition": forecast_condition,
+            "forecast_temperature": forecast_temperature,
             "solar_adjustment_minutes": decision.solar_adjustment_minutes,
             "schedule_active": schedule_active,
             "next_event": next_event.isoformat() if next_event else None,
