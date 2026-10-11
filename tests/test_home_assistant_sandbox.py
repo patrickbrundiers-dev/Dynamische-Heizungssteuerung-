@@ -716,6 +716,107 @@ async def test_modern_proximity_sensors_normalize_distance_to_meters(
     assert coordinator.data["proximity_status"] == "Anfahrt bestätigt"
 
 
+def _set_up_proximity_zone(hass, people):
+    """Register a proximity zone with distance/direction sensors per person."""
+    zone = MockConfigEntry(domain="proximity", title="Home", entry_id="zone_home")
+    zone.add_to_hass(hass)
+    registry = er.async_get(hass)
+    sensors = {}
+    for person in [*people, "person.leonie"]:
+        name = person.split(".")[1]
+        person_entry = registry.async_get_or_create(
+            "person", "person", name, suggested_object_id=name
+        )
+        hass.states.async_set(
+            person_entry.entity_id, "not_home", {"friendly_name": name.capitalize()}
+        )
+        for key in ("dist_to_zone", "dir_of_travel"):
+            registry.async_get_or_create(
+                "sensor",
+                "proximity",
+                f"zone_home_{person_entry.id}_{key}",
+                config_entry=zone,
+                suggested_object_id=f"home_{name}_{key}",
+            )
+        sensors[person_entry.entity_id] = (
+            f"sensor.home_{name}_dist_to_zone",
+            f"sensor.home_{name}_dir_of_travel",
+        )
+    return sensors
+
+
+def _set_proximity(hass, sensors, person, distance, direction):
+    distance_id, direction_id = sensors[person]
+    hass.states.async_set(distance_id, str(distance), {"unit_of_measurement": "m"})
+    hass.states.async_set(direction_id, direction)
+
+
+@pytest.mark.asyncio
+async def test_proximity_zone_sleeps_while_someone_of_the_room_is_home(
+    hass, enable_custom_integrations
+):
+    """Only the zone is picked; arrivals count only while the room's people are away."""
+    _set_up_test_entities(hass)
+    sensors = _set_up_proximity_zone(hass, ["person.patrick", "person.jenny"])
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["person_entities"] = ["person.patrick", "person.jenny"]
+    coordinator.config["proximity_zone"] = "zone_home"
+    coordinator.config["proximity_distance"] = 500
+    coordinator.config["proximity_duration"] = 0
+    coordinator.config["proximity_max_age"] = 900
+    for person in sensors:
+        _set_proximity(hass, sensors, person, 5000, "away_from")
+
+    # Patrick is home: the zone sleeps, the room counts as occupied.
+    hass.states.async_set("person.patrick", "home", {"friendly_name": "Patrick"})
+    _set_proximity(hass, sensors, "person.jenny", 300, "towards")
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+    assert coordinator.data["proximity_status"] == (
+        "Proximity schlummert – jemand ist zuhause"
+    )
+
+    # Everybody away, Jenny is close and heading home: arrival.
+    hass.states.async_set("person.patrick", "not_home", {"friendly_name": "Patrick"})
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is True
+    assert coordinator.data["proximity_status"] == "Jenny: Anfahrt bestätigt"
+
+    # Somebody who does not belong to the room is not counted.
+    _set_proximity(hass, sensors, "person.jenny", 5000, "away_from")
+    _set_proximity(hass, sensors, "person.leonie", 100, "towards")
+    await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+    assert coordinator.data["mode"] != "waiting"
+
+
+@pytest.mark.asyncio
+async def test_proximity_zone_with_old_location_data_keeps_the_room_lowered(
+    hass, enable_custom_integrations
+):
+    """Old GPS data of absent people lowers the room instead of blocking it."""
+    _set_up_test_entities(hass)
+    sensors = _set_up_proximity_zone(hass, ["person.jenny"])
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["presence_entity"] = None
+    coordinator.config["person_entities"] = ["person.jenny"]
+    coordinator.config["proximity_zone"] = "zone_home"
+    coordinator.config["proximity_max_age"] = 900
+    _set_proximity(hass, sensors, "person.jenny", 250, "towards")
+    future = dt_util.utcnow() + timedelta(minutes=20)
+
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=future,
+    ):
+        await coordinator.async_refresh()
+
+    assert coordinator.data["present"] is False
+    assert coordinator.data["mode"] != "waiting"
+    assert "Standortdaten veraltet" in coordinator.data["proximity_status"]
+
+
 @pytest.mark.asyncio
 async def test_stale_proximity_data_prevents_a_new_heating_decision(
     hass, enable_custom_integrations
@@ -2274,3 +2375,87 @@ async def test_notifications_report_alerts_once_and_their_end(
         await refresh_at(90)
         assert sent[-1] == "Wieder in Ordnung: keine Frostgefahr mehr."
         assert len(sent) == 4
+
+
+@pytest.mark.asyncio
+async def test_quick_mode_duration_choice(hass, enable_custom_integrations):
+    """The duration select times Komfort/Eco/Aus and re-times a running one."""
+    _set_up_test_entities(hass, room_temperature="20.0")
+    entry, coordinator = await _setup_integration(hass)
+    registry = er.async_get(hass)
+    duration_id = registry.async_get_entity_id(
+        "select", DOMAIN, f"{entry.entry_id}_quick_duration"
+    )
+    assert hass.states.get(duration_id).state == "Bis Zeitplanwechsel"
+
+    await hass.services.async_call(
+        "select", "select_option",
+        {"entity_id": duration_id, "option": "3 Stunden"}, blocking=True,
+    )
+    await coordinator.async_set_quick_mode("comfort")
+    remaining = coordinator.quick_until - dt_util.utcnow()
+    assert timedelta(hours=2, minutes=59) < remaining <= timedelta(hours=3)
+
+    # Changing the duration re-times the running mode.
+    await coordinator.async_set_quick_duration("forever")
+    assert coordinator.quick_until is None
+    assert coordinator.data["status"] == "Komfort von Hand (dauerhaft)"
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=dt_util.utcnow() + timedelta(days=2),
+    ):
+        hass.states.async_set(
+            "sensor.living_room_temperature", "20.0", force_update=True,
+            timestamp=(dt_util.utcnow() + timedelta(days=2)).timestamp(),
+        )
+        await coordinator.async_refresh()
+    assert coordinator.data["mode"] == "quick_comfort"
+
+    await coordinator.async_set_quick_duration("morning")
+    local_end = dt_util.as_local(coordinator.quick_until)
+    assert local_end.hour == 6 and local_end.minute == 0
+    assert local_end > dt_util.now()
+
+
+@pytest.mark.asyncio
+async def test_mode_boost_alerts_and_presence_survive_a_restart(
+    hass, enable_custom_integrations
+):
+    """A reload (as after a restart) keeps the hand-picked state."""
+    _set_up_test_entities(hass, room_temperature="20.0")
+    entry, coordinator = await _setup_integration(hass)
+    hass.config_entries.async_update_entry(
+        entry, options={"notify_service": "notify.test"}
+    )
+    await hass.async_block_till_done()
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    await coordinator.async_set_quick_duration("3h")
+    await coordinator.async_set_quick_mode("eco")
+    until = coordinator.quick_until
+    # The window is still open after the restart: its alert stays sent.
+    hass.states.async_set("binary_sensor.living_room_window", "on")
+    coordinator._alerts["window"] = (dt_util.utcnow() - timedelta(hours=2), True)
+    coordinator._sensor_present = True
+    coordinator._save_runtime_state()
+    await coordinator._state_store._async_handle_write_data()
+
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    restored = hass.data[DOMAIN][entry.entry_id]
+    assert restored is not coordinator
+    assert restored.quick_mode == "eco"
+    assert restored.quick_until == until
+    assert restored.quick_duration == "3h"
+    assert restored._alerts["window"][1] is True
+    assert restored._sensor_present is True
+    assert restored.current_quick_mode == "eco"
+    hass.states.async_set("binary_sensor.living_room_window", "off")
+
+    # An expired boost is not brought back.
+    await restored.async_set_quick_mode("boost")
+    restored.boost_until = dt_util.utcnow() - timedelta(minutes=1)
+    restored._save_runtime_state()
+    await restored._state_store._async_handle_write_data()
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.data[DOMAIN][entry.entry_id].boost_until is None

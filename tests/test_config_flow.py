@@ -110,7 +110,7 @@ async def _finish_editor_flow(
     )
     assert result["step_id"] == "geofencing"
 
-    geo_keys = ("proximity_entity", "proximity_direction_entity")
+    geo_keys = ("proximity_zone",)
     geo_input = {key: values[key] for key in geo_keys if values.get(key)}
     geo_input.update({
         "proximity_distance": values.get("proximity_distance", 500),
@@ -325,8 +325,7 @@ async def test_editor_saves_presence_and_proximity_settings(
             "presence_off_duration": _duration(1200),
         },
         geofencing={
-            "proximity_entity": "sensor.home_distance",
-            "proximity_direction_entity": "sensor.home_direction",
+            "proximity_zone": "zone_entry_home",
             "proximity_duration": _duration(120),
             "proximity_max_age": _duration(900),
             "proximity_distance": 500,
@@ -337,8 +336,10 @@ async def test_editor_saves_presence_and_proximity_settings(
     assert entry.options["person_entities"] == ["person.patrick", "person.jenny"]
     assert entry.options["guest_entity"] == "input_boolean.guest_mode"
     assert entry.options["presence_schedule_entity"] == "schedule.presence_active"
-    assert entry.options["proximity_entity"] == "sensor.home_distance"
-    assert entry.options["proximity_direction_entity"] == "sensor.home_direction"
+    assert entry.options["proximity_zone"] == "zone_entry_home"
+    # The zone replaces the separately picked sensors.
+    assert entry.options["proximity_entity"] is None
+    assert entry.options["proximity_direction_entity"] is None
     assert entry.options["proximity_max_age"] == 900
     assert entry.options["enter_home_duration"] == 120
     assert entry.options["leaving_home_duration"] == 180

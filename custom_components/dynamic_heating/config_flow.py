@@ -36,6 +36,7 @@ from .const import (
     CONF_ENTER_HOME_DURATION,
     CONF_LEAVING_HOME_DURATION,
     CONF_PROXIMITY_ENTITY,
+    CONF_PROXIMITY_ZONE,
     CONF_PROXIMITY_DIRECTION_ENTITY,
     CONF_PROXIMITY_MAX_AGE,
     CONF_PROXIMITY_DURATION,
@@ -132,6 +133,13 @@ def _hysteresis_selector() -> selector.NumberSelector:
     )
 
 
+def _zone_selector() -> selector.ConfigEntrySelector:
+    """Pick a proximity zone; its sensors are found automatically."""
+    return selector.ConfigEntrySelector(
+        selector.ConfigEntrySelectorConfig(integration="proximity")
+    )
+
+
 def _away_below_comfort(values: dict, comfort: float) -> bool:
     """An optional away temperature must stay below the comfort target."""
     away = values.get(CONF_AWAY_TEMPERATURE)
@@ -202,12 +210,7 @@ def _user_schema() -> vol.Schema:
             vol.Optional(CONF_GUEST_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])
             ),
-            vol.Optional(CONF_PROXIMITY_ENTITY): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=["sensor", "proximity"])
-            ),
-            vol.Optional(CONF_PROXIMITY_DIRECTION_ENTITY): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="sensor")
-            ),
+            vol.Optional(CONF_PROXIMITY_ZONE): _zone_selector(),
             vol.Optional(
                 CONF_PROXIMITY_DISTANCE, default=DEFAULT_PROXIMITY_DISTANCE
             ): selector.NumberSelector(
@@ -437,12 +440,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
 
     def _proximity_schema(self, current: dict) -> vol.Schema:
         """Geo-fencing sensors, distance limit and data freshness."""
-        schema = {}
-        for item in (
-            self._entity_field(CONF_PROXIMITY_ENTITY, ["sensor", "proximity"], current),
-            self._entity_field(CONF_PROXIMITY_DIRECTION_ENTITY, "sensor", current),
-        ):
-            schema[item[0]] = item[1]
+        schema = {vol.Optional(CONF_PROXIMITY_ZONE): _zone_selector()}
         schema[vol.Optional(
             CONF_PROXIMITY_DISTANCE,
             default=int(current.get(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE)),
@@ -601,8 +599,10 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         current = self._values()
         if user_input is not None:
             current.update(user_input)
+            current[CONF_PROXIMITY_ZONE] = user_input.get(CONF_PROXIMITY_ZONE) or None
+            # The zone replaces the separate distance and direction sensors.
             for key in (CONF_PROXIMITY_ENTITY, CONF_PROXIMITY_DIRECTION_ENTITY):
-                current[key] = user_input.get(key) or None
+                current[key] = None
             current[CONF_PROXIMITY_DISTANCE] = max(
                 0, int(user_input.get(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE))
             )

@@ -14,9 +14,15 @@ from .const import (
     QUICK_AUTO,
     QUICK_BOOST,
     QUICK_COMFORT,
+    QUICK_DURATIONS,
     QUICK_ECO,
     QUICK_MODES,
     QUICK_OFF,
+    QUICK_UNTIL_1H,
+    QUICK_UNTIL_3H,
+    QUICK_UNTIL_FOREVER,
+    QUICK_UNTIL_MORNING,
+    QUICK_UNTIL_SCHEDULE,
 )
 from .coordinator import DynamicHeatingCoordinator
 
@@ -28,6 +34,23 @@ _LABELS = {
     QUICK_OFF: "Aus",
 }
 _MODES = {label: mode for mode, label in _LABELS.items()}
+_DURATION_LABELS = {
+    QUICK_UNTIL_SCHEDULE: "Bis Zeitplanwechsel",
+    QUICK_UNTIL_1H: "1 Stunde",
+    QUICK_UNTIL_3H: "3 Stunden",
+    QUICK_UNTIL_MORNING: "Bis morgen früh",
+    QUICK_UNTIL_FOREVER: "Dauerhaft",
+}
+_DURATIONS = {label: key for key, label in _DURATION_LABELS.items()}
+
+
+def _device_info(entry: ConfigEntry) -> DeviceInfo:
+    return DeviceInfo(
+        identifiers={(DOMAIN, entry.entry_id)},
+        name="Dynamische Heizungssteuerung",
+        manufacturer="Community",
+        model="Adaptive Heating Controller",
+    )
 
 
 async def async_setup_entry(
@@ -37,7 +60,9 @@ async def async_setup_entry(
 ) -> None:
     """Set up the quick mode selection."""
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
-    async_add_entities([QuickModeSelect(coordinator, entry)])
+    async_add_entities(
+        [QuickModeSelect(coordinator, entry), QuickDurationSelect(coordinator, entry)]
+    )
 
 
 class QuickModeSelect(CoordinatorEntity[DynamicHeatingCoordinator], SelectEntity):
@@ -53,12 +78,7 @@ class QuickModeSelect(CoordinatorEntity[DynamicHeatingCoordinator], SelectEntity
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_quick_mode"
         self._attr_has_entity_name = True
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="Dynamische Heizungssteuerung",
-            manufacturer="Community",
-            model="Adaptive Heating Controller",
-        )
+        self._attr_device_info = _device_info(entry)
 
     @property
     def current_option(self) -> str:
@@ -78,3 +98,28 @@ class QuickModeSelect(CoordinatorEntity[DynamicHeatingCoordinator], SelectEntity
     async def async_select_option(self, option: str) -> None:
         """Switch to the picked mode."""
         await self.coordinator.async_set_quick_mode(_MODES[option])
+
+
+class QuickDurationSelect(CoordinatorEntity[DynamicHeatingCoordinator], SelectEntity):
+    """How long Komfort, Eco or Aus picked by hand holds."""
+
+    _attr_name = "Betriebsart-Dauer"
+    _attr_icon = "mdi:timer-outline"
+    _attr_options = [_DURATION_LABELS[key] for key in QUICK_DURATIONS]
+
+    def __init__(
+        self, coordinator: DynamicHeatingCoordinator, entry: ConfigEntry
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_quick_duration"
+        self._attr_has_entity_name = True
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def current_option(self) -> str:
+        """Return the chosen duration."""
+        return _DURATION_LABELS[self.coordinator.quick_duration]
+
+    async def async_select_option(self, option: str) -> None:
+        """Use the picked duration, also for a mode that is already running."""
+        await self.coordinator.async_set_quick_duration(_DURATIONS[option])

@@ -42,6 +42,14 @@ from .const import (
     NOTIFY_PROBLEM_DELAY_SECONDS,
     NOTIFY_WINDOW_SECONDS,
     QUICK_AUTO,
+    QUICK_DURATIONS,
+    QUICK_MODES,
+    QUICK_MORNING_HOUR,
+    QUICK_UNTIL_1H,
+    QUICK_UNTIL_3H,
+    QUICK_UNTIL_FOREVER,
+    QUICK_UNTIL_MORNING,
+    QUICK_UNTIL_SCHEDULE,
     QUICK_BOOST,
     QUICK_COMFORT,
     QUICK_ECO,
@@ -65,6 +73,7 @@ from .const import (
     CONF_ENTER_HOME_DURATION,
     CONF_LEAVING_HOME_DURATION,
     CONF_PROXIMITY_ENTITY,
+    CONF_PROXIMITY_ZONE,
     CONF_PROXIMITY_DIRECTION_ENTITY,
     CONF_PROXIMITY_MAX_AGE,
     CONF_PROXIMITY_DURATION,
@@ -200,7 +209,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._manual_override: tuple[str, float] | None = None
         self._forecast_items: list[dict[str, Any]] = []
         self._forecast_fetched_at: datetime | None = None
-        self._proximity_approaching_since: datetime | None = None
+        # Per proximity source: since when it has been approaching.
+        self._proximity_approaching: dict[str, datetime] = {}
         self._proximity_distance_m: float | None = None
         self._proximity_direction: str | None = None
         self._proximity_age_seconds: float | None = None
@@ -217,7 +227,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # a boost is tracked by boost_until instead.
         self.quick_mode = QUICK_AUTO
         self.quick_until: datetime | None = None
+        self.quick_duration = QUICK_UNTIL_SCHEDULE
         self._next_event: datetime | None = None
+        # Mode, boost, alerts and the presence decision survive a restart.
+        self._state_store = Store(hass, 1, f"{DOMAIN}_{entry_id}_state")
+        self._saved_state: dict[str, Any] | None = None
         # Notifications: since when each alert condition holds and whether
         # it was already sent.
         self._alerts: dict[str, tuple[datetime, bool]] = {}
@@ -253,6 +267,60 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_forecast_error_at: str | None = None
         self._pending_forecast_event: datetime | None = None
         self._pending_forecast_temperature: float | None = None
+
+    def _runtime_state(self) -> dict[str, Any]:
+        """What has to survive a restart of Home Assistant."""
+        return {
+            "quick_mode": self.quick_mode,
+            "quick_until": self.quick_until.isoformat() if self.quick_until else None,
+            "quick_duration": self.quick_duration,
+            "boost_until": self.boost_until.isoformat() if self.boost_until else None,
+            "alerts": {
+                key: [since.isoformat(), sent]
+                for key, (since, sent) in self._alerts.items()
+            },
+            "sensor_present": self._sensor_present,
+        }
+
+    def _save_runtime_state(self) -> None:
+        """Write the runtime state when it changed (debounced)."""
+        state = self._runtime_state()
+        if state != self._saved_state:
+            self._saved_state = state
+            self._state_store.async_delay_save(lambda: state, 2)
+
+    async def async_load_state(self) -> None:
+        """Restore mode, boost, alerts and presence from before a restart."""
+        stored = await self._state_store.async_load()
+        if not isinstance(stored, dict):
+            return
+        now = dt_util.utcnow()
+
+        def moment(value: object) -> datetime | None:
+            parsed = dt_util.parse_datetime(value) if isinstance(value, str) else None
+            return dt_util.as_utc(parsed) if parsed is not None else None
+
+        if stored.get("quick_duration") in QUICK_DURATIONS:
+            self.quick_duration = stored["quick_duration"]
+        boost_until = moment(stored.get("boost_until"))
+        if boost_until is not None and boost_until > now:
+            self.boost_until = boost_until
+        quick_until = moment(stored.get("quick_until"))
+        if stored.get("quick_mode") in QUICK_MODES and stored["quick_mode"] not in (
+            QUICK_AUTO, QUICK_BOOST
+        ) and (quick_until is None or quick_until > now):
+            self.quick_mode = stored["quick_mode"]
+            self.quick_until = quick_until
+        alerts = stored.get("alerts")
+        if isinstance(alerts, dict):
+            for key, value in alerts.items():
+                if isinstance(value, list) and len(value) == 2:
+                    since = moment(value[0])
+                    if since is not None:
+                        self._alerts[str(key)] = (since, bool(value[1]))
+        if isinstance(stored.get("sensor_present"), bool):
+            self._sensor_present = stored["sensor_present"]
+        self._saved_state = self._runtime_state()
 
     async def async_load_learning(self) -> None:
         """Restore learned rates, validating persisted values before using them."""
@@ -919,6 +987,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         distance_state: State | None,
         direction_state: State | None,
+        key: str = "",
+        *,
+        observe: bool = True,
     ) -> tuple[bool | None, str]:
         """Validate freshness, unit, direction and distance before inferring arrival."""
         self._proximity_distance_m = None
@@ -926,11 +997,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._proximity_age_seconds = None
 
         if not self._valid(distance_state):
-            self._proximity_approaching_since = None
+            self._proximity_approaching.pop(key, None)
             self._record_proximity_category("invalid")
             return None, "Proximity-Entfernung nicht verfügbar"
 
-        self._observe_proximity_update(distance_state)
+        if observe:
+            self._observe_proximity_update(distance_state)
 
         now = dt_util.utcnow()
         age = (now - dt_util.as_utc(distance_state.last_updated)).total_seconds()
@@ -940,7 +1012,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             int(self.config.get(CONF_PROXIMITY_MAX_AGE, DEFAULT_PROXIMITY_MAX_AGE)),
         )
         if age < -60 or age > max_age:
-            self._proximity_approaching_since = None
+            self._proximity_approaching.pop(key, None)
             self._record_proximity_category("stale")
             return (
                 None,
@@ -954,24 +1026,24 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         elif direction_state is not None and self._valid(direction_state):
             raw_direction = direction_state.state
         elif self.config.get(CONF_PROXIMITY_DIRECTION_ENTITY):
-            self._proximity_approaching_since = None
+            self._proximity_approaching.pop(key, None)
             self._record_proximity_category("invalid")
             return None, "Proximity-Richtung nicht verfügbar"
         else:
-            self._proximity_approaching_since = None
+            self._proximity_approaching.pop(key, None)
             self._record_proximity_category("invalid")
             return None, "Proximity-Richtung fehlt: bitte Richtungssensor auswählen"
 
         direction = str(raw_direction or "").strip().lower()
         self._proximity_direction = direction or None
         if direction == "unknown" or direction in _INVALID_STATES or not direction:
-            self._proximity_approaching_since = None
+            self._proximity_approaching.pop(key, None)
             self._record_proximity_category("invalid")
             return None, "Proximity-Richtung ist unbekannt"
 
         raw_distance = _as_float(distance_state)
         if raw_distance is None:
-            self._proximity_approaching_since = None
+            self._proximity_approaching.pop(key, None)
             self._record_proximity_category("invalid")
             return None, "Proximity-Entfernung ist kein gültiger Zahlenwert"
 
@@ -980,7 +1052,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             distance_state.attributes.get("unit_of_measurement"),
         )
         if distance_m is None:
-            self._proximity_approaching_since = None
+            self._proximity_approaching.pop(key, None)
             self._record_proximity_category("invalid")
             return None, "Proximity-Einheit nicht unterstützt"
         self._proximity_distance_m = round(distance_m, 1)
@@ -990,40 +1062,109 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             float(self.config.get(CONF_PROXIMITY_DISTANCE, DEFAULT_PROXIMITY_DISTANCE)),
         )
         if direction == "arrived" or distance_m <= 0:
-            self._proximity_approaching_since = None
+            self._proximity_approaching.pop(key, None)
             self._record_proximity_category("confirmed")
             return True, "Proximity meldet Ankunft"
         if direction in ("away_from", "stationary"):
-            self._proximity_approaching_since = None
+            self._proximity_approaching.pop(key, None)
             self._record_proximity_category("not_approaching")
             return False, (
                 "Bewegung weg vom Zuhause" if direction == "away_from"
                 else "Standort stationär – keine Anfahrt"
             )
         if direction != "towards":
-            self._proximity_approaching_since = None
+            self._proximity_approaching.pop(key, None)
             self._record_proximity_category("invalid")
             return None, f"Unbekannte Bewegungsrichtung: {direction}"
 
         if distance_m > maximum_distance:
-            self._proximity_approaching_since = None
+            self._proximity_approaching.pop(key, None)
             self._record_proximity_category("out_of_range")
             return False, "Noch außerhalb der Anfahrtsentfernung"
 
-        if self._proximity_approaching_since is None:
-            self._proximity_approaching_since = now
+        if key not in self._proximity_approaching:
+            self._proximity_approaching[key] = now
             self._record_proximity_category("approaching")
         duration = max(
             0,
             int(self.config.get(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION)),
         )
-        elapsed = (now - self._proximity_approaching_since).total_seconds()
+        elapsed = (now - self._proximity_approaching[key]).total_seconds()
         if elapsed < duration:
             return False, (
                 f"Anfahrt erkannt – Wartezeit {round(duration - elapsed)} s"
             )
         self._record_proximity_category("confirmed")
         return True, "Anfahrt bestätigt"
+
+    def _zone_sources(
+        self, zone_entry_id: str, people: list[str]
+    ) -> list[tuple[str, str, str]]:
+        """Distance and direction sensors of a proximity zone for this room.
+
+        With people configured, only their own sensors of the zone are used;
+        otherwise the zone's nearest-person sensors.
+        """
+        registry = er.async_get(self.hass)
+        by_unique_id = {
+            entry.unique_id: entry.entity_id
+            for entry in er.async_entries_for_config_entry(registry, zone_entry_id)
+            if entry.domain == "sensor"
+        }
+        if not people:
+            identifiers = [("", "")]
+        else:
+            identifiers = []
+            for entity_id in people:
+                entry = registry.async_get(entity_id)
+                identifiers.append(
+                    (self._friendly_name(entity_id), f"{entry.id if entry else entity_id}_")
+                )
+        sources = []
+        for name, prefix in identifiers:
+            distance_id = by_unique_id.get(f"{zone_entry_id}_{prefix}dist_to_zone")
+            direction_id = by_unique_id.get(f"{zone_entry_id}_{prefix}dir_of_travel")
+            if distance_id and direction_id:
+                sources.append((name, distance_id, direction_id))
+        return sources
+
+    def _zone_is_active(self, zone_entry_id: str, people: list[str]) -> tuple[bool, str]:
+        """Arrival of anyone of this room, read from a proximity zone.
+
+        Missing or old location data never blocks the room: nobody is home,
+        so without a confirmed arrival the room simply stays lowered.
+        """
+        sources = self._zone_sources(zone_entry_id, people)
+        if not sources:
+            self._proximity_approaching.clear()
+            self._record_proximity_category("invalid")
+            if self.hass.config_entries.async_get_entry(zone_entry_id) is None:
+                return False, "Proximity-Zone nicht gefunden"
+            return False, "Die Zone erfasst keine Person dieses Raums"
+        newest = max(
+            sources,
+            key=lambda source: (
+                state.last_updated
+                if (state := self.hass.states.get(source[1])) is not None
+                else datetime.min.replace(tzinfo=dt_util.UTC)
+            ),
+        )
+        results = []
+        for name, distance_id, direction_id in sources:
+            active, status = self._proximity_is_active(
+                self.hass.states.get(distance_id),
+                self.hass.states.get(direction_id),
+                distance_id,
+                observe=distance_id == newest[1],
+            )
+            results.append((active, f"{name}: {status}" if name else status))
+        for active, status in results:
+            if active:
+                return True, status
+        for _active, status in results:
+            if "Anfahrt erkannt" in status:
+                return False, status
+        return False, results[0][1]
 
     def _evaluate_presence(self) -> tuple[bool | None, str]:
         """Combine person, guest, proximity and scheduled presence signals."""
@@ -1032,10 +1173,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             people = [people]
 
         guest_id = self.config.get(CONF_GUEST_ENTITY)
-        proximity_id = self.config.get(CONF_PROXIMITY_ENTITY)
+        zone_id = self.config.get(CONF_PROXIMITY_ZONE)
+        proximity_id = None if zone_id else self.config.get(CONF_PROXIMITY_ENTITY)
         direction_id = self.config.get(CONF_PROXIMITY_DIRECTION_ENTITY)
         presence_id = self.config.get(CONF_PRESENCE_ENTITY)
-        has_household_source = bool(people or guest_id or proximity_id)
+        has_household_source = bool(people or guest_id or proximity_id or zone_id)
         has_any_source = has_household_source or bool(presence_id)
         household_home = not has_any_source
         invalid_people = False
@@ -1067,7 +1209,18 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         proximity_home = False
         self._proximity_status = "Proximity nicht konfiguriert"
-        if proximity_id:
+        if zone_id and household_home:
+            # Somebody of this room is home: arrivals don't matter now.
+            self._proximity_approaching.clear()
+            self._proximity_distance_m = None
+            self._proximity_direction = None
+            self._proximity_age_seconds = None
+            self._proximity_status = "Proximity schlummert – jemand ist zuhause"
+        elif zone_id:
+            proximity_home, self._proximity_status = self._zone_is_active(
+                zone_id, people
+            )
+        elif proximity_id:
             distance_state = self.hass.states.get(proximity_id)
             direction_state = (
                 self.hass.states.get(direction_id) if direction_id else None
@@ -1496,8 +1649,34 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             self.boost_until = None
             self.quick_mode = mode
-            self.quick_until = None if mode == QUICK_AUTO else self._next_event
+            self.quick_until = None if mode == QUICK_AUTO else self._quick_end()
         # A tap on the dashboard should act at once, not after the debounce.
+        await self.async_refresh()
+
+    def _quick_end(self) -> datetime | None:
+        """When a mode picked now ends, after the chosen duration."""
+        now = dt_util.utcnow()
+        if self.quick_duration == QUICK_UNTIL_1H:
+            return now + timedelta(hours=1)
+        if self.quick_duration == QUICK_UNTIL_3H:
+            return now + timedelta(hours=3)
+        if self.quick_duration == QUICK_UNTIL_MORNING:
+            local = dt_util.as_local(now)
+            morning = local.replace(
+                hour=QUICK_MORNING_HOUR, minute=0, second=0, microsecond=0
+            )
+            if morning <= local:
+                morning += timedelta(days=1)
+            return dt_util.as_utc(morning)
+        if self.quick_duration == QUICK_UNTIL_FOREVER:
+            return None
+        return self._next_event
+
+    async def async_set_quick_duration(self, duration: str) -> None:
+        """Choose how long a hand-picked mode holds; a running one is re-timed."""
+        self.quick_duration = duration
+        if self.quick_mode != QUICK_AUTO:
+            self.quick_until = self._quick_end()
         await self.async_refresh()
 
     async def async_stop_boost(self) -> None:
@@ -1520,11 +1699,19 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.quick_until = None
         if self.quick_mode == QUICK_AUTO:
             return None
-        until = (
-            f" bis {dt_util.as_local(self.quick_until).strftime('%H:%M')} Uhr"
-            if self.quick_until is not None
-            else ""
-        )
+        if self.quick_until is not None:
+            local = dt_util.as_local(self.quick_until)
+            days = (local.date() - dt_util.now().date()).days
+            day = (
+                "" if days <= 0
+                else " morgen" if days == 1
+                else f" {local.strftime('%d.%m.')}"
+            )
+            until = f" bis{day} {local.strftime('%H:%M')} Uhr"
+        elif self.quick_duration == QUICK_UNTIL_FOREVER:
+            until = " (dauerhaft)"
+        else:
+            until = ""
         if self.quick_mode == QUICK_COMFORT:
             return "quick_comfort", f"Komfort von Hand{until}", comfort_temperature
         if self.quick_mode == QUICK_ECO:
@@ -1546,6 +1733,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result["heating_problem"] = self.heating_problem
         await self._send_notifications(result)
         result["external_temperature_thermostats"] = sorted(self._external_fed)
+        result["quick_duration"] = self.quick_duration
+        self._save_runtime_state()
         return result
 
     def _room_name(self) -> str:
@@ -1618,8 +1807,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _send_notifications(self, result: dict[str, Any]) -> None:
         """Push new alerts (and their end) to the configured notify service."""
         service = (self.config.get(CONF_NOTIFY_SERVICE) or "").strip()
-        if not service or not self.enabled:
+        if not service:
             self._alerts.clear()
+            return
+        if not self.enabled:
+            # Kept as they are: right after a restart control is switched on
+            # only once the switch is restored.
             return
         domain, _, name = service.partition(".")
         if not name:

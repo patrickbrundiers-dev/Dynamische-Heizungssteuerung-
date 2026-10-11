@@ -61,6 +61,9 @@ CONF_GUEST_ENTITY: Final = "guest_entity"
 CONF_ENTER_HOME_DURATION: Final = "enter_home_duration"
 CONF_LEAVING_HOME_DURATION: Final = "leaving_home_duration"
 CONF_PROXIMITY_ENTITY: Final = "proximity_entity"
+# Config entry id of a Home Assistant proximity zone (replaces the two
+# sensor fields above).
+CONF_PROXIMITY_ZONE: Final = "proximity_zone"
 CONF_PROXIMITY_DURATION: Final = "proximity_duration"
 CONF_PROXIMITY_DISTANCE: Final = "proximity_distance"
 CONF_PRESENCE_SCHEDULE_ENTITY: Final = "presence_schedule_entity"
@@ -159,6 +162,20 @@ QUICK_ECO: Final = "eco"
 QUICK_BOOST: Final = "boost"
 QUICK_OFF: Final = "off"
 QUICK_MODES: Final = (QUICK_AUTO, QUICK_COMFORT, QUICK_ECO, QUICK_BOOST, QUICK_OFF)
+# How long a hand-picked Komfort/Eco/Aus holds.
+QUICK_UNTIL_SCHEDULE: Final = "schedule"
+QUICK_UNTIL_1H: Final = "1h"
+QUICK_UNTIL_3H: Final = "3h"
+QUICK_UNTIL_MORNING: Final = "morning"
+QUICK_UNTIL_FOREVER: Final = "forever"
+QUICK_DURATIONS: Final = (
+    QUICK_UNTIL_SCHEDULE,
+    QUICK_UNTIL_1H,
+    QUICK_UNTIL_3H,
+    QUICK_UNTIL_MORNING,
+    QUICK_UNTIL_FOREVER,
+)
+QUICK_MORNING_HOUR: Final = 6
 
 # Push notifications through a notify service (e.g. notify.mobile_app_phone).
 CONF_NOTIFY_SERVICE: Final = "notify_service"

@@ -16,6 +16,9 @@ views:
           - type: tile
             entity: select.dynamische_heizungssteuerung_betriebsart
             name: Betriebsart
+          - type: tile
+            entity: select.dynamische_heizungssteuerung_betriebsart_dauer
+            name: Dauer
           - type: horizontal-stack
             cards:
               - type: button

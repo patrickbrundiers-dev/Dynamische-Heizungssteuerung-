@@ -15,6 +15,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass, {**dict(entry.data), **dict(entry.options)}, entry.entry_id
     )
     await coordinator.async_load_learning()
+    await coordinator.async_load_state()
     await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = coordinator
