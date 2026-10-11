@@ -170,7 +170,11 @@ class ValveOffset(_RoomNumber):
         super().__init__(coordinator, entry)
         self._thermostat_id = thermostat_id
         self._attr_unique_id = f"{entry.entry_id}_valve_offset_{thermostat_id}"
-        self._attr_name = f"Versatz {coordinator._friendly_name(thermostat_id)}"
+
+    @property
+    def name(self) -> str:
+        # Read live: right after a restart the valve may not have a state yet.
+        return f"Versatz {self.coordinator._friendly_name(self._thermostat_id)}"
 
     @property
     def native_value(self) -> float:

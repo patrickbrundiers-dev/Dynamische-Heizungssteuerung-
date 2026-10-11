@@ -185,13 +185,17 @@ class SkipValveSwitch(CoordinatorEntity[DynamicHeatingCoordinator], SwitchEntity
         super().__init__(coordinator)
         self._thermostat_id = thermostat_id
         self._attr_unique_id = f"{entry.entry_id}_skip_{thermostat_id}"
-        self._attr_name = f"Auslassen {coordinator._friendly_name(thermostat_id)}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name="Dynamische Heizungssteuerung",
             manufacturer="Community",
             model="Adaptive Heating Controller",
         )
+
+    @property
+    def name(self) -> str:
+        # Read live: right after a restart the valve may not have a state yet.
+        return f"Auslassen {self.coordinator._friendly_name(self._thermostat_id)}"
 
     @property
     def is_on(self) -> bool:
