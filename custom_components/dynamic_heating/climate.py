@@ -24,6 +24,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_HUMIDITY_ENTITY,
     QUICK_AUTO,
     QUICK_MANUAL,
     QUICK_MODES,
@@ -85,6 +86,16 @@ class RoomClimate(CoordinatorEntity[DynamicHeatingCoordinator], ClimateEntity):
         return self._data.get("room_temperature")
 
     @property
+    def current_humidity(self) -> float | None:
+        """Room humidity from the configured sensor, as Better Thermostat shows."""
+        entity_id = self.coordinator.config.get(CONF_HUMIDITY_ENTITY)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        try:
+            return float(state.state) if state is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @property
     def target_temperature(self) -> float | None:
         return self._data.get("target_temperature")
 
@@ -116,6 +127,8 @@ class RoomClimate(CoordinatorEntity[DynamicHeatingCoordinator], ClimateEntity):
             "control_active": bool(self._data.get("enabled")),
             "manual": self.coordinator.current_quick_mode == QUICK_MANUAL,
             "until": until,
+            "room_offset": self._data.get("room_offset"),
+            "temperature_trend": self._data.get("temperature_trend"),
         }
 
     async def async_set_temperature(self, **kwargs: Any) -> None:

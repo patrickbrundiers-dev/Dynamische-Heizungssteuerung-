@@ -636,3 +636,35 @@ def select_schedule(
         if text and text in name.casefold():
             return entity_id
     return schedules[0][0]
+
+
+def calendar_temperature(description: object, key: str = "temperature") -> float | None:
+    """Read ``temperature: 22`` from a calendar event description."""
+    if not isinstance(description, str):
+        return None
+    for line in description.splitlines():
+        name, sep, value = line.partition(":")
+        if sep and name.strip().casefold() == key:
+            return schedule_comfort_temperature(value.strip().replace(",", "."))
+    return None
+
+
+def temperature_trend(
+    samples: list[tuple[datetime, float]], min_span_seconds: float
+) -> float | None:
+    """Least-squares slope of the samples in °C per hour, if they span enough."""
+    if len(samples) < 2:
+        return None
+    start = samples[0][0]
+    span = (samples[-1][0] - start).total_seconds()
+    if span < min_span_seconds:
+        return None
+    xs = [(at - start).total_seconds() / 3600 for at, _ in samples]
+    ys = [value for _, value in samples]
+    mean_x = sum(xs) / len(xs)
+    mean_y = sum(ys) / len(ys)
+    denominator = sum((x - mean_x) ** 2 for x in xs)
+    if denominator <= 0:
+        return None
+    slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys, strict=True)) / denominator
+    return round(slope, 2)

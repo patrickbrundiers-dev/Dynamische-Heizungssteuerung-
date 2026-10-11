@@ -10,6 +10,9 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_ADDITIONAL_WINDOW_ENTITIES,
+    CONF_HUMIDITY_ENTITY,
+    CONF_LOCK_VALVES,
     CONF_ADDITIONAL_SCHEDULE_ENTITIES,
     CONF_AGGRESSIVE_OFFSET,
     CONF_AGGRESSIVE_RANGE,
@@ -231,7 +234,7 @@ def _user_schema() -> vol.Schema:
                 selector.EntitySelectorConfig(domain="sensor")
             ),
             vol.Required(CONF_SCHEDULE_ENTITY): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="schedule")
+                selector.EntitySelectorConfig(domain=["schedule", "calendar"])
             ),
             vol.Optional(CONF_WINDOW_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="binary_sensor")
@@ -426,7 +429,9 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             vol.Required(
                 CONF_SCHEDULE_ENTITY, default=values.get(CONF_SCHEDULE_ENTITY)
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="schedule")),
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["schedule", "calendar"])
+            ),
             vol.Optional(CONF_WINDOW_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="binary_sensor")
             ),
@@ -554,6 +559,9 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                     current.get(CONF_SYNC_MANUAL_CHANGE, DEFAULT_SYNC_MANUAL_CHANGE)
                 ),
             ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_LOCK_VALVES, default=bool(current.get(CONF_LOCK_VALVES, False))
+            ): selector.BooleanSelector(),
             vol.Optional(CONF_AGGRESSIVE_RANGE): _degrees_selector(2, 0.1),
             vol.Optional(
                 CONF_AGGRESSIVE_OFFSET,
@@ -567,12 +575,16 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Required(
                 CONF_SCHEDULE_ENTITY, default=current[CONF_SCHEDULE_ENTITY]
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="schedule")),
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["schedule", "calendar"])
+            ),
             vol.Optional(CONF_ADDITIONAL_SCHEDULE_ENTITIES): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="schedule", multiple=True)
+                selector.EntitySelectorConfig(
+                    domain=["schedule", "calendar"], multiple=True
+                )
             ),
             vol.Optional(CONF_ECO_SCHEDULE_ENTITY): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain="schedule")
+                selector.EntitySelectorConfig(domain=["schedule", "calendar"])
             ),
             vol.Required(
                 CONF_COMFORT_TEMPERATURE,
@@ -656,6 +668,9 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         schema = {}
         for item in (
             self._entity_field(CONF_WINDOW_ENTITY, "binary_sensor", current),
+            self._entity_field(
+                CONF_ADDITIONAL_WINDOW_ENTITIES, "binary_sensor", current, multiple=True
+            ),
             self._duration_field(CONF_WINDOW_OPEN_DELAY, current, DEFAULT_WINDOW_OPEN_DELAY),
             self._duration_field(CONF_WINDOW_CLOSE_DELAY, current, DEFAULT_WINDOW_CLOSE_DELAY),
         ):
@@ -672,6 +687,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         for item in (
             self._entity_field(CONF_OUTDOOR_TEMPERATURE_ENTITY, "sensor", current),
             self._entity_field(CONF_WEATHER_ENTITY, "weather", current),
+            self._entity_field(CONF_HUMIDITY_ENTITY, "sensor", current),
             self._entity_field(
                 CONF_HEATING_SEASON_ENTITY, ["binary_sensor", "input_boolean"], current
             ),
@@ -839,8 +855,13 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         if user_input is not None:
             current.update(user_input)
             for key in (CONF_WINDOW_ENTITY, CONF_OUTDOOR_TEMPERATURE_ENTITY, CONF_WEATHER_ENTITY,
-                        CONF_HEATING_SEASON_ENTITY):
+                        CONF_HEATING_SEASON_ENTITY, CONF_HUMIDITY_ENTITY):
                 current[key] = user_input.get(key) or None
+            current[CONF_ADDITIONAL_WINDOW_ENTITIES] = [
+                entity_id
+                for entity_id in user_input.get(CONF_ADDITIONAL_WINDOW_ENTITIES) or []
+                if entity_id != current[CONF_WINDOW_ENTITY]
+            ]
             for key in (CONF_WINDOW_OPEN_DELAY, CONF_WINDOW_CLOSE_DELAY):
                 current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
             current[CONF_WINDOW_TEMPERATURE] = user_input.get(CONF_WINDOW_TEMPERATURE)

@@ -21,9 +21,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up the opt-in control switch."""
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
-    async_add_entities(
-        [DynamicHeatingSwitch(coordinator, entry), BoostSwitch(coordinator, entry)]
-    )
+    entities = [DynamicHeatingSwitch(coordinator, entry), BoostSwitch(coordinator, entry)]
+    if coordinator.child_lock_switches():
+        entities.append(ChildLockSwitch(coordinator, entry))
+    async_add_entities(entities)
 
 
 class DynamicHeatingSwitch(
@@ -116,4 +117,43 @@ class BoostSwitch(CoordinatorEntity[DynamicHeatingCoordinator], SwitchEntity):
     async def async_turn_off(self, **kwargs) -> None:
         """End the boost early."""
         await self.coordinator.async_stop_boost()
+        self.async_write_ha_state()
+
+
+class ChildLockSwitch(CoordinatorEntity[DynamicHeatingCoordinator], SwitchEntity):
+    """Lock the buttons of every thermostat of the room (Better Thermostat)."""
+
+    _attr_icon = "mdi:lock"
+    _attr_name = "Kindersicherung"
+
+    def __init__(
+        self, coordinator: DynamicHeatingCoordinator, entry: ConfigEntry
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_child_lock"
+        self._attr_has_entity_name = True
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dynamische Heizungssteuerung",
+            manufacturer="Community",
+            model="Adaptive Heating Controller",
+        )
+
+    @property
+    def is_on(self) -> bool:
+        """On while every thermostat of the room is locked."""
+        states = [
+            self.hass.states.get(switch_id)
+            for switch_id in self.coordinator.child_lock_switches()
+        ]
+        return bool(states) and all(
+            state is not None and state.state == "on" for state in states
+        )
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_child_lock(True)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_child_lock(False)
         self.async_write_ha_state()

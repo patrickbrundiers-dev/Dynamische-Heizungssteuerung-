@@ -145,7 +145,8 @@
           "eco_schedule_entity": "Eco-Zeitplan (optional)",
           "sync_manual_change": "Drehen am Ventil gilt für den Raum",
           "aggressive_range": "Aggressiv-Modus: Bereich (°C, optional)",
-          "aggressive_offset": "Aggressiv-Modus: Versatz"
+          "aggressive_offset": "Aggressiv-Modus: Versatz",
+          "lock_valves": "Ventile sperren"
         },
         "data_description": {
           "climate_entity": "Wähle die Climate-Entität, deren Sollwert dieser Raumregler verändern darf. Vermeide weitere Automationen, die gleichzeitig dasselbe Thermostat steuern.",
@@ -169,7 +170,8 @@
           "eco_schedule_entity": "Zeitplan-Helfer, dessen Blöcke in den Zusatzdaten eine Temperatur tragen (z. B. temperature: 17). Solange ein Block aktiv ist, ersetzt sie die Absenktemperatur, höchstens bis zur Komforttemperatur.",
           "sync_manual_change": "Wird an einem Thermostat gedreht, bekommen alle Thermostate des Raums diesen Wert und er gilt als Betriebsart „Manuell“ für die eingestellte Betriebsart-Dauer. Aus: die Regelung pausiert nur bis zum nächsten Moduswechsel.",
           "aggressive_range": "Liegt der Raum um mehr als diesen Wert unter oder über dem Soll, wird Soll plus bzw. minus Versatz gesendet, damit träge Ventile deutlich öffnen oder schließen. Leer lassen zum Abschalten.",
-          "aggressive_offset": "Um so viel wird der gesendete Sollwert außerhalb des Bereichs angehoben oder abgesenkt."
+          "aggressive_offset": "Um so viel wird der gesendete Sollwert außerhalb des Bereichs angehoben oder abgesenkt.",
+          "lock_valves": "Wird an einem Thermostat gedreht, stellt die Regelung den Sollwert des Raums sofort wieder her (wie die Kindersicherung von Better Thermostat oder der Sperr-Modus von Climate Group Helper). Hat Vorrang vor „Drehen am Ventil gilt für den Raum“."
         }
       },
       "presence": {
@@ -234,7 +236,9 @@
           "heating_season_entity": "Heizperiode / Wintermodus (optional)",
           "notify_service": "Push-Benachrichtigung (optional)",
           "window_drop_detection": "Fenster ohne Kontakt erkennen",
-          "disable_trv_window_detection": "Fenstererkennung der Thermostate abschalten"
+          "disable_trv_window_detection": "Fenstererkennung der Thermostate abschalten",
+          "additional_window_entities": "Weitere Fenster- und Türkontakte (optional)",
+          "humidity_entity": "Luftfeuchtesensor (optional)"
         },
         "data_description": {
           "window_entity": "EIN erzwingt Absenkung. Ist ein ausgewählter Fensterkontakt nicht verfügbar, wird kein neuer Sollwert geschrieben.",
@@ -247,7 +251,9 @@
           "heating_season_entity": "Schalter oder Sensor für die Heizperiode, z. B. ein Wintermodus. Ist er AUS, wird nicht geheizt: der Sollwert geht auf die Frostschutztemperatur oder, ohne sie, auf das Minimum des Thermostats. Ist die Entität nicht verfügbar, wird normal weitergeheizt. Leer lassen zum Abschalten.",
           "notify_service": "Notify-Dienst fürs Handy, z. B. notify.mobile_app_patrick. Meldet bei aktiver Regelung: Thermostat-Problem oder ausgefallenen Raumfühler nach 30 Minuten, eine wartende Regelung nach 30 Minuten, Heizproblem, Frostgefahr und ein Fenster, das in der Heizperiode über eine Stunde offen ist. Leer lassen zum Abschalten.",
           "window_drop_detection": "Fällt die Raumtemperatur innerhalb von 10 Minuten um 1 °C, wird der Raum 15 Minuten wie bei offenem Fenster abgesenkt. Funktioniert zusätzlich zum Fensterkontakt.",
-          "disable_trv_window_detection": "Schaltet bei aktiver Regelung die eigene Fenstererkennung der Thermostate (Schalter …_window_detection) aus, wenn der Raum einen Fensterkontakt hat. So schließt kein Ventil von sich aus, während geheizt werden soll."
+          "disable_trv_window_detection": "Schaltet bei aktiver Regelung die eigene Fenstererkennung der Thermostate (Schalter …_window_detection) aus, wenn der Raum einen Fensterkontakt hat. So schließt kein Ventil von sich aus, während geheizt werden soll.",
+          "additional_window_entities": "Ist einer davon offen, gilt der Raum als offen, mit denselben Verzögerungen. Ein ausgefallener zusätzlicher Kontakt zählt als geschlossen.",
+          "humidity_entity": "Die Luftfeuchte wird am Raum-Thermostat angezeigt."
         }
       },
       "house_settings": {

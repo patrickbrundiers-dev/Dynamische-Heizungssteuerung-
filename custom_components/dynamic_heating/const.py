@@ -3,7 +3,9 @@
 from typing import Final
 
 DOMAIN: Final = "dynamic_heating"
-PLATFORMS: Final = ["binary_sensor", "button", "climate", "select", "sensor", "switch"]
+PLATFORMS: Final = [
+    "binary_sensor", "button", "climate", "number", "select", "sensor", "switch"
+]
 
 CONF_CLIMATE_ENTITY: Final = "climate_entity"
 # Further thermostats of the same room; they get the same target.
@@ -312,3 +314,33 @@ TRV_WINDOW_DETECTION_SUFFIX: Final = "_window_detection"
 
 # Fired on the event bus whenever the decided mode or target changes.
 EVENT_MODE_CHANGED: Final = "dynamic_heating_mode_changed"
+
+# More window and door contacts per room: any open one counts as open
+# (Better Thermostat's window/door sensors, the room/zone sensors of
+# Climate Group Helper).
+CONF_ADDITIONAL_WINDOW_ENTITIES: Final = "additional_window_entities"
+
+# Room humidity shown on the room thermostat entity (Better Thermostat).
+CONF_HUMIDITY_ENTITY: Final = "humidity_entity"
+
+# Turned valves are set back to the room's target (Better Thermostat's
+# software child lock, Climate Group Helper's lock sync mode). Wins over
+# syncing a turned valve to the room.
+CONF_LOCK_VALVES: Final = "lock_valves"
+
+# Room offset (Climate Group Helper's group offset): shifts every target of
+# the room; a temperature set on the room thermostat resets it.
+ROOM_OFFSET_MIN: Final = -3.0
+ROOM_OFFSET_MAX: Final = 3.0
+# Per-valve offset (Climate Group Helper's member offsets), e.g. a valve
+# that sits in a colder corner of the room.
+VALVE_OFFSET_MIN: Final = -3.0
+VALVE_OFFSET_MAX: Final = 3.0
+
+# Temperature trend of the room over this window, in °C per hour.
+TREND_WINDOW_SECONDS: Final = 1800
+TREND_MIN_SPAN_SECONDS: Final = 600
+
+# A calendar event's description may carry ``temperature: 22`` like the
+# additional data of a schedule block.
+CALENDAR_TEMPERATURE_KEY: Final = "temperature"
