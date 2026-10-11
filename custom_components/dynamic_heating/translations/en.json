@@ -100,10 +100,12 @@
         "title": "House settings",
         "description": "Creates the house mode (home, away, vacation), the vacation end and an overview of all rooms.",
         "data": {
-          "notify_service": "Notify service (optional)"
+          "notify_service": "Notify service (optional)",
+          "house_calendar": "House calendar (optional)"
         },
         "data_description": {
-          "notify_service": "For the weekly report, e.g. notify.mobile_app_phone."
+          "notify_service": "For the weekly report, e.g. notify.mobile_app_phone.",
+          "house_calendar": "Calendar or schedule for the whole house. A running event picks the schedule its title or \"zeitplan: Ferien\" names in every room. With \"komfort: an\" or \"temperature: 21\" in the description it is comfort time in every room."
         }
       }
     },
@@ -146,7 +148,11 @@
           "sync_manual_change": "Turning a valve applies to the room",
           "aggressive_range": "Aggressive mode: range (°C, optional)",
           "aggressive_offset": "Aggressive mode: offset",
-          "lock_valves": "Lock valves"
+          "lock_valves": "Lock valves",
+          "maintenance_weekday": "Valve maintenance: weekday",
+          "maintenance_hour": "Valve maintenance: hour",
+          "maintenance_duration": "Valve maintenance: duration per phase",
+          "command_delay": "Pause between valve commands"
         },
         "data_description": {
           "climate_entity": "Select the climate entity this room controller may adjust. Avoid running another automation that writes targets to the same thermostat.",
@@ -171,7 +177,11 @@
           "sync_manual_change": "A setpoint turned at a thermostat goes to every thermostat of the room and holds as quick mode Manuell for the chosen duration. Off: control only pauses until the next mode change.",
           "aggressive_range": "When the room is more than this below or above the target, target plus or minus the offset is sent so sluggish valves open or close decisively. Leave empty to turn off.",
           "aggressive_offset": "How far the sent setpoint is raised or lowered outside the range.",
-          "lock_valves": "A setpoint turned at a thermostat is set back to the room's target at once (like Better Thermostat's child lock or Climate Group Helper's lock sync mode). Wins over 'Turning a valve applies to the room'."
+          "lock_valves": "A setpoint turned at a thermostat is set back to the room's target at once (like Better Thermostat's child lock or Climate Group Helper's lock sync mode). Wins over 'Turning a valve applies to the room'.",
+          "maintenance_weekday": "Day the valves are exercised. \"Every 7 days\" means seven days after the last run.",
+          "maintenance_hour": "Hour the valve maintenance starts (0-23).",
+          "maintenance_duration": "How long the valves stay fully open, then closed.",
+          "command_delay": "Wait between two commands to valves, also across rooms, so Zigbee does not drop any when many are sent at once. 0 = no pause."
         }
       },
       "presence": {
@@ -189,7 +199,10 @@
           "away_temperature": "Away temperature (°C, optional)",
           "away_offset": "Setback while the room is empty (°C, optional)",
           "away_schedule_mode": "Also when nobody is home",
-          "frost_after_absence": "Frost protection after absence"
+          "frost_after_absence": "Frost protection after absence",
+          "force_comfort_entities": "Force comfort with (optional)",
+          "force_eco_entities": "Force eco with (optional)",
+          "follow_house_calendar": "Follow the house calendar"
         },
         "data_description": {
           "person_entities": "Comfort is allowed when at least one selected person or device tracker is home. Device trackers with simple home/not_home states are usually most predictable.",
@@ -203,7 +216,10 @@
           "away_temperature": "Setpoint while nobody is home. Leave empty to keep using the setback temperature. Must be lower than the comfort temperature.",
           "away_offset": "When somebody is home but not in the room and the schedule asks for comfort, heat to comfort minus this value instead of the setback (not below eco). Leave empty to turn off.",
           "away_schedule_mode": "Use the reduced comfort also while nobody is home and the schedule asks for comfort. Otherwise the away temperature applies.",
-          "frost_after_absence": "After nobody has been home this long, drop to frost protection (without one, to the thermostat minimum). 0 turns it off."
+          "frost_after_absence": "After nobody has been home this long, drop to frost protection (without one, to the thermostat minimum). 0 turns it off.",
+          "force_comfort_entities": "Switches, sensors or timers, e.g. input_boolean.party. While one is on or active the room heats to comfort. A number at the end of the name (\"Party 23\") is used as the temperature. An open window wins.",
+          "force_eco_entities": "While one of these is on the room stays at eco. Forced comfort wins.",
+          "follow_house_calendar": "While a house calendar event runs, the room uses the schedule it names, or heats to comfort if the event asks for it."
         }
       },
       "geofencing": {
@@ -238,7 +254,16 @@
           "window_drop_detection": "Detect windows without a contact",
           "disable_trv_window_detection": "Turn off the thermostats' window detection",
           "additional_window_entities": "More window and door contacts (optional)",
-          "humidity_entity": "Humidity sensor (optional)"
+          "humidity_entity": "Humidity sensor (optional)",
+          "door_entities": "Door contacts (optional)",
+          "door_open_delay": "Doors: delay when opened",
+          "door_close_delay": "Doors: delay after closing",
+          "zone_window_entities": "Contacts shared by several rooms (optional)",
+          "zone_window_open_delay": "Shared contacts: delay when opened",
+          "zone_window_close_delay": "Shared contacts: delay after closing",
+          "window_change": "Changes while a window is open",
+          "heating_limit_average": "Heating limit by average",
+          "heating_limit_fallback_off": "No heating without outdoor temperature"
         },
         "data_description": {
           "window_entity": "When ON, setback is enforced. If configured but unavailable, the controller avoids writing a new target.",
@@ -253,16 +278,43 @@
           "window_drop_detection": "When the room cools by 1 °C within 10 minutes it is lowered for 15 minutes as with an open window. Works in addition to a window contact.",
           "disable_trv_window_detection": "While control is on and the room has a window contact, turn off the thermostats' own window detection (switch …_window_detection), so no valve closes on its own while the room should heat.",
           "additional_window_entities": "If any of them is open, the room counts as open, with the same delays. An extra contact that drops out counts as closed.",
-          "humidity_entity": "The humidity is shown on the room thermostat."
+          "humidity_entity": "The humidity is shown on the room thermostat.",
+          "door_entities": "Room doors with their own, usually longer delay, so a door opened briefly does not lower the room.",
+          "door_open_delay": "The room is lowered only once a door stayed open this long.",
+          "door_close_delay": "After the door is closed the setback stays this long.",
+          "zone_window_entities": "Contacts that affect several rooms, e.g. the patio door. Add them to every affected room.",
+          "zone_window_open_delay": "The room is lowered only once one of these stayed open this long.",
+          "zone_window_close_delay": "After closing the setback stays this long.",
+          "window_change": "A setpoint changed at a valve or the room thermostat while a window is open never heats right away. It is kept and applied once the window is closed, or discarded.",
+          "heating_limit_average": "Uses the mean weather forecast of the next two days, without a forecast the mean of the outdoor sensor over the last two days, so one warm afternoon does not stop heating. Off = current outdoor temperature.",
+          "heating_limit_fallback_off": "Without any outdoor temperature the heating limit counts as reached. Off = keep heating as before."
         }
       },
       "house_settings": {
         "title": "House settings",
         "data": {
-          "notify_service": "Notify service (optional)"
+          "notify_service": "Notify service (optional)",
+          "house_calendar": "House calendar (optional)"
         },
         "data_description": {
-          "notify_service": "For the weekly report, e.g. notify.mobile_app_phone."
+          "notify_service": "For the weekly report, e.g. notify.mobile_app_phone.",
+          "house_calendar": "Calendar or schedule for the whole house. A running event picks the schedule its title or \"zeitplan: Ferien\" names in every room. With \"komfort: an\" or \"temperature: 21\" in the description it is comfort time in every room."
+        }
+      },
+      "house_menu": {
+        "title": "House",
+        "menu_options": {
+          "house_settings": "House settings",
+          "copy_settings": "Copy settings to rooms"
+        }
+      },
+      "copy_settings": {
+        "title": "Copy settings",
+        "description": "Writes the chosen settings of one room to other rooms. Devices (thermostats, sensors, schedules, the room's window and door contacts) are never copied. The target rooms are reloaded afterwards.",
+        "data": {
+          "source": "From room",
+          "targets": "To rooms",
+          "groups": "Settings"
         }
       }
     },
@@ -270,10 +322,38 @@
       "eco_must_be_below_comfort": "The setback temperature must be lower than the comfort temperature.",
       "away_must_be_below_comfort": "The away temperature must be lower than the comfort temperature.",
       "window_must_be_below_comfort": "The open-window temperature must be below the comfort temperature.",
-      "frost_must_be_below_comfort": "The frost protection temperature must be below the comfort temperature."
+      "frost_must_be_below_comfort": "The frost protection temperature must be below the comfort temperature.",
+      "copy_nothing_selected": "Please pick a source room, at least one other target room and at least one group."
     },
     "abort": {
       "already_configured": "This thermostat is already assigned to another heating controller."
+    }
+  },
+  "selector": {
+    "settings_groups": {
+      "options": {
+        "temperatures": "Temperatures and boost",
+        "windows": "Windows, doors and airing",
+        "presence": "Presence, geofencing, forcing",
+        "valves": "Valves, calibration and maintenance",
+        "outdoor": "Outdoor temperature, heating limit, notifications"
+      }
+    }
+  },
+  "issues": {
+    "implausible_room_temperature": {
+      "title": "Implausible room temperature in {room}",
+      "description": "The room sensor {entity} reports {value} °C. The value is ignored and the room is controlled with the thermostats' readings. A flat battery is a common cause. This goes away once plausible values come in again."
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "heating_started": "Heating started",
+      "heating_stopped": "Heating stopped",
+      "target_reached": "Target temperature reached",
+      "window_opened": "Window opened (after delay)",
+      "window_closed": "Window closed (after delay)",
+      "humidity_high": "Humidity high (60 % or more)"
     }
   }
 }

@@ -24,6 +24,11 @@ async def async_setup_entry(
     entities = [DynamicHeatingSwitch(coordinator, entry), BoostSwitch(coordinator, entry)]
     if coordinator.child_lock_switches():
         entities.append(ChildLockSwitch(coordinator, entry))
+    thermostats = coordinator._thermostat_ids()
+    if len(thermostats) > 1:
+        entities.extend(
+            SkipValveSwitch(coordinator, entry, entity_id) for entity_id in thermostats
+        )
     async_add_entities(entities)
 
 
@@ -156,4 +161,46 @@ class ChildLockSwitch(CoordinatorEntity[DynamicHeatingCoordinator], SwitchEntity
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_child_lock(False)
+        self.async_write_ha_state()
+
+
+class SkipValveSwitch(CoordinatorEntity[DynamicHeatingCoordinator], SwitchEntity):
+    """Leave one valve out (Climate Group Helper's member isolation).
+
+    The valve is closed once and then left alone; it no longer counts for
+    the heat demand and is not set back by "Ventile sperren". Can be switched
+    by an automation, e.g. from a sensor that sees a curtain or furniture in
+    front of the radiator. At least one valve of the room always stays in.
+    """
+
+    _attr_icon = "mdi:radiator-off"
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: DynamicHeatingCoordinator,
+        entry: ConfigEntry,
+        thermostat_id: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._thermostat_id = thermostat_id
+        self._attr_unique_id = f"{entry.entry_id}_skip_{thermostat_id}"
+        self._attr_name = f"Auslassen {coordinator._friendly_name(thermostat_id)}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dynamische Heizungssteuerung",
+            manufacturer="Community",
+            model="Adaptive Heating Controller",
+        )
+
+    @property
+    def is_on(self) -> bool:
+        return self._thermostat_id in self.coordinator.skipped_valves
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_valve_skipped(self._thermostat_id, True)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_valve_skipped(self._thermostat_id, False)
         self.async_write_ha_state()

@@ -609,10 +609,119 @@ async def test_house_settings_are_created_once(hass, enable_custom_integrations)
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"] == {"entry_type": "house"}
-    assert result["options"] == {"notify_service": "notify.phone"}
+    assert result["options"] == {
+        "notify_service": "notify.phone", "house_calendar": None
+    }
     await hass.async_block_till_done()
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "user"}
     )
     assert result["menu_options"] == ["room"]
+
+
+@pytest.mark.asyncio
+async def test_house_editor_copies_settings_to_other_rooms(
+    hass, enable_custom_integrations
+):
+    """Chosen groups go from one room to others; devices stay as they are."""
+    source = _mock_room(
+        hass,
+        options={
+            "comfort_temperature": 22.5,
+            "eco_temperature": 17.0,
+            "window_open_delay": 120,
+            "window_entity": "binary_sensor.living_room_window",
+        },
+    )
+    target = MockConfigEntry(
+        domain=DOMAIN,
+        title="Dynamische Heizung – climate.bathroom",
+        unique_id="climate.bathroom",
+        data={
+            **_valid_input(),
+            "climate_entity": "climate.bathroom",
+            "window_entity": "binary_sensor.bathroom_window",
+        },
+        options={"window_open_delay": 600, "door_open_delay": 900},
+    )
+    target.add_to_hass(hass)
+    house = MockConfigEntry(
+        domain=DOMAIN, title="Haus", unique_id="house", data={"entry_type": "house"}
+    )
+    house.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(house.entry_id)
+    assert result["type"] is FlowResultType.MENU
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "copy_settings"}
+    )
+    assert result["step_id"] == "copy_settings"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"source": source.entry_id, "targets": [target.entry_id], "groups": ["temperatures"]},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert target.options["comfort_temperature"] == 22.5
+    assert target.options["eco_temperature"] == 17.0
+    # Not in the chosen group: untouched.
+    assert target.options["window_open_delay"] == 600
+    assert target.options["window_entity"] == "binary_sensor.bathroom_window"
+
+    result = await hass.config_entries.options.async_init(house.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "copy_settings"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"source": source.entry_id, "targets": [target.entry_id], "groups": ["windows"]},
+    )
+    assert target.options["window_open_delay"] == 120
+    # Not set in the source: the target goes back to the default.
+    assert "door_open_delay" not in target.options
+
+
+@pytest.mark.asyncio
+async def test_copy_settings_needs_a_target(hass, enable_custom_integrations):
+    source = _mock_room(hass)
+    house = MockConfigEntry(
+        domain=DOMAIN, title="Haus", unique_id="house", data={"entry_type": "house"}
+    )
+    house.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(house.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "copy_settings"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"source": source.entry_id, "targets": [source.entry_id], "groups": ["valves"]},
+    )
+    assert result["errors"] == {"base": "copy_nothing_selected"}
+
+
+@pytest.mark.asyncio
+async def test_editor_saves_new_window_door_and_limit_settings(
+    hass, enable_custom_integrations
+):
+    entry = _mock_room(hass)
+    result = await _finish_editor_flow(
+        hass,
+        entry,
+        environment={
+            "door_entities": ["binary_sensor.door"],
+            "door_open_delay": _duration(900),
+            "zone_window_entities": ["binary_sensor.patio"],
+            "window_change": "discard",
+            "heating_limit_average": False,
+            "heating_limit_fallback_off": True,
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["door_entities"] == ["binary_sensor.door"]
+    assert entry.options["door_open_delay"] == 900
+    assert entry.options["zone_window_entities"] == ["binary_sensor.patio"]
+    assert entry.options["zone_window_open_delay"] == 300
+    assert entry.options["window_change"] == "discard"
+    assert entry.options["heating_limit_average"] is False
+    assert entry.options["heating_limit_fallback_off"] is True
+    assert entry.options["maintenance_duration"] == 300

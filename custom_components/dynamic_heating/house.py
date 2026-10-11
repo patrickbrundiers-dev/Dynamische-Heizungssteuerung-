@@ -18,6 +18,11 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CALENDAR_TEMPERATURE_KEY,
+    CONF_HOUSE_CALENDAR,
+    HOUSE_CALENDAR_COMFORT_KEYS,
+    HOUSE_CALENDAR_SCHEDULE_KEYS,
+    SCHEDULE_TEMPERATURE_ATTRIBUTE,
     CONF_NOTIFY_SERVICE,
     DOMAIN,
     REPORT_HOUR,
@@ -27,6 +32,12 @@ from .const import (
     HOUSE_MODES,
     HOUSE_VACATION,
     QUICK_AUTO,
+)
+from .logic import (
+    calendar_temperature,
+    description_value,
+    is_on_word,
+    schedule_comfort_temperature,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -154,6 +165,8 @@ class HouseManager:
                 room.quick_mode = QUICK_AUTO
                 room.quick_until = None
                 room.boost_until = None
+        for room in self.rooms():
+            room._pending_source = "Hausmodus"
         self.mode = mode
         await self._async_changed()
 
@@ -171,6 +184,60 @@ class HouseManager:
         ):
             self.mode = HOUSE_HOME
             await self._async_changed()
+
+    def calendar_overlay(
+        self,
+    ) -> tuple[str | None, str | None, bool, float | None, datetime | None] | None:
+        """The running event of the house calendar, if any.
+
+        Returns (event name, schedule it names, comfort time, temperature,
+        end). A calendar's event names a schedule by its title or by
+        ``zeitplan: <name>`` in the description; ``komfort: an`` or
+        ``temperature: 21`` make it comfort time. A schedule helper carries
+        the same keys in its block data.
+        """
+        entity_id = self.entry.options.get(CONF_HOUSE_CALENDAR)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state != "on":
+            return None
+        attributes = state.attributes
+        if state.domain == "calendar":
+            name = attributes.get("message")
+            description = attributes.get("description")
+            schedule = description_value(description, HOUSE_CALENDAR_SCHEDULE_KEYS)
+            comfort_value = description_value(description, HOUSE_CALENDAR_COMFORT_KEYS)
+            temperature = calendar_temperature(description, CALENDAR_TEMPERATURE_KEY)
+            raw_end = attributes.get("end_time")
+        else:
+            name = attributes.get("friendly_name")
+            lowered = {str(key).casefold(): value for key, value in attributes.items()}
+            schedule = next(
+                (str(lowered[key]) for key in HOUSE_CALENDAR_SCHEDULE_KEYS if key in lowered),
+                None,
+            )
+            comfort_value = next(
+                (lowered[key] for key in HOUSE_CALENDAR_COMFORT_KEYS if key in lowered),
+                None,
+            )
+            temperature = schedule_comfort_temperature(
+                attributes.get(SCHEDULE_TEMPERATURE_ATTRIBUTE)
+            )
+            raw_end = attributes.get("next_event")
+        end = None
+        if isinstance(raw_end, datetime):
+            end = raw_end
+        elif isinstance(raw_end, str):
+            end = dt_util.parse_datetime(raw_end)
+        if end is not None and end.tzinfo is None:
+            end = end.replace(tzinfo=dt_util.get_default_time_zone())
+        comfort = temperature is not None or is_on_word(comfort_value)
+        return (
+            str(name) if name else None,
+            schedule,
+            comfort,
+            temperature,
+            dt_util.as_utc(end) if end is not None else None,
+        )
 
     @property
     def away(self) -> bool:

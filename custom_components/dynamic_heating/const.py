@@ -23,6 +23,20 @@ CONF_MAX_PREHEAT_MINUTES: Final = "max_preheat_minutes"
 CONF_AWAY_TEMPERATURE: Final = "away_temperature"
 # Optional outdoor temperature at or above which comfort heating pauses.
 CONF_HEATING_LIMIT_TEMPERATURE: Final = "heating_limit_temperature"
+# Judge the heating limit by the average of the next two days' forecast (else
+# of the outdoor readings of the last two days) instead of the current value,
+# as Better Thermostat does, so one warm afternoon does not stop heating.
+CONF_HEATING_LIMIT_AVERAGE: Final = "heating_limit_average"
+DEFAULT_HEATING_LIMIT_AVERAGE: Final = True
+HEATING_LIMIT_AVERAGE_HOURS: Final = 48
+# Forecast points needed for an average, else the outdoor history is used.
+HEATING_LIMIT_MIN_FORECAST_POINTS: Final = 12
+# Outdoor history: one reading per interval, used once it spans this long.
+OUTDOOR_HISTORY_INTERVAL_SECONDS: Final = 600
+OUTDOOR_HISTORY_MIN_SPAN_SECONDS: Final = 21600
+# Without any outdoor temperature: keep heating (default) or treat the
+# heating limit as reached (AHC "heating limit fallback").
+CONF_HEATING_LIMIT_FALLBACK_OFF: Final = "heating_limit_fallback_off"
 # The heating limit is released only this far below the limit.
 HEATING_LIMIT_HYSTERESIS: Final = 1.0
 # Window contact debounce (seconds) and optional own setpoint while open.
@@ -112,6 +126,12 @@ CONF_VALVE_MAINTENANCE: Final = "valve_maintenance"
 VALVE_MAINTENANCE_INTERVAL_DAYS: Final = 7
 VALVE_MAINTENANCE_HOUR: Final = 11
 VALVE_MAINTENANCE_PHASE_SECONDS: Final = 300
+# Weekday (0 = Monday, "any" = 7 days after the last run), hour and length of
+# each phase, as in Advanced Heating Control's liming protection.
+CONF_MAINTENANCE_WEEKDAY: Final = "maintenance_weekday"
+CONF_MAINTENANCE_HOUR: Final = "maintenance_hour"
+CONF_MAINTENANCE_DURATION: Final = "maintenance_duration"
+MAINTENANCE_ANY_DAY: Final = "any"
 
 # Thermostats without hvac_action count as heating when the setpoint is at least
 # this far above the room temperature (used for learning only).
@@ -125,7 +145,13 @@ LOW_BATTERY_PERCENT: Final = 20
 # "external_temperature_input" number), as Better Thermostat does.
 CONF_EXTERNAL_TEMPERATURE: Final = "external_temperature"
 # Resend when the room temperature moved this far, or after this long anyway.
-EXTERNAL_TEMPERATURE_MIN_CHANGE: Final = 0.1
+# A change of at least this much is sent at once (as Better Thermostat); a
+# smaller one only once it held for the plateau time, so a sensor flickering
+# between two readings does not wake the valves over Zigbee every cycle.
+EXTERNAL_TEMPERATURE_MIN_CHANGE: Final = 0.11
+EXTERNAL_TEMPERATURE_PLATEAU_CHANGE: Final = 0.05
+EXTERNAL_TEMPERATURE_PLATEAU_TOLERANCE: Final = 0.02
+EXTERNAL_TEMPERATURE_PLATEAU_SECONDS: Final = 120
 EXTERNAL_TEMPERATURE_RESEND_SECONDS: Final = 1800
 
 # Boost: heat to a higher temperature for a limited time (Better Thermostat's
@@ -344,3 +370,157 @@ TREND_MIN_SPAN_SECONDS: Final = 600
 # A calendar event's description may carry ``temperature: 22`` like the
 # additional data of a schedule block.
 CALENDAR_TEMPERATURE_KEY: Final = "temperature"
+
+# Room readings outside this range are dropped as sensor errors (Better
+# Thermostat's plausibility check), reported under Repairs, and the room
+# falls back to the thermostats' readings.
+ROOM_TEMPERATURE_PLAUSIBLE_MIN: Final = -5.0
+ROOM_TEMPERATURE_PLAUSIBLE_MAX: Final = 45.0
+
+# What happens to a setpoint turned while a window is open (Climate Group
+# Helper): kept and applied once the window is closed, or discarded.
+CONF_WINDOW_CHANGE: Final = "window_change"
+WINDOW_CHANGE_KEEP: Final = "keep"
+WINDOW_CHANGE_DISCARD: Final = "discard"
+WINDOW_CHANGE_OPTIONS: Final = (WINDOW_CHANGE_KEEP, WINDOW_CHANGE_DISCARD)
+
+# Door contacts and contacts shared by several rooms (e.g. a patio door) with
+# their own delays (Better Thermostat's door delays, Climate Group Helper's
+# zone sensor).
+CONF_DOOR_ENTITIES: Final = "door_entities"
+CONF_DOOR_OPEN_DELAY: Final = "door_open_delay"
+CONF_DOOR_CLOSE_DELAY: Final = "door_close_delay"
+DEFAULT_DOOR_OPEN_DELAY: Final = 600
+DEFAULT_DOOR_CLOSE_DELAY: Final = 0
+CONF_ZONE_WINDOW_ENTITIES: Final = "zone_window_entities"
+CONF_ZONE_WINDOW_OPEN_DELAY: Final = "zone_window_open_delay"
+CONF_ZONE_WINDOW_CLOSE_DELAY: Final = "zone_window_close_delay"
+DEFAULT_ZONE_WINDOW_OPEN_DELAY: Final = 300
+DEFAULT_ZONE_WINDOW_CLOSE_DELAY: Final = 0
+
+# Pause between commands to the valves (Climate Group Helper's member delay),
+# so a burst of commands does not get lost on the Zigbee network.
+CONF_COMMAND_DELAY: Final = "command_delay"
+DEFAULT_COMMAND_DELAY: Final = 0.0
+
+# House calendar: while one of its events runs, every room uses the comfort
+# schedule its title or ``zeitplan: <name>`` names (e.g. "Ferien"; AHC's
+# automatic schedule choice). An event with ``komfort: an`` or
+# ``temperature: 21`` is comfort time in every room on top of its own
+# schedule (Climate Group Helper's bypass schedule).
+CONF_HOUSE_CALENDAR: Final = "house_calendar"
+CONF_FOLLOW_HOUSE_CALENDAR: Final = "follow_house_calendar"
+DEFAULT_FOLLOW_HOUSE_CALENDAR: Final = True
+HOUSE_CALENDAR_SCHEDULE_KEYS: Final = ("zeitplan", "schedule")
+HOUSE_CALENDAR_COMFORT_KEYS: Final = ("komfort", "comfort")
+
+# A valve whose setpoint differs from what was written this long is reported.
+VALVE_DIVERGENCE_SECONDS: Final = 900
+VALVE_DIVERGENCE_MIN: Final = 0.5
+
+# Entities that force comfort or eco while on (AHC party / force eco), e.g.
+# an input_boolean, a timer or a sensor. A number at the end of the name
+# ("Party 23") is the temperature.
+CONF_FORCE_COMFORT_ENTITIES: Final = "force_comfort_entities"
+CONF_FORCE_ECO_ENTITIES: Final = "force_eco_entities"
+
+# Keys in a schedule block's data or a calendar event's description that pause
+# a feature while the block runs (Climate Group Helper's slot meta data).
+BLOCK_WINDOW_KEYS: Final = ("fenster", "window")
+BLOCK_PRESENCE_KEYS: Final = ("anwesenheit", "presence")
+
+# Fired for device triggers; carries the room's device_id and a type.
+EVENT_DEVICE_TRIGGER: Final = "dynamic_heating_event"
+TRIGGER_HEATING_STARTED: Final = "heating_started"
+TRIGGER_HEATING_STOPPED: Final = "heating_stopped"
+TRIGGER_TARGET_REACHED: Final = "target_reached"
+TRIGGER_WINDOW_OPENED: Final = "window_opened"
+TRIGGER_WINDOW_CLOSED: Final = "window_closed"
+TRIGGER_HUMIDITY_HIGH: Final = "humidity_high"
+TRIGGER_TYPES: Final = (
+    TRIGGER_HEATING_STARTED,
+    TRIGGER_HEATING_STOPPED,
+    TRIGGER_TARGET_REACHED,
+    TRIGGER_WINDOW_OPENED,
+    TRIGGER_WINDOW_CLOSED,
+    TRIGGER_HUMIDITY_HIGH,
+)
+HUMIDITY_HIGH_PERCENT: Final = 60.0
+HUMIDITY_HYSTERESIS: Final = 5.0
+TARGET_REACHED_MARGIN: Final = 0.2
+
+# Overshoot after heating stops (Better Thermostat's peak tracking): the room
+# keeps warming for a while; preheating ends that much earlier.
+MAX_OVERSHOOT: Final = 1.5
+OVERSHOOT_MAX_SECONDS: Final = 5400
+OVERSHOOT_DROP: Final = 0.1
+
+# Groups of settings that can be copied from one room to others (house
+# editor "Einstellungen übertragen", Climate Group Helper's apply_config).
+# Devices of a room (thermostats, sensors, schedules, contacts) never are.
+SETTINGS_GROUPS: Final = {
+    "temperatures": (
+        CONF_COMFORT_TEMPERATURE,
+        CONF_ECO_TEMPERATURE,
+        CONF_AWAY_TEMPERATURE,
+        CONF_FROST_PROTECTION_TEMPERATURE,
+        CONF_WINDOW_TEMPERATURE,
+        CONF_BOOST_TEMPERATURE,
+        CONF_BOOST_DURATION,
+        CONF_HOME_TEMPERATURE,
+        CONF_ACTIVITY_TEMPERATURE,
+        CONF_SLEEP_TEMPERATURE,
+        CONF_MAX_PREHEAT_MINUTES,
+    ),
+    "windows": (
+        CONF_WINDOW_OPEN_DELAY,
+        CONF_WINDOW_CLOSE_DELAY,
+        CONF_DOOR_OPEN_DELAY,
+        CONF_DOOR_CLOSE_DELAY,
+        CONF_ZONE_WINDOW_ENTITIES,
+        CONF_ZONE_WINDOW_OPEN_DELAY,
+        CONF_ZONE_WINDOW_CLOSE_DELAY,
+        CONF_WINDOW_DROP_DETECTION,
+        CONF_DISABLE_TRV_WINDOW_DETECTION,
+        CONF_WINDOW_CHANGE,
+    ),
+    "presence": (
+        CONF_PERSON_ENTITIES,
+        CONF_GUEST_ENTITY,
+        CONF_ENTER_HOME_DURATION,
+        CONF_LEAVING_HOME_DURATION,
+        CONF_PROXIMITY_ZONE,
+        CONF_PROXIMITY_DISTANCE,
+        CONF_PROXIMITY_DURATION,
+        CONF_PROXIMITY_MAX_AGE,
+        CONF_AWAY_OFFSET,
+        CONF_AWAY_SCHEDULE_MODE,
+        CONF_FROST_AFTER_ABSENCE,
+        CONF_FORCE_COMFORT_ENTITIES,
+        CONF_FORCE_ECO_ENTITIES,
+        CONF_FOLLOW_HOUSE_CALENDAR,
+    ),
+    "valves": (
+        CONF_CALIBRATION,
+        CONF_EXTERNAL_TEMPERATURE,
+        CONF_HYSTERESIS,
+        CONF_SYNC_MANUAL_CHANGE,
+        CONF_LOCK_VALVES,
+        CONF_AGGRESSIVE_RANGE,
+        CONF_AGGRESSIVE_OFFSET,
+        CONF_COMMAND_DELAY,
+        CONF_VALVE_MAINTENANCE,
+        CONF_MAINTENANCE_WEEKDAY,
+        CONF_MAINTENANCE_HOUR,
+        CONF_MAINTENANCE_DURATION,
+    ),
+    "outdoor": (
+        CONF_OUTDOOR_TEMPERATURE_ENTITY,
+        CONF_WEATHER_ENTITY,
+        CONF_HEATING_SEASON_ENTITY,
+        CONF_HEATING_LIMIT_TEMPERATURE,
+        CONF_HEATING_LIMIT_AVERAGE,
+        CONF_HEATING_LIMIT_FALLBACK_OFF,
+        CONF_NOTIFY_SERVICE,
+    ),
+}

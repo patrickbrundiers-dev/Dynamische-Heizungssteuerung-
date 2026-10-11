@@ -80,6 +80,7 @@ def decide_heating_target(
     maintenance_temperature: float | None = None,
     reduced_comfort: tuple[str, float] | None = None,
     long_absence_temperature: float | None = None,
+    overshoot: float = 0.0,
 ) -> HeatingDecision:
     """Return the target and reason for the current conditions.
 
@@ -97,6 +98,8 @@ def decide_heating_target(
     ``reduced_comfort`` (status, target) replaces the setback while nobody is
     in the room but the schedule asks for comfort; ``long_absence_temperature``
     replaces it after a long absence. Both apply only without presence.
+    ``overshoot`` is how far the room keeps warming after heating stops;
+    preheating aims that much lower so it ends earlier.
     """
     if maintenance_temperature is not None:
         return HeatingDecision(
@@ -136,6 +139,7 @@ def decide_heating_target(
             forecast_temperature=forecast_temperature,
             reduced_comfort=reduced_comfort,
             long_absence_temperature=long_absence_temperature,
+            overshoot=overshoot,
         )
     if (
         frost_protection_temperature is not None
@@ -172,6 +176,7 @@ def _decide(
     forecast_temperature: float | None = None,
     reduced_comfort: tuple[str, float] | None = None,
     long_absence_temperature: float | None = None,
+    overshoot: float = 0.0,
 ) -> HeatingDecision:
     """Decide without the frost-protection floor.
 
@@ -252,7 +257,7 @@ def _decide(
     )
     lead = calculate_lead_minutes(
         temperature_for_lead,
-        comfort_temperature,
+        comfort_temperature - max(0.0, overshoot),
         heating_rate_c_per_hour,
         forecast_temperature if forecast_temperature is not None else outdoor_temperature,
         max_preheat_minutes,
@@ -578,13 +583,20 @@ def valve_maintenance_due(
     local_hour: int,
     interval_days: int,
     start_hour: int,
+    local_weekday: int | None = None,
+    weekday: int | None = None,
 ) -> bool:
     """True in the maintenance hour once the interval since the last run passed.
 
     An hour of slack keeps a weekly run on the same hour despite small delays.
+    With a ``weekday`` (0 = Monday) it runs only on that day, at most once.
     """
     if local_hour != start_hour:
         return False
+    if weekday is not None:
+        return local_weekday == weekday and (
+            last_run is None or now - last_run >= timedelta(hours=2)
+        )
     return last_run is None or now - last_run >= timedelta(
         days=interval_days, hours=-1
     )
@@ -638,15 +650,148 @@ def select_schedule(
     return schedules[0][0]
 
 
-def calendar_temperature(description: object, key: str = "temperature") -> float | None:
-    """Read ``temperature: 22`` from a calendar event description."""
+def description_value(description: object, keys: tuple[str, ...]) -> str | None:
+    """The value of the first ``key: value`` line naming one of ``keys``."""
     if not isinstance(description, str):
         return None
     for line in description.splitlines():
         name, sep, value = line.partition(":")
-        if sep and name.strip().casefold() == key:
-            return schedule_comfort_temperature(value.strip().replace(",", "."))
+        if sep and name.strip().casefold() in keys:
+            return value.strip()
     return None
+
+
+def calendar_temperature(description: object, key: str = "temperature") -> float | None:
+    """Read ``temperature: 22`` from a calendar event description."""
+    value = description_value(description, (key,))
+    if value is None:
+        return None
+    return schedule_comfort_temperature(value.replace(",", "."))
+
+
+_OFF_WORDS = frozenset({"off", "aus", "false", "nein", "no", "0", "disabled"})
+_ON_WORDS = frozenset({"on", "an", "ein", "true", "ja", "yes", "1", "enabled"})
+
+
+def is_off_word(value: object) -> bool:
+    """True for "aus", "off", false and the like (schedule data, descriptions)."""
+    if isinstance(value, bool):
+        return not value
+    return isinstance(value, (str, int)) and str(value).strip().casefold() in _OFF_WORDS
+
+
+def is_on_word(value: object) -> bool:
+    """True for "an", "on", true and the like."""
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, (str, int)) and str(value).strip().casefold() in _ON_WORDS
+
+
+def paused_features(
+    data: dict[str, object] | None,
+    description: object,
+    features: dict[str, tuple[str, ...]],
+) -> set[str]:
+    """Features a schedule block or calendar event switches off.
+
+    ``features`` maps a feature to the keys that name it, e.g. ``window`` to
+    ``("fenster", "window")``; ``fenster: aus`` in the block's data or in the
+    event's description pauses it.
+    """
+    paused: set[str] = set()
+    lowered = {str(key).casefold(): value for key, value in (data or {}).items()}
+    for feature, keys in features.items():
+        value = next((lowered[key] for key in keys if key in lowered), None)
+        if value is None:
+            value = description_value(description, keys)
+        if value is not None and is_off_word(value):
+            paused.add(feature)
+    return paused
+
+
+def name_temperature(name: object) -> float | None:
+    """A temperature at the end of a name, e.g. "Party 23" or "Gäste 21,5"."""
+    if not isinstance(name, str):
+        return None
+    last = name.strip().rsplit(" ", 1)[-1].replace(",", ".").removesuffix("°C")
+    return schedule_comfort_temperature(last.removesuffix("°")) if last else None
+
+
+def mean_forecast_temperature(
+    forecast: list[dict], now: datetime, hours: float, min_points: int
+) -> float | None:
+    """Mean forecast temperature over the next ``hours``, if enough points."""
+    end = now + timedelta(hours=hours)
+    values: list[float] = []
+    for item in forecast:
+        raw_datetime = item.get("datetime")
+        raw_temperature = item.get("temperature")
+        if not isinstance(raw_datetime, str) or isinstance(raw_temperature, bool):
+            continue
+        try:
+            temperature = float(raw_temperature)
+            moment = datetime.fromisoformat(raw_datetime.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(temperature):
+            continue
+        if moment.tzinfo is None and now.tzinfo is not None:
+            moment = moment.replace(tzinfo=now.tzinfo)
+        if now - timedelta(hours=1) <= moment <= end:
+            values.append(temperature)
+    if len(values) < min_points:
+        return None
+    return round(sum(values) / len(values), 1)
+
+
+def mean_history_temperature(
+    samples: list[tuple[datetime, float]], min_span_seconds: float
+) -> float | None:
+    """Mean of past outdoor readings once they span ``min_span_seconds``."""
+    if len(samples) < 2:
+        return None
+    if (samples[-1][0] - samples[0][0]).total_seconds() < min_span_seconds:
+        return None
+    return round(sum(value for _, value in samples) / len(samples), 1)
+
+
+def external_temperature_due(
+    last: tuple[float, datetime] | None,
+    pending: tuple[float, datetime] | None,
+    value: float,
+    now: datetime,
+    *,
+    min_change: float,
+    plateau_change: float,
+    plateau_tolerance: float,
+    plateau_seconds: float,
+    resend_seconds: float,
+) -> tuple[bool, tuple[float, datetime] | None]:
+    """Whether to send ``value`` to a valve's external input, and the plateau.
+
+    Sent at once when nothing was sent yet, the change reaches ``min_change``
+    or the last value is older than ``resend_seconds``. A smaller change of at
+    least ``plateau_change`` is sent once the reading stayed within
+    ``plateau_tolerance`` for ``plateau_seconds``. Changes in one direction
+    add up because they are measured against the last value sent.
+    """
+    if last is None or (now - last[1]).total_seconds() >= resend_seconds:
+        return True, None
+    change = abs(value - last[0])
+    if change >= min_change - 1e-9:
+        return True, None
+    if change < plateau_change:
+        return False, None
+    if pending is None or abs(pending[0] - value) > plateau_tolerance:
+        return False, (value, now)
+    if (now - pending[1]).total_seconds() >= plateau_seconds:
+        return True, None
+    return False, pending
+
+
+def plausible_temperature(value: float | None, minimum: float, maximum: float) -> bool:
+    """True for a reading a room sensor can really report."""
+    return value is not None and minimum <= value <= maximum
 
 
 def temperature_trend(
@@ -668,3 +813,22 @@ def temperature_trend(
         return None
     slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys, strict=True)) / denominator
     return round(slope, 2)
+
+
+def match_schedule(schedules: list[tuple[str, str]], name: str | None) -> str | None:
+    """The schedule an outside source names, or None when none matches.
+
+    Unlike ``select_schedule`` there is no fallback to the first schedule:
+    a house calendar event naming "Ferien" leaves rooms without such a
+    schedule alone.
+    """
+    if not name or not name.strip():
+        return None
+    text = name.strip().casefold()
+    for entity_id, schedule_name in schedules:
+        if text in (entity_id.casefold(), schedule_name.casefold()):
+            return entity_id
+    for entity_id, schedule_name in schedules:
+        if text in schedule_name.casefold() or schedule_name.casefold() in text:
+            return entity_id
+    return None

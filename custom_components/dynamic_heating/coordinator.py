@@ -2,22 +2,77 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant, State
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BLOCK_PRESENCE_KEYS,
+    BLOCK_WINDOW_KEYS,
+    CONF_COMMAND_DELAY,
+    CONF_DOOR_CLOSE_DELAY,
+    CONF_DOOR_ENTITIES,
+    CONF_DOOR_OPEN_DELAY,
+    CONF_FOLLOW_HOUSE_CALENDAR,
+    CONF_FORCE_COMFORT_ENTITIES,
+    CONF_FORCE_ECO_ENTITIES,
+    CONF_HEATING_LIMIT_AVERAGE,
+    CONF_HEATING_LIMIT_FALLBACK_OFF,
+    CONF_HUMIDITY_ENTITY,
+    CONF_MAINTENANCE_DURATION,
+    CONF_MAINTENANCE_HOUR,
+    CONF_MAINTENANCE_WEEKDAY,
+    CONF_WINDOW_CHANGE,
+    CONF_ZONE_WINDOW_CLOSE_DELAY,
+    CONF_ZONE_WINDOW_ENTITIES,
+    CONF_ZONE_WINDOW_OPEN_DELAY,
+    DEFAULT_COMMAND_DELAY,
+    DEFAULT_DOOR_CLOSE_DELAY,
+    DEFAULT_DOOR_OPEN_DELAY,
+    DEFAULT_FOLLOW_HOUSE_CALENDAR,
+    DEFAULT_HEATING_LIMIT_AVERAGE,
+    DEFAULT_ZONE_WINDOW_CLOSE_DELAY,
+    DEFAULT_ZONE_WINDOW_OPEN_DELAY,
+    EVENT_DEVICE_TRIGGER,
+    EXTERNAL_TEMPERATURE_PLATEAU_CHANGE,
+    EXTERNAL_TEMPERATURE_PLATEAU_SECONDS,
+    EXTERNAL_TEMPERATURE_PLATEAU_TOLERANCE,
+    HEATING_LIMIT_AVERAGE_HOURS,
+    HEATING_LIMIT_MIN_FORECAST_POINTS,
+    HUMIDITY_HIGH_PERCENT,
+    HUMIDITY_HYSTERESIS,
+    MAINTENANCE_ANY_DAY,
+    MAX_OVERSHOOT,
+    OUTDOOR_HISTORY_INTERVAL_SECONDS,
+    OUTDOOR_HISTORY_MIN_SPAN_SECONDS,
+    OVERSHOOT_DROP,
+    OVERSHOOT_MAX_SECONDS,
+    ROOM_TEMPERATURE_PLAUSIBLE_MAX,
+    ROOM_TEMPERATURE_PLAUSIBLE_MIN,
+    TARGET_REACHED_MARGIN,
+    TRIGGER_HEATING_STARTED,
+    TRIGGER_HEATING_STOPPED,
+    TRIGGER_HUMIDITY_HIGH,
+    TRIGGER_TARGET_REACHED,
+    TRIGGER_WINDOW_CLOSED,
+    TRIGGER_WINDOW_OPENED,
+    VALVE_DIVERGENCE_MIN,
+    VALVE_DIVERGENCE_SECONDS,
+    WINDOW_CHANGE_DISCARD,
     CALENDAR_TEMPERATURE_KEY,
     CONF_ADDITIONAL_WINDOW_ENTITIES,
     CONF_LOCK_VALVES,
@@ -166,6 +221,13 @@ from .const import (
 )
 from .logic import (
     TrendSample,
+    external_temperature_due,
+    match_schedule,
+    mean_forecast_temperature,
+    mean_history_temperature,
+    name_temperature,
+    paused_features,
+    plausible_temperature,
     calendar_temperature,
     temperature_trend,
     aggressive_setpoint,
@@ -236,6 +298,10 @@ def _as_number(value: object) -> float | None:
 
 class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinate learning, schedule prediction and optional thermostat control."""
+
+    # Moment (monotonic clock) of the last command to any valve of any room,
+    # so the command delay also spaces out several rooms switching at once.
+    _last_command: float | None = None
 
     def __init__(self, hass: HomeAssistant, config: dict[str, Any], entry_id: str) -> None:
         super().__init__(
@@ -369,6 +435,40 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_forecast_error_at: str | None = None
         self._pending_forecast_event: datetime | None = None
         self._pending_forecast_temperature: float | None = None
+        # Outdoor readings of the last two days for the heating limit.
+        self._outdoor_history: list[tuple[datetime, float]] = []
+        # Per external input: a small change waiting to prove it is stable.
+        self._external_pending: dict[str, tuple[float, datetime]] = {}
+        # Debounced state of each contact group (windows, doors, zone).
+        self._contact_open: dict[str, bool] = {}
+        # A room reading outside the plausible range (value, sensor) and
+        # whether a Repairs issue is open for it.
+        self._implausible: tuple[float, str] | None = None
+        self._issue_open = False
+        # Per valve: since when its setpoint differs from what was written.
+        self._divergent_since: dict[str, datetime] = {}
+        self._divergence: dict[str, str] = {}
+        # Valves left out of control (persisted) and the ones already closed.
+        self.skipped_valves: set[str] = set()
+        self._skip_closed: set[str] = set()
+        # What set the target last ("Zeitplan", "Raum-Thermostat", ...).
+        self.last_change_source: str | None = None
+        self.last_change_at: datetime | None = None
+        self._pending_source: str | None = None
+        # Last state of each device trigger condition (None = not known yet).
+        self._trigger_state: dict[str, bool] = {}
+        self._trigger_target: float | None = None
+        # Overshoot: learned value, number of measurements, and the running
+        # measurement (room target, peak, start) after heating stopped.
+        self.overshoot = 0.0
+        self._overshoot_samples = 0
+        self._overshoot_track: tuple[float, float, datetime] | None = None
+        self._was_heating = False
+        # Valve maintenance started by hand, and valves woken up for it.
+        self._maintenance_requested = False
+        self._maintenance_woken: set[str] = set()
+        # House calendar in effect for this room (shown in the status).
+        self._house_calendar: str | None = None
 
     def _runtime_state(self) -> dict[str, Any]:
         """What has to survive a restart of Home Assistant."""
@@ -389,6 +489,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "absent_since": (
                 self._absent_since.isoformat() if self._absent_since else None
             ),
+            "skipped_valves": sorted(self.skipped_valves),
+            "last_change_source": self.last_change_source,
+            "last_change_at": (
+                self.last_change_at.isoformat() if self.last_change_at else None
+            ),
+            "outdoor_history": [
+                [at.isoformat(), value] for at, value in self._outdoor_history
+            ],
         }
 
     def _save_runtime_state(self) -> None:
@@ -512,6 +620,21 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if isinstance(stored.get("schedule_choice"), str):
             self.schedule_choice = stored["schedule_choice"]
         self._absent_since = moment(stored.get("absent_since"))
+        skipped = stored.get("skipped_valves")
+        if isinstance(skipped, list):
+            self.skipped_valves = {str(item) for item in skipped}
+        if isinstance(stored.get("last_change_source"), str):
+            self.last_change_source = stored["last_change_source"][:100]
+        self.last_change_at = moment(stored.get("last_change_at"))
+        history = stored.get("outdoor_history")
+        if isinstance(history, list):
+            cutoff = now - timedelta(hours=HEATING_LIMIT_AVERAGE_HOURS)
+            for item in history:
+                if isinstance(item, list) and len(item) == 2:
+                    at = moment(item[0])
+                    value = _as_number(item[1])
+                    if at is not None and value is not None and at >= cutoff:
+                        self._outdoor_history.append((at, value))
         week = stored.get("week")
         if isinstance(week, dict):
             for key, default in self._empty_week().items():
@@ -617,6 +740,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._proximity_last_update_at = self._stored_string(
             stored.get("proximity_last_update_at")
         )
+        overshoot = self._stored_float(stored.get("overshoot"))
+        if overshoot is not None:
+            self.overshoot = max(0.0, min(overshoot, MAX_OVERSHOOT))
+        self._overshoot_samples = self._stored_count(stored.get("overshoot_samples"))
         raw_maintenance = self._stored_string(stored.get("valve_maintenance_last"))
         parsed_maintenance = (
             dt_util.parse_datetime(raw_maintenance) if raw_maintenance else None
@@ -758,34 +885,97 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         return active, self._parse_next_event(state), temperature
 
-    def _window_contacts(self) -> tuple[bool, float] | None:
+    def _contact_groups(self) -> list[tuple[str, list[str], bool, int, int]]:
+        """(name, contacts, main required, open delay, close delay) per group.
+
+        Windows (the main contact must be available), doors and contacts
+        shared with other rooms, each with their own delays.
+        """
+        def ids(key: str) -> list[str]:
+            value = self.config.get(key) or []
+            return [value] if isinstance(value, str) else list(value)
+
+        def seconds(key: str, default: int) -> int:
+            value = self.config.get(key)
+            return int(default if value is None else value)
+
+        window_id = self.config.get(CONF_WINDOW_ENTITY)
+        windows = ([window_id] if window_id else []) + [
+            entity_id
+            for entity_id in ids(CONF_ADDITIONAL_WINDOW_ENTITIES)
+            if entity_id != window_id
+        ]
+        groups = [
+            (
+                "window",
+                windows,
+                bool(window_id),
+                seconds(CONF_WINDOW_OPEN_DELAY, DEFAULT_WINDOW_OPEN_DELAY),
+                seconds(CONF_WINDOW_CLOSE_DELAY, DEFAULT_WINDOW_CLOSE_DELAY),
+            ),
+            (
+                "door",
+                ids(CONF_DOOR_ENTITIES),
+                False,
+                seconds(CONF_DOOR_OPEN_DELAY, DEFAULT_DOOR_OPEN_DELAY),
+                seconds(CONF_DOOR_CLOSE_DELAY, DEFAULT_DOOR_CLOSE_DELAY),
+            ),
+            (
+                "zone",
+                ids(CONF_ZONE_WINDOW_ENTITIES),
+                False,
+                seconds(CONF_ZONE_WINDOW_OPEN_DELAY, DEFAULT_ZONE_WINDOW_OPEN_DELAY),
+                seconds(CONF_ZONE_WINDOW_CLOSE_DELAY, DEFAULT_ZONE_WINDOW_CLOSE_DELAY),
+            ),
+        ]
+        return [group for group in groups if group[1]]
+
+    def _contacts_state(
+        self, contacts: list[str], main_required: bool
+    ) -> tuple[bool, float] | None:
         """(any contact open, seconds in that state) or None when unknown.
 
-        The main contact must be available; extra contacts that drop out
-        count as closed. Open: the longest-open contact; closed: since the
-        last one closed.
+        With ``main_required`` the first contact must be available; the
+        others count as closed when they drop out. Open: the longest-open
+        contact; closed: since the last one closed.
         """
-        window_id = self.config.get(CONF_WINDOW_ENTITY)
-        extra = self.config.get(CONF_ADDITIONAL_WINDOW_ENTITIES) or []
-        if isinstance(extra, str):
-            extra = [extra]
         now = dt_util.utcnow()
         states: list[State] = []
-        if window_id:
-            main = self.hass.states.get(window_id)
-            if not self._valid(main):
-                return None
-            states.append(main)
-        for entity_id in extra:
+        for index, entity_id in enumerate(contacts):
             state = self.hass.states.get(entity_id)
-            if self._valid(state) and entity_id != window_id:
+            if self._valid(state):
                 states.append(state)
+            elif index == 0 and main_required:
+                return None
         if not states:
             return False, 0.0
         opened = [s for s in states if s.state == "on"]
         if opened:
             return True, max((now - s.last_changed).total_seconds() for s in opened)
         return False, min((now - s.last_changed).total_seconds() for s in states)
+
+    def _evaluate_contacts(self) -> tuple[bool, bool] | None:
+        """(debounced open, any contact open now), None if the main is unknown."""
+        debounced = False
+        raw = False
+        for name, contacts, main_required, open_delay, close_delay in (
+            self._contact_groups()
+        ):
+            state = self._contacts_state(contacts, main_required)
+            if state is None:
+                return None
+            contact_open, contact_seconds = state
+            group_open = evaluate_window_open(
+                contact_open,
+                contact_seconds,
+                self._contact_open.get(name, False),
+                open_delay,
+                close_delay,
+            )
+            self._contact_open[name] = group_open
+            debounced = debounced or group_open
+            raw = raw or contact_open
+        return debounced, raw
 
     def _track_trend(self, room_temperature: float) -> float | None:
         """Keep the last half hour of room readings; return the trend."""
@@ -894,6 +1084,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "proximity_approach_attempts": self._proximity_approach_attempts,
             "proximity_confirmed_approaches": self._proximity_confirmed_approaches,
             "proximity_last_update_at": self._proximity_last_update_at,
+            "overshoot": self.overshoot,
+            "overshoot_samples": self._overshoot_samples,
         }
 
     async def _save_learning(self) -> None:
@@ -938,6 +1130,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._maintenance_last.isoformat()
                     if self._maintenance_last else None
                 ),
+                "overshoot": self.overshoot,
+                "overshoot_samples": self._overshoot_samples,
             }
         )
 
@@ -955,6 +1149,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         setpoint_value = self._stored_float(attributes.get("temperature"))
         is_heating = self._is_heating(climate_state, room_temperature, setpoint_value)
         now = dt_util.utcnow()
+        await self._track_overshoot(
+            room_temperature, is_heating, window_open=window_open, now=now
+        )
 
         # Absence only lowers the target; the room still heats and cools
         # normally, and the night setback is the main cooling phase to learn.
@@ -1070,6 +1267,53 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_learning_status = "Abkühlrate aktualisiert"
         await self._save_learning()
 
+    async def _track_overshoot(
+        self,
+        room_temperature: float,
+        is_heating: bool,
+        *,
+        window_open: bool,
+        now: datetime,
+    ) -> None:
+        """Measure how far the room keeps warming after heating stopped.
+
+        A measurement starts when heating stops near the room's target and
+        ends once the room cooled a little below its peak (or after 90
+        minutes). New heating or an open window discard it.
+        """
+        if window_open or is_heating:
+            self._overshoot_track = None
+            self._was_heating = is_heating and not window_open
+            return
+        target = (self.data or {}).get("target_temperature")
+        if (
+            self._was_heating
+            and target is not None
+            and room_temperature >= float(target) - 0.3
+        ):
+            self._overshoot_track = (float(target), room_temperature, now)
+        self._was_heating = False
+        if self._overshoot_track is None:
+            return
+        target_value, peak, started = self._overshoot_track
+        peak = max(peak, room_temperature)
+        self._overshoot_track = (target_value, peak, started)
+        if (
+            room_temperature > peak - OVERSHOOT_DROP
+            and (now - started).total_seconds() < OVERSHOOT_MAX_SECONDS
+        ):
+            return
+        observed = max(0.0, min(peak - target_value, MAX_OVERSHOOT))
+        self.overshoot = round(
+            observed
+            if self._overshoot_samples == 0
+            else 0.8 * self.overshoot + 0.2 * observed,
+            2,
+        )
+        self._overshoot_samples += 1
+        self._overshoot_track = None
+        await self._save_learning()
+
     async def _evaluate_pending_forecast(
         self,
         *,
@@ -1151,6 +1395,43 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         self._pending_forecast_event = next_event
         self._pending_forecast_temperature = projected_temperature
+
+    def _heating_limit_basis(
+        self, current: float | None, forecast_items: list[dict[str, Any]]
+    ) -> tuple[float | None, str | None]:
+        """The outdoor value the heating limit is judged by, and its source.
+
+        With averaging (default): the mean forecast of the next two days,
+        else the mean of the outdoor readings of the last two days, else the
+        current value.
+        """
+        now = dt_util.utcnow()
+        if current is not None and (
+            not self._outdoor_history
+            or (now - self._outdoor_history[-1][0]).total_seconds()
+            >= OUTDOOR_HISTORY_INTERVAL_SECONDS
+        ):
+            self._outdoor_history.append((now, current))
+        cutoff = now - timedelta(hours=HEATING_LIMIT_AVERAGE_HOURS)
+        self._outdoor_history = [
+            sample for sample in self._outdoor_history if sample[0] >= cutoff
+        ]
+        if not self.config.get(CONF_HEATING_LIMIT_AVERAGE, DEFAULT_HEATING_LIMIT_AVERAGE):
+            return current, None if current is None else "current"
+        average = mean_forecast_temperature(
+            forecast_items,
+            dt_util.now(),
+            HEATING_LIMIT_AVERAGE_HOURS,
+            HEATING_LIMIT_MIN_FORECAST_POINTS,
+        )
+        if average is not None:
+            return average, "forecast"
+        average = mean_history_temperature(
+            self._outdoor_history, OUTDOOR_HISTORY_MIN_SPAN_SECONDS
+        )
+        if average is not None:
+            return average, "history"
+        return current, None if current is None else "current"
 
     def _outdoor_temperature(self) -> float | None:
         """Read the outdoor sensor, falling back to the weather entity."""
@@ -1693,20 +1974,65 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     elif device_class == "problem":
                         name = state.attributes.get("friendly_name") or state.entity_id
                         found.append(f"meldet Problem ({name})")
+            if entity_id in self._divergence:
+                found.append(f"übernimmt den Sollwert nicht ({self._divergence[entity_id]})")
             if found:
                 warnings[entity_id] = found
         return warnings
 
     def _room_temperature(self) -> float | None:
-        """The room sensor's reading, or None when it failed or went silent."""
+        """The room sensor's reading, or None when it failed or went silent.
+
+        A reading outside the plausible range (typical of a dying battery)
+        is dropped and remembered for the Repairs issue.
+        """
         state = self._state(CONF_ROOM_TEMPERATURE_ENTITY)
         value = _as_float(state)
         if value is None:
             return None
+        if not plausible_temperature(
+            value, ROOM_TEMPERATURE_PLAUSIBLE_MIN, ROOM_TEMPERATURE_PLAUSIBLE_MAX
+        ):
+            self._implausible = (value, state.entity_id)
+            return None
+        self._implausible = None
         reported = getattr(state, "last_reported", None) or state.last_updated
         if (dt_util.utcnow() - reported).total_seconds() > ROOM_SENSOR_STALE_SECONDS:
             return None
         return value
+
+    def _update_repair_issue(self) -> None:
+        """Show an implausible room reading under Settings → Repairs."""
+        issue_id = f"implausible_room_temperature_{self.entry_id}"
+        if self._implausible is not None:
+            value, entity_id = self._implausible
+            if not self._issue_open:
+                _LOGGER.warning(
+                    "Room sensor %s reports an implausible %.1f °C; ignoring it",
+                    entity_id,
+                    value,
+                )
+                self._log(
+                    f"Raumfühler meldet unplausible {value:.1f} °C – Wert wird ignoriert"
+                )
+                ir.async_create_issue(
+                    self.hass,
+                    DOMAIN,
+                    issue_id,
+                    is_fixable=False,
+                    severity=ir.IssueSeverity.WARNING,
+                    translation_key="implausible_room_temperature",
+                    translation_placeholders={
+                        "room": self.room_name,
+                        "entity": entity_id,
+                        "value": f"{value:.1f}",
+                    },
+                )
+                self._issue_open = True
+        elif self._issue_open:
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+            self._issue_open = False
+            self._log("Raumfühler liefert wieder plausible Werte")
 
     def _thermostat_temperature(self, entity_id: str) -> float | None:
         """The thermostat's own temperature reading, if it reports one."""
@@ -1741,6 +2067,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         current = self._climate_setpoint(state)
         if current is not None and abs(current - target) < 0.2:
             return True
+        await self._pace()
         try:
             await self.hass.services.async_call(
                 "climate",
@@ -1803,37 +2130,75 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._calibration[entity_id] = cached
         return target + cached[0]
 
+    def _maintenance_due(self, now: datetime) -> bool:
+        """Whether the scheduled valve maintenance should start now."""
+        if not self.config.get(CONF_VALVE_MAINTENANCE):
+            return False
+        weekday_value = self.config.get(CONF_MAINTENANCE_WEEKDAY)
+        weekday = (
+            None
+            if weekday_value in (None, "", MAINTENANCE_ANY_DAY)
+            else int(weekday_value)
+        )
+        hour_value = self.config.get(CONF_MAINTENANCE_HOUR)
+        local = dt_util.as_local(now)
+        return valve_maintenance_due(
+            self._maintenance_last,
+            now,
+            local.hour,
+            VALVE_MAINTENANCE_INTERVAL_DAYS,
+            VALVE_MAINTENANCE_HOUR if hour_value is None else int(hour_value),
+            local.weekday(),
+            weekday,
+        )
+
+    async def async_start_valve_maintenance(self) -> None:
+        """Exercise the valves now (button "Ventilwartung starten")."""
+        if not self.enabled:
+            raise ServiceValidationError(
+                "Die Regelung ist aus – Ventilwartung nur bei aktiver Regelung."
+            )
+        self._maintenance_requested = True
+        await self.async_refresh()
+
     async def _run_valve_maintenance(
         self, window_open: bool, result: dict[str, Any]
     ) -> bool:
-        """Exercise the valves weekly; True while maintenance owns the valves."""
+        """Exercise the valves; True while maintenance owns the valves.
+
+        Switched-off thermostats are switched to heating for it and back off
+        afterwards, so they are exercised too.
+        """
         now = dt_util.utcnow()
         if self._maintenance_started is None:
-            if (
-                not self.config.get(CONF_VALVE_MAINTENANCE)
-                or window_open
+            requested = self._maintenance_requested
+            self._maintenance_requested = False
+            if not requested and (
+                window_open
                 or self._manual_override is not None
-                or not valve_maintenance_due(
-                    self._maintenance_last,
-                    now,
-                    dt_util.as_local(now).hour,
-                    VALVE_MAINTENANCE_INTERVAL_DAYS,
-                    VALVE_MAINTENANCE_HOUR,
-                )
+                or not self._maintenance_due(now)
             ):
                 return False
             self._maintenance_started = now
             self._maintenance_last = now
+            self._log("Ventilwartung gestartet")
             await self._save_learning()
 
-        phase = valve_maintenance_phase(
-            self._maintenance_started, now, VALVE_MAINTENANCE_PHASE_SECONDS
+        phase_seconds = int(
+            self.config.get(CONF_MAINTENANCE_DURATION) or VALVE_MAINTENANCE_PHASE_SECONDS
         )
+        phase = valve_maintenance_phase(self._maintenance_started, now, phase_seconds)
         if phase is None:
             # Done: forget the maintenance setpoints so they are not taken
             # for manual changes, and write the normal target again.
             self._maintenance_started = None
             self._written.clear()
+            self._skip_closed.clear()
+            for entity_id in sorted(self._maintenance_woken):
+                await self._call(
+                    "climate", "set_hvac_mode", {"entity_id": entity_id, "hvac_mode": "off"}
+                )
+            self._maintenance_woken.clear()
             return False
 
         result["valve_maintenance"] = phase
@@ -1844,7 +2209,22 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         for entity_id in self._thermostat_ids():
             state = self.hass.states.get(entity_id)
-            if not self._valid(state) or state.state == "off":
+            if not self._valid(state):
+                continue
+            if state.state == "off":
+                if entity_id not in self._maintenance_woken:
+                    modes = state.attributes.get("hvac_modes") or []
+                    mode = (
+                        "heat"
+                        if not modes or "heat" in modes
+                        else next((item for item in modes if item != "off"), None)
+                    )
+                    if mode is not None and await self._call(
+                        "climate",
+                        "set_hvac_mode",
+                        {"entity_id": entity_id, "hvac_mode": mode},
+                    ):
+                        self._maintenance_woken.add(entity_id)
                 continue
             limit = "max_temp" if phase == "open" else "min_temp"
             try:
@@ -1886,6 +2266,29 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # written so the target is sent again once it is reachable.
             self._written.pop(entity_id, None)
 
+        skipped = self._effective_skipped(available)
+        now = dt_util.utcnow()
+        for entity_id in list(self._skip_closed):
+            if entity_id not in skipped:
+                # Back in the room: send the normal target again.
+                self._skip_closed.discard(entity_id)
+                self._written.pop(entity_id, None)
+        for entity_id in skipped:
+            state = available[entity_id]
+            if entity_id in self._skip_closed or state.state == "off":
+                continue
+            minimum = _as_number(state.attributes.get("min_temp"))
+            if minimum is not None and await self._write_setpoint(
+                entity_id, state, minimum, now
+            ):
+                self._skip_closed.add(entity_id)
+        result["skipped_valves"] = sorted(skipped)
+        available = {
+            entity_id: state
+            for entity_id, state in available.items()
+            if entity_id not in skipped
+        }
+
         sync_manual = self.config.get(
             CONF_SYNC_MANUAL_CHANGE, DEFAULT_SYNC_MANUAL_CHANGE
         )
@@ -1894,6 +2297,39 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for entity_id, state in available.items():
                 if not self._changed_manually(entity_id, state):
                     continue
+                if decision_mode == "window" and not lock:
+                    # Turned while a window is open: never heat now; keep the
+                    # value for when the window is closed, or drop it.
+                    self._written.pop(entity_id, None)
+                    turned = self._climate_setpoint(state)
+                    if self.config.get(CONF_WINDOW_CHANGE) == WINDOW_CHANGE_DISCARD:
+                        result["window_change"] = "discarded"
+                        result["status"] = (
+                            f"{result['status']} – Änderung am Ventil verworfen"
+                        )
+                        self._log(
+                            f"{self._friendly_name(entity_id)} bei offenem Fenster "
+                            "verstellt – verworfen"
+                        )
+                        continue
+                    manual = self._adopt_manual_change(entity_id, state)
+                    if manual is not None:
+                        value = f"{manual:g}".replace(".", ",")
+                        self._pending_source = f"Ventil {self._friendly_name(entity_id)}"
+                        result["window_change"] = "kept"
+                        result["quick_mode"] = QUICK_MANUAL
+                        result["status"] = (
+                            f"{result['status']} – {value} °C gemerkt, gilt nach "
+                            "dem Schließen"
+                        )
+                        _LOGGER.info(
+                            "Setpoint of %s turned to %s while a window is open; "
+                            "holding %.1f °C once it is closed",
+                            entity_id,
+                            turned,
+                            manual,
+                        )
+                    break
                 if lock:
                     # Set back below: forget the write so it is sent again.
                     _LOGGER.info(
@@ -1910,6 +2346,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     else None
                 )
                 if manual is not None:
+                    self._pending_source = f"Ventil {self._friendly_name(entity_id)}"
                     # The whole room follows the valve that was turned.
                     _LOGGER.info(
                         "Setpoint of %s turned to %s; holding %.1f °C in the room",
@@ -1943,6 +2380,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Manuell übersteuert – Regelung pausiert bis zum "
                 "nächsten Moduswechsel"
             )
+            self._divergent_since.clear()
+            self._divergence = {}
             return
 
         active = {
@@ -1954,7 +2393,6 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result["status"] = "Thermostat ausgeschaltet – keine Sollwertänderung"
             return
 
-        now = dt_util.utcnow()
         failed = False
         # Outside the heating season the valve stays at its minimum, and
         # maintenance opens it fully: neither is calibrated or pushed.
@@ -1985,6 +2423,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if not await self._write_setpoint(entity_id, state, setpoint, now):
                 failed = True
         result["thermostat_setpoints"] = setpoints
+        self._track_divergence(active, now)
+        result["valve_divergence"] = dict(self._divergence)
         if failed:
             result["control_error"] = True
             result["status"] = (
@@ -1996,6 +2436,45 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"{result['status']} – {len(unavailable)} Thermostat(e) "
                 "nicht verfügbar"
             )
+
+    def _effective_skipped(self, available: dict[str, State]) -> set[str]:
+        """Skipped valves that are reachable; at least one valve stays in."""
+        skipped = {entity_id for entity_id in self.skipped_valves if entity_id in available}
+        if skipped and skipped >= set(available):
+            first = next(iter(available))
+            skipped.discard(first)
+        return skipped
+
+    def _track_divergence(self, active: dict[str, State], now: datetime) -> None:
+        """Note valves that report another setpoint than the one written."""
+        divergence: dict[str, str] = {}
+        for entity_id, state in active.items():
+            written = self._written.get(entity_id)
+            current = self._climate_setpoint(state)
+            if (
+                written is None
+                or current is None
+                or abs(current - written.target) < VALVE_DIVERGENCE_MIN
+            ):
+                self._divergent_since.pop(entity_id, None)
+                continue
+            since = self._divergent_since.setdefault(entity_id, now)
+            if (now - since).total_seconds() >= VALVE_DIVERGENCE_SECONDS:
+                divergence[entity_id] = (
+                    f"{current:.1f} statt {written.target:.1f} °C".replace(".", ",")
+                )
+        for entity_id in list(self._divergent_since):
+            if entity_id not in active:
+                self._divergent_since.pop(entity_id)
+        self._divergence = divergence
+
+    async def async_set_valve_skipped(self, entity_id: str, skipped: bool) -> None:
+        """Leave one valve out of control (closed once) or take it back."""
+        if skipped:
+            self.skipped_valves.add(entity_id)
+        else:
+            self.skipped_valves.discard(entity_id)
+        await self.async_refresh()
 
     def _update_heating_watchdog(
         self, target: float | None, room_temperature: float, *, watch: bool
@@ -2034,6 +2513,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_start_boost(self) -> None:
         """Heat to the boost temperature for the configured duration."""
+        self._pending_source = "Boost"
         duration = int(self.config.get(CONF_BOOST_DURATION) or DEFAULT_BOOST_DURATION)
         self.boost_until = dt_util.utcnow() + timedelta(seconds=duration)
         self.quick_mode = QUICK_AUTO
@@ -2045,8 +2525,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """The quick selection as shown: a running boost wins."""
         return QUICK_BOOST if self.boost_until is not None else self.quick_mode
 
-    async def async_set_quick_mode(self, mode: str) -> None:
+    async def async_set_quick_mode(self, mode: str, source: str = "Betriebsart") -> None:
         """Pick a mode by hand; it holds until the next schedule switch."""
+        self._pending_source = source
         if mode == QUICK_BOOST:
             duration = int(
                 self.config.get(CONF_BOOST_DURATION) or DEFAULT_BOOST_DURATION
@@ -2072,7 +2553,19 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.async_refresh()
 
     async def async_set_manual_temperature(self, temperature: float) -> None:
-        """Hold a temperature set by hand for the chosen Betriebsart-Dauer."""
+        """Hold a temperature set by hand for the chosen Betriebsart-Dauer.
+
+        While a window is open the value waits for it to close, or is
+        refused when the room drops changes made during airing.
+        """
+        if (
+            (self.data or {}).get("mode") == "window"
+            and self.config.get(CONF_WINDOW_CHANGE) == WINDOW_CHANGE_DISCARD
+        ):
+            raise ServiceValidationError(
+                "Das Fenster ist offen – Änderungen beim Lüften werden verworfen."
+            )
+        self._pending_source = "Raum-Thermostat"
         self.boost_until = None
         self.quick_mode = QUICK_MANUAL
         self.quick_temperature = float(temperature)
@@ -2185,6 +2678,54 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         return "quick_off", f"Aus von Hand{until}", off
 
+    def _force_target(
+        self, comfort_temperature: float, eco_temperature: float
+    ) -> tuple[str, str, float] | None:
+        """(mode, status, target) while an entity forces comfort or eco.
+
+        Comfort wins over eco. A number at the end of the entity's name is
+        the temperature, e.g. "Party 23".
+        """
+        for key, mode, label, default in (
+            (CONF_FORCE_COMFORT_ENTITIES, "force_comfort", "Komfort", comfort_temperature),
+            (CONF_FORCE_ECO_ENTITIES, "force_eco", "Eco", eco_temperature),
+        ):
+            entity_ids = self.config.get(key) or []
+            if isinstance(entity_ids, str):
+                entity_ids = [entity_ids]
+            for entity_id in entity_ids:
+                state = self.hass.states.get(entity_id)
+                if state is None or state.state not in ("on", "active", "home"):
+                    continue
+                name = self._friendly_name(entity_id)
+                temperature = name_temperature(name)
+                return (
+                    mode,
+                    f"{label} erzwungen – {name}",
+                    temperature if temperature is not None else default,
+                )
+        return None
+
+    def _house_calendar_view(
+        self,
+    ) -> tuple[str | None, bool, float | None, datetime | None, str | None]:
+        """What the house calendar asks of this room right now.
+
+        Returns (schedule to use, comfort time, temperature, end, event name).
+        """
+        nothing = (None, False, None, None, None)
+        if not self.config.get(
+            CONF_FOLLOW_HOUSE_CALENDAR, DEFAULT_FOLLOW_HOUSE_CALENDAR
+        ):
+            return nothing
+        house = self.hass.data.get(DOMAIN, {}).get(HOUSE_DATA_KEY)
+        overlay = house.calendar_overlay() if house is not None else None
+        if overlay is None:
+            return nothing
+        name, schedule_name, comfort, temperature, end = overlay
+        schedule = match_schedule(self.schedule_options(), schedule_name or name)
+        return schedule, comfort, temperature, end, name
+
     def schedule_options(self) -> list[tuple[str, str]]:
         """The room's comfort schedules as (entity_id, name), first = default."""
         ids = [self.config.get(CONF_SCHEDULE_ENTITY)]
@@ -2200,10 +2741,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def active_schedule(self) -> str | None:
-        """Entity id of the comfort schedule in use."""
+        """Entity id of the comfort schedule in use.
+
+        A running house calendar event that names one of the room's
+        schedules wins over the "Zeitplan" select.
+        """
         options = self.schedule_options()
         if not options:
             return None
+        override = self._house_calendar_view()[0]
+        if override is not None:
+            return override
         return select_schedule(options, self.schedule_choice)
 
     async def async_set_schedule(self, entity_id: str) -> None:
@@ -2266,6 +2814,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         openings: list[float] = []
         for entity_id in self._thermostat_ids():
             state = self.hass.states.get(entity_id)
+            if entity_id in self.skipped_valves or (
+                state is not None and state.state == "off"
+            ):
+                continue
             value = None
             if state is not None:
                 for key in HEAT_DEMAND_KEYS:
@@ -2351,7 +2903,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._sync_external_temperature()
         await self._sync_trv_window_detection()
         result = await self._async_control_cycle()
+        self._update_repair_issue()
         self._announce_mode(result)
+        self._pending_source = None
+        result["last_change_source"] = self.last_change_source
+        result["last_change_at"] = (
+            self.last_change_at.isoformat() if self.last_change_at else None
+        )
         result["thermostat_warnings"] = self._thermostat_warnings()
         result["heating_problem"] = self.heating_problem
         await self._send_notifications(result)
@@ -2360,6 +2918,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result["heat_demand"], result["heat_demand_source"] = self._heat_demand(
             result.get("target_temperature"), result.get("room_temperature")
         )
+        self._fire_triggers(result)
         self._track_week(result)
         self._save_runtime_state()
         return result
@@ -2372,6 +2931,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # The first cycle after a start is no change.
         if previous is None or previous == key or key[0] is None:
             return
+        self.last_change_source = self._pending_source or "Automatik"
+        self.last_change_at = dt_util.utcnow()
+        if previous[0] != key[0] and result.get("status"):
+            self._log(str(result["status"]))
         self.hass.bus.async_fire(
             EVENT_MODE_CHANGED,
             {
@@ -2386,6 +2949,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "window_open": result.get("window_open"),
                 "active_schedule": result.get("active_schedule"),
                 "quick_mode": result.get("quick_mode"),
+                "source": self.last_change_source,
             },
         )
 
@@ -2567,8 +3131,102 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
         return select_id, number_id
 
+    async def _pace(self) -> None:
+        """Wait the command delay since the last command to a valve."""
+        delay = float(self.config.get(CONF_COMMAND_DELAY) or DEFAULT_COMMAND_DELAY)
+        cls = DynamicHeatingCoordinator
+        if delay > 0 and cls._last_command is not None:
+            wait = cls._last_command + delay - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(min(wait, delay))
+        cls._last_command = time.monotonic()
+
+    def _log(self, message: str) -> None:
+        """Write a line to the logbook of the room's status sensor."""
+        if not self.hass.services.has_service("logbook", "log"):
+            return
+        data: dict[str, Any] = {
+            "name": f"Heizung {self.room_name}",
+            "message": message,
+            "domain": DOMAIN,
+        }
+        entity_id = er.async_get(self.hass).async_get_entity_id(
+            "sensor", DOMAIN, f"{self.entry_id}_status"
+        )
+        if entity_id:
+            data["entity_id"] = entity_id
+        self.hass.async_create_task(
+            self.hass.services.async_call("logbook", "log", data, blocking=False)
+        )
+
+    def _device_id(self) -> str | None:
+        """The room's device in the device registry."""
+        device = dr.async_get(self.hass).async_get_device(
+            identifiers={(DOMAIN, self.entry_id)}
+        )
+        return device.id if device is not None else None
+
+    def _fire_triggers(self, result: dict[str, Any]) -> None:
+        """Fire device-trigger events when a watched condition changes."""
+        room = result.get("room_temperature")
+        target = result.get("target_temperature")
+        conditions: dict[str, bool | None] = {
+            "heating": (
+                (result.get("heat_demand") or 0) > 0 if self.enabled else None
+            ),
+            "reached": (
+                None
+                if room is None or target is None
+                else room >= float(target) - TARGET_REACHED_MARGIN
+            ),
+            "window": bool(result.get("window_open")),
+        }
+        humidity = _as_float(self._state(CONF_HUMIDITY_ENTITY))
+        if humidity is not None:
+            previous = self._trigger_state.get("humid", False)
+            limit = HUMIDITY_HIGH_PERCENT - (HUMIDITY_HYSTERESIS if previous else 0)
+            conditions["humid"] = humidity >= limit
+        else:
+            conditions["humid"] = None
+        events = {
+            "heating": (TRIGGER_HEATING_STARTED, TRIGGER_HEATING_STOPPED),
+            "reached": (TRIGGER_TARGET_REACHED, None),
+            "window": (TRIGGER_WINDOW_OPENED, TRIGGER_WINDOW_CLOSED),
+            "humid": (TRIGGER_HUMIDITY_HIGH, None),
+        }
+        # "Reached" only counts when the room warmed up to an unchanged
+        # target, not when the target dropped below the room.
+        target_changed = target != self._trigger_target
+        self._trigger_target = target
+        device_id = None
+        for key, value in conditions.items():
+            if value is None:
+                self._trigger_state.pop(key, None)
+                continue
+            previous = self._trigger_state.get(key)
+            self._trigger_state[key] = value
+            if previous is None or previous == value:
+                continue
+            if key == "reached" and target_changed:
+                continue
+            trigger = events[key][0 if value else 1]
+            if trigger is None:
+                continue
+            device_id = device_id or self._device_id()
+            self.hass.bus.async_fire(
+                EVENT_DEVICE_TRIGGER,
+                {
+                    "device_id": device_id,
+                    "entry_id": self.entry_id,
+                    "room": self.room_name,
+                    "type": trigger,
+                },
+            )
+
     async def _call(self, domain: str, service: str, data: dict[str, Any]) -> bool:
         """Call a service; log and return False instead of raising."""
+        if domain in ("climate", "number", "select", "switch"):
+            await self._pace()
         try:
             await self.hass.services.async_call(domain, service, data, blocking=True)
         except HomeAssistantError as err:
@@ -2615,13 +3273,22 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ):
                         continue
                     switched = True
-                last = self._external_sent.get(number_id)
-                if (
-                    switched
-                    or last is None
-                    or abs(last[0] - room_temperature) >= EXTERNAL_TEMPERATURE_MIN_CHANGE
-                    or (now - last[1]).total_seconds() >= EXTERNAL_TEMPERATURE_RESEND_SECONDS
-                ):
+                due, pending = external_temperature_due(
+                    None if switched else self._external_sent.get(number_id),
+                    self._external_pending.get(number_id),
+                    room_temperature,
+                    now,
+                    min_change=EXTERNAL_TEMPERATURE_MIN_CHANGE,
+                    plateau_change=EXTERNAL_TEMPERATURE_PLATEAU_CHANGE,
+                    plateau_tolerance=EXTERNAL_TEMPERATURE_PLATEAU_TOLERANCE,
+                    plateau_seconds=EXTERNAL_TEMPERATURE_PLATEAU_SECONDS,
+                    resend_seconds=EXTERNAL_TEMPERATURE_RESEND_SECONDS,
+                )
+                if pending is None:
+                    self._external_pending.pop(number_id, None)
+                else:
+                    self._external_pending[number_id] = pending
+                if due:
                     if not await self._call(
                         "number",
                         "set_value",
@@ -2641,6 +3308,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 fed.add(entity_id)
             else:
                 self._external_sent.pop(number_id, None)
+                self._external_pending.pop(number_id, None)
                 if select_state.state != "internal":
                     await self._call(
                         "select",
@@ -2686,43 +3354,60 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 outdoor_temperature,
             )
 
-        window_open = False
-        window_contact_open = False
-        contacts = self._window_contacts()
+        schedule_active, next_event, slot_comfort = self._schedule_view(
+            schedule_state
+        )
+        # A running block may pause the window contacts or presence, e.g.
+        # "fenster: aus" for airing at full heat, "anwesenheit: aus" for guests.
+        paused = (
+            paused_features(
+                dict(schedule_state.attributes),
+                schedule_state.attributes.get("description"),
+                {"window": BLOCK_WINDOW_KEYS, "presence": BLOCK_PRESENCE_KEYS},
+            )
+            if schedule_active
+            else set()
+        )
+
+        contacts = self._evaluate_contacts()
         if contacts is None:
             return self._waiting_result(
                 "Fensterkontakt nicht verfügbar – keine Sollwertänderung",
                 room_temperature,
                 outdoor_temperature,
             )
-        if self.config.get(CONF_WINDOW_ENTITY) or self.config.get(
-            CONF_ADDITIONAL_WINDOW_ENTITIES
-        ):
-            window_contact_open, contact_seconds = contacts
-            window_open = evaluate_window_open(
-                window_contact_open,
-                contact_seconds,
-                self._window_open,
-                int(self.config.get(CONF_WINDOW_OPEN_DELAY) or DEFAULT_WINDOW_OPEN_DELAY),
-                int(self.config.get(CONF_WINDOW_CLOSE_DELAY) or DEFAULT_WINDOW_CLOSE_DELAY),
-            )
+        window_open, window_contact_open = contacts
         self._window_open = window_open
         window_drop = self._window_drop(room_temperature)
         window_open = window_open or window_drop
+        if "window" in paused:
+            window_open = window_drop = False
+            self._window_open = False
 
         present, presence_status = self._evaluate_presence()
         if self._proximity_metrics_dirty:
             self._proximity_metrics_dirty = False
             await self._save_learning()
+        if "presence" in paused:
+            present, presence_status = True, "Anwesenheit im Zeitplan-Block abgeschaltet"
+            self._absence = "none"
+            self._absent_since = None
         if present is None:
             return self._waiting_result(presence_status, room_temperature, outdoor_temperature)
 
         comfort_temperature = float(
             self.config.get(CONF_COMFORT_TEMPERATURE, DEFAULT_COMFORT_TEMPERATURE)
         )
-        schedule_active, next_event, slot_comfort = self._schedule_view(
-            schedule_state
+        _schedule, house_comfort, house_temperature, house_end, house_event = (
+            self._house_calendar_view()
         )
+        self._house_calendar = house_event
+        if house_comfort:
+            if not schedule_active:
+                schedule_active = True
+                next_event = house_end
+            if house_temperature is not None:
+                slot_comfort = house_temperature
         if slot_comfort is not None:
             comfort_temperature = slot_comfort
         if self.boost_until is not None and dt_util.utcnow() >= self.boost_until:
@@ -2798,13 +3483,26 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if off_temperature is not None
                 else eco_temperature
             )
-        limit_value = self.config.get(CONF_HEATING_LIMIT_TEMPERATURE)
-        self._heating_limit_reached = evaluate_heating_limit(
-            outdoor_temperature,
-            None if limit_value is None else float(limit_value),
-            self._heating_limit_reached,
-            HEATING_LIMIT_HYSTERESIS,
+        forecast_items = await self._async_get_forecast_items()
+        limit_basis, limit_source = self._heating_limit_basis(
+            outdoor_temperature, forecast_items
         )
+        limit_value = self.config.get(CONF_HEATING_LIMIT_TEMPERATURE)
+        if (
+            limit_basis is None
+            and limit_value is not None
+            and self.config.get(CONF_HEATING_LIMIT_FALLBACK_OFF)
+        ):
+            # No outdoor temperature at all: heat or not, as configured.
+            self._heating_limit_reached = True
+            limit_source = "fallback"
+        else:
+            self._heating_limit_reached = evaluate_heating_limit(
+                limit_basis,
+                None if limit_value is None else float(limit_value),
+                self._heating_limit_reached,
+                HEATING_LIMIT_HYSTERESIS,
+            )
 
         # Valve readings are not the room temperature: never learn from them.
         if not self._room_fallback:
@@ -2827,7 +3525,6 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._next_event = next_event
         if self._preheat_event is not None and self._preheat_event != next_event:
             self._preheat_event = None
-        forecast_items = await self._async_get_forecast_items()
         forecast_condition = select_forecast_condition(
             forecast_items, next_event, dt_util.now()
         )
@@ -2877,7 +3574,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             maintenance_temperature=maintenance_temperature,
             reduced_comfort=reduced_comfort,
             long_absence_temperature=long_absence_temperature,
+            overshoot=self.overshoot,
             quick_mode=(None if maintenance_temperature is not None else quick)
+            or self._force_target(comfort_temperature, eco_temperature)
             or self._house_target(
                 comfort_temperature=comfort_temperature,
                 eco_temperature=eco_temperature,
@@ -2898,6 +3597,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if decision.mode == "boost":
             end = dt_util.as_local(self.boost_until).strftime("%H:%M")
             decision = replace(decision, status=f"Boost bis {end} Uhr")
+        if decision.mode == "heating_limit" and limit_source in ("forecast", "history"):
+            span = "nächste 2 Tage" if limit_source == "forecast" else "letzte 2 Tage"
+            value = f"{limit_basis:.1f}".replace(".", ",")
+            decision = replace(
+                decision,
+                status=f"Heizgrenze erreicht (Ø {span} {value} °C) – abgesenkt",
+            )
         if decision.mode == "preheat":
             self._preheat_event = next_event
         if (
@@ -2967,6 +3673,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.quick_until.isoformat() if self.quick_until is not None else None
             ),
             "heating_limit_reached": self._heating_limit_reached,
+            "heating_limit_basis": limit_basis,
+            "heating_limit_source": limit_source,
+            "paused_features": sorted(paused),
+            "house_calendar": house_event,
+            "overshoot": self.overshoot,
             "present": present,
             "presence_status": presence_status,
             "enabled": self.enabled,
@@ -2986,6 +3697,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Ersatzwert aus den Thermostaten"
             )
         result["valve_maintenance"] = None
+        if decision.mode == "maintenance":
+            # The valves are fully open anyway; a pending start is dropped.
+            self._maintenance_requested = False
         if (
             self.enabled
             and decision.mode != "maintenance"
@@ -3011,5 +3725,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._calibration.clear()
             self._maintenance_started = None
             self._manual_override = None
+            self._skip_closed.clear()
+            self._divergent_since.clear()
+            self._divergence = {}
+            for entity_id in sorted(self._maintenance_woken):
+                await self._call(
+                    "climate", "set_hvac_mode", {"entity_id": entity_id, "hvac_mode": "off"}
+                )
+            self._maintenance_woken.clear()
 
         return result

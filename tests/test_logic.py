@@ -640,3 +640,126 @@ def test_temperature_trend_is_a_slope_per_hour() -> None:
     assert temperature_trend(samples, 600) == 1.0
     assert temperature_trend(samples[:2], 600) is None
     assert temperature_trend([], 600) is None
+
+
+# --- 0.8.0 ---------------------------------------------------------------
+
+from custom_components.dynamic_heating.logic import (  # noqa: E402
+    external_temperature_due,
+    match_schedule,
+    mean_forecast_temperature,
+    mean_history_temperature,
+    name_temperature,
+    paused_features,
+    plausible_temperature,
+)
+
+_DUE = {
+    "min_change": 0.11,
+    "plateau_change": 0.05,
+    "plateau_tolerance": 0.02,
+    "plateau_seconds": 120,
+    "resend_seconds": 1800,
+}
+
+
+def test_external_temperature_sends_big_changes_at_once() -> None:
+    now = datetime(2026, 10, 11, 12, tzinfo=UTC)
+    assert external_temperature_due(None, None, 20.0, now, **_DUE) == (True, None)
+    last = (20.0, now)
+    assert external_temperature_due(last, None, 20.12, now, **_DUE) == (True, None)
+    # Half an hour later the value goes out again even unchanged.
+    later = now + timedelta(minutes=30)
+    assert external_temperature_due(last, None, 20.0, later, **_DUE)[0] is True
+
+
+def test_external_temperature_ignores_flicker_and_waits_for_a_plateau() -> None:
+    now = datetime(2026, 10, 11, 12, tzinfo=UTC)
+    last = (20.0, now)
+    # Noise below the plateau change is never sent.
+    assert external_temperature_due(last, None, 20.04, now, **_DUE) == (False, None)
+    # A small change starts a plateau ...
+    due, pending = external_temperature_due(last, None, 20.08, now, **_DUE)
+    assert due is False and pending == (20.08, now)
+    # ... a jump inside it restarts the plateau ...
+    later = now + timedelta(seconds=60)
+    due, pending = external_temperature_due(last, pending, 20.05, later, **_DUE)
+    assert due is False and pending == (20.05, later)
+    # ... and once stable for two minutes it is sent.
+    much_later = later + timedelta(seconds=121)
+    assert external_temperature_due(
+        last, pending, 20.06, much_later, **_DUE
+    ) == (True, None)
+
+
+def test_forecast_and_history_averages() -> None:
+    now = datetime(2026, 10, 11, 12, tzinfo=UTC)
+    forecast = [
+        {"datetime": (now + timedelta(hours=hour)).isoformat(), "temperature": 10 + hour % 2 * 10}
+        for hour in range(48)
+    ]
+    assert mean_forecast_temperature(forecast, now, 48, 12) == 15.0
+    # Too few points: no average.
+    assert mean_forecast_temperature(forecast[:5], now, 48, 12) is None
+    samples = [(now + timedelta(hours=hour), 10.0 + hour) for hour in range(7)]
+    assert mean_history_temperature(samples, 6 * 3600) == 13.0
+    assert mean_history_temperature(samples[:3], 6 * 3600) is None
+
+
+def test_plausible_room_temperature() -> None:
+    assert plausible_temperature(20.5, -5, 45)
+    assert not plausible_temperature(-40.0, -5, 45)
+    assert not plausible_temperature(327.67, -5, 45)
+    assert not plausible_temperature(None, -5, 45)
+
+
+def test_paused_features_from_block_data_or_description() -> None:
+    features = {"window": ("fenster", "window"), "presence": ("anwesenheit", "presence")}
+    assert paused_features({"Fenster": "aus"}, None, features) == {"window"}
+    assert paused_features({}, "anwesenheit: off\nfenster: an", features) == {"presence"}
+    assert paused_features({"window": False}, None, features) == {"window"}
+    assert paused_features({"temperature": 22}, None, features) == set()
+
+
+def test_name_temperature() -> None:
+    assert name_temperature("Party 23") == 23.0
+    assert name_temperature("Gäste 21,5") == 21.5
+    assert name_temperature("Party") is None
+    assert name_temperature("Timer 99") is None
+
+
+def test_match_schedule_without_fallback() -> None:
+    schedules = [("schedule.alltag", "Alltag"), ("schedule.ferien", "Ferien Wohnzimmer")]
+    assert match_schedule(schedules, "Ferien") == "schedule.ferien"
+    assert match_schedule(schedules, "schedule.alltag") == "schedule.alltag"
+    assert match_schedule(schedules, "Homeoffice") is None
+    assert match_schedule(schedules, None) is None
+
+
+def test_overshoot_makes_preheating_start_later() -> None:
+    now = datetime(2026, 10, 11, 6, tzinfo=UTC)
+    common = {
+        "now": now,
+        "schedule_active": False,
+        "next_event": now + timedelta(minutes=100),
+        "room_temperature": 19.0,
+        "outdoor_temperature": 10.0,
+        "comfort_temperature": 21.0,
+        "eco_temperature": 18.0,
+        "heating_rate_c_per_hour": 1.0,
+        "max_preheat_minutes": 240,
+    }
+    # Two degrees at 1 °C/h plus margin (130 min): preheating starts now ...
+    assert decide_heating_target(**common).mode == "preheat"
+    # ... but with 1 °C overshoot the room only needs to be heated to 20 °C.
+    assert decide_heating_target(**common, overshoot=1.0).mode == "eco"
+
+
+def test_maintenance_on_a_weekday() -> None:
+    monday = datetime(2026, 10, 12, 9, tzinfo=UTC)
+    assert valve_maintenance_due(None, monday, 11, 7, 11, 0, 0)
+    assert not valve_maintenance_due(None, monday, 11, 7, 11, 1, 0)
+    # Already ran an hour ago today: not again.
+    assert not valve_maintenance_due(
+        monday - timedelta(hours=1), monday, 11, 7, 11, 0, 0
+    )
