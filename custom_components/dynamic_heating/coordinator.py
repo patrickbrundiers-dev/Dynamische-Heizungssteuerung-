@@ -1630,7 +1630,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for key in list(self._alerts):
             if key not in conditions:
                 _, sent = self._alerts.pop(key)
-                if sent and key != "window":
+                if sent:
                     await self._call(
                         domain,
                         name,
@@ -1640,6 +1640,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             "sensor": "der Raumfühler liefert wieder Werte.",
                             "blocked": "die Regelung arbeitet wieder.",
                             "frost": "keine Frostgefahr mehr.",
+                            "window": "das Fenster ist wieder geschlossen.",
                         }.get(key, key)},
                     )
         for key, (delay, message) in conditions.items():

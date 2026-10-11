@@ -2221,8 +2221,11 @@ async def test_notifications_report_alerts_once_and_their_end(
         hass.states.async_set("binary_sensor.living_room_window", "off")
         hass.states.async_set("sensor.living_room_temperature", "10.5")
         await refresh_at(80)
-        assert sent[-1] == "Frostgefahr: nur noch 10.5 °C im Raum."
+        assert sent[1:] == [
+            "Wieder in Ordnung: das Fenster ist wieder geschlossen.",
+            "Frostgefahr: nur noch 10.5 °C im Raum.",
+        ]
         hass.states.async_set("sensor.living_room_temperature", "15.0")
         await refresh_at(90)
         assert sent[-1] == "Wieder in Ordnung: keine Frostgefahr mehr."
-        assert len(sent) == 3
+        assert len(sent) == 4
