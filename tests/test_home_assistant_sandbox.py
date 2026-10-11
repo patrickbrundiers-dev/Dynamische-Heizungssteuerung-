@@ -620,6 +620,54 @@ async def test_presence_sensor_works_standalone_and_schedule_can_disable_it(
     assert coordinator.data["present"] is True
 
 @pytest.mark.asyncio
+async def test_presence_sensor_flicker_keeps_the_settled_decision(
+    hass, enable_custom_integrations
+):
+    """Short on/off flickers must not toggle comfort and setback back and forth."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["person_entities"] = []
+    coordinator.config["guest_entity"] = None
+    coordinator.config["proximity_entity"] = None
+    coordinator.config["presence_schedule_entity"] = None
+    coordinator.config["presence_on_duration"] = 300
+    coordinator.config["presence_off_duration"] = 1200
+    start = dt_util.utcnow()
+
+    async def set_and_refresh(state: str, seconds: int, age: int = 10) -> bool:
+        hass.states.async_set(
+            "binary_sensor.someone_home",
+            state,
+            timestamp=(start + timedelta(seconds=seconds)).timestamp(),
+        )
+        with patch(
+            "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+            return_value=start + timedelta(seconds=seconds + age),
+        ):
+            await coordinator.async_refresh()
+        return coordinator.data["present"]
+
+    # Someone has been in the room long enough: presence is settled.
+    assert await set_and_refresh("off", -4000, age=1300) is False
+    assert await set_and_refresh("on", -600, age=599) is True
+    # The sensor flickers off and on again within a minute or two.
+    assert await set_and_refresh("off", 0) is True
+    assert await set_and_refresh("on", 40) is True
+    assert await set_and_refresh("off", 80) is True
+    assert await set_and_refresh("on", 120) is True
+    # Only a long enough "off" ends presence ...
+    assert await set_and_refresh("off", 200) is True
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=start + timedelta(seconds=200 + 1200),
+    ):
+        await coordinator.async_refresh()
+    assert coordinator.data["present"] is False
+    # ... and a brief "on" afterwards does not bring comfort back yet.
+    assert await set_and_refresh("on", 1500) is False
+    assert await set_and_refresh("off", 1540) is False
+
+@pytest.mark.asyncio
 async def test_diagnostics_redact_new_presence_and_location_entities(
     hass, enable_custom_integrations
 ):
