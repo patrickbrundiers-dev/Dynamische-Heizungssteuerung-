@@ -1850,7 +1850,10 @@ async def test_room_temperature_is_fed_to_external_sensor_thermostats(
     assert ("select", "select_option", {
         "entity_id": "select.living_room_aqara_sensor", "option": "external",
     }) in calls
-    assert [c for c in calls if c[0] == "number"] == [calls[0]]
+    # The valve switches to its external input before it gets the value,
+    # otherwise the value sent while still internal is not applied.
+    assert [c[0] for c in calls[:2]] == ["select", "number"]
+    assert len([c for c in calls if c[0] == "number"]) == 1
     assert coordinator.data["external_temperature_thermostats"] == [
         "climate.living_room_aqara"
     ]

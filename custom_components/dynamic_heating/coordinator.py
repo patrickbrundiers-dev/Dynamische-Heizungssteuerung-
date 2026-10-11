@@ -1712,9 +1712,21 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if not self._valid(select_state):
                 continue
             if feed:
+                switched = False
+                if select_state.state != "external":
+                    # Switch first: a value sent while the thermostat still
+                    # uses its own sensor is not applied after the switch.
+                    if not await self._call(
+                        "select",
+                        "select_option",
+                        {"entity_id": select_id, "option": "external"},
+                    ):
+                        continue
+                    switched = True
                 last = self._external_sent.get(number_id)
                 if (
-                    last is None
+                    switched
+                    or last is None
                     or abs(last[0] - room_temperature) >= EXTERNAL_TEMPERATURE_MIN_CHANGE
                     or (now - last[1]).total_seconds() >= EXTERNAL_TEMPERATURE_RESEND_SECONDS
                 ):
@@ -1725,12 +1737,6 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ):
                         continue
                     self._external_sent[number_id] = (room_temperature, now)
-                if select_state.state != "external" and not await self._call(
-                    "select",
-                    "select_option",
-                    {"entity_id": select_id, "option": "external"},
-                ):
-                    continue
                 fed.add(entity_id)
             else:
                 self._external_sent.pop(number_id, None)
