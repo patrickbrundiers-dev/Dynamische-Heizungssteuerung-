@@ -251,3 +251,8 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 - Kommt ein Thermostat nach einem Funk- oder Neustart-Ausfall mit einem anderen Sollwert zurück, wird das Ziel erneut gesendet und nicht als manuelle Änderung gewertet.
 - Meldet der Raumfühler sechs Stunden lang keinen Wert, gilt er als ausgefallen: Die Regelung nutzt dann die Thermostat-Messwerte, und Thermostate mit externem Fühler werden auf ihren eigenen Sensor zurückgestellt.
 - Abwesenheit pausiert das Lernen nicht mehr; nur ein offenes Fenster tut das. So wird nachts im Absenkbetrieb die Abkühlrate gelernt.
+
+### Schnellauswahl und Benachrichtigungen (Version 0.4.8)
+
+- **Betriebsart** (Auswahl-Entität) mit *Automatik*, *Komfort*, *Eco*, *Boost* und *Aus*. Komfort, Eco und Aus gelten bis zum nächsten Wechsel des Komfort-Zeitplans, danach regelt der Raum wieder automatisch. Boost läuft wie der Boost-Schalter für die eingestellte Dauer. Aus hält die Frostschutztemperatur (ohne sie das Thermostat-Minimum). Ein offenes Fenster und das Ende der Heizperiode haben weiter Vorrang. Das Beispiel-Dashboard zeigt die Auswahl als Tastenreihe.
+- **Push-Benachrichtigung** (Editor, Seite 4): ein Notify-Dienst wie `notify.mobile_app_patrick`. Bei aktiver Regelung meldet er Thermostat-Probleme, einen ausgefallenen Raumfühler oder eine wartende Regelung nach 30 Minuten, ein Heizproblem und Frostgefahr sofort, und ein Fenster, das in der Heizperiode über eine Stunde offen ist. Jede Meldung kommt einmal; endet das Problem, folgt eine „Wieder in Ordnung“-Meldung.

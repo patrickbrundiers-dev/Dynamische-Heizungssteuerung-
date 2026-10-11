@@ -11,12 +11,78 @@ views:
           Solltemperatur und den aktuellen Thermostat-Sollwert, während die
           dynamische Regelung ausgeschaltet ist. Pro Raum darf nur eine
           Automation den Thermostat-Sollwert steuern.
+      - type: vertical-stack
+        cards:
+          - type: tile
+            entity: select.dynamische_heizungssteuerung_betriebsart
+            name: Betriebsart
+          - type: horizontal-stack
+            cards:
+              - type: button
+                name: Automatik
+                icon: mdi:calendar-clock
+                show_state: false
+                tap_action:
+                  action: perform-action
+                  perform_action: select.select_option
+                  target:
+                    entity_id: select.dynamische_heizungssteuerung_betriebsart
+                  data:
+                    option: Automatik
+              - type: button
+                name: Komfort
+                icon: mdi:sofa
+                show_state: false
+                tap_action:
+                  action: perform-action
+                  perform_action: select.select_option
+                  target:
+                    entity_id: select.dynamische_heizungssteuerung_betriebsart
+                  data:
+                    option: Komfort
+              - type: button
+                name: Eco
+                icon: mdi:leaf
+                show_state: false
+                tap_action:
+                  action: perform-action
+                  perform_action: select.select_option
+                  target:
+                    entity_id: select.dynamische_heizungssteuerung_betriebsart
+                  data:
+                    option: Eco
+              - type: button
+                name: Boost
+                icon: mdi:fire
+                show_state: false
+                tap_action:
+                  action: perform-action
+                  perform_action: select.select_option
+                  target:
+                    entity_id: select.dynamische_heizungssteuerung_betriebsart
+                  data:
+                    option: Boost
+              - type: button
+                name: Aus
+                icon: mdi:snowflake
+                show_state: false
+                tap_action:
+                  action: perform-action
+                  perform_action: select.select_option
+                  target:
+                    entity_id: select.dynamische_heizungssteuerung_betriebsart
+                  data:
+                    option: Aus
       - type: entities
         title: Status und Heizentscheidung
         show_header_toggle: false
         entities:
           - entity: switch.dynamische_heizungssteuerung_regelung_aktiv
             name: Regelung aktiv
+          - entity: binary_sensor.dynamische_heizungssteuerung_thermostat_problem
+            name: Thermostat-Problem
+          - entity: binary_sensor.dynamische_heizungssteuerung_heizproblem
+            name: Heizproblem
           - entity: sensor.dynamische_heizungssteuerung_status
             name: Letzte Heizentscheidung und Diagnosedetails
           - entity: sensor.dynamische_heizungssteuerung_raumtemperatur

@@ -74,6 +74,7 @@ def decide_heating_target(
     heating_season: bool = True,
     off_temperature: float | None = None,
     boost_temperature: float | None = None,
+    quick_mode: tuple[str, str, float] | None = None,
 ) -> HeatingDecision:
     """Return the target and reason for the current conditions.
 
@@ -83,6 +84,7 @@ def decide_heating_target(
     ``off_temperature`` (the thermostat minimum), raised by frost protection.
     A ``boost_temperature`` wins over schedule, presence and heating limit,
     but not over an open window or the end of the heating season.
+    A ``quick_mode`` (mode, status, target) picked by hand has the same rank.
     """
     if not heating_season:
         decision = HeatingDecision(
@@ -93,6 +95,9 @@ def decide_heating_target(
         )
     elif boost_temperature is not None and not window_open:
         decision = HeatingDecision("Boost", "boost", boost_temperature, 0)
+    elif quick_mode is not None and not window_open:
+        mode, status, target = quick_mode
+        decision = HeatingDecision(status, mode, target, 0)
     else:
         decision = _decide(
             now=now,

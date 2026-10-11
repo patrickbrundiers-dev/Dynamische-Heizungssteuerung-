@@ -2103,3 +2103,126 @@ async def test_heating_watchdog_ignores_thermostats_switched_off(
                 await coordinator.async_refresh()
 
     assert coordinator.data["heating_problem"] is False
+async def test_quick_mode_holds_until_the_next_schedule_switch(
+    hass, enable_custom_integrations
+):
+    """A hand-picked mode wins over the schedule, then automatic control resumes."""
+    _set_up_test_entities(hass, room_temperature="20.0")
+    entry, coordinator = await _setup_integration(hass)
+    registry = er.async_get(hass)
+    select_id = registry.async_get_entity_id(
+        "select", DOMAIN, f"{entry.entry_id}_quick_mode"
+    )
+    assert hass.states.get(select_id).state == "Automatik"
+
+    await hass.services.async_call(
+        "select", "select_option", {"entity_id": select_id, "option": "Eco"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert coordinator.data["mode"] == "quick_eco"
+    assert coordinator.data["target_temperature"] == 18.0
+    assert hass.states.get(select_id).state == "Eco"
+    assert hass.states.get(select_id).attributes["until"] is not None
+
+    await coordinator.async_set_quick_mode("comfort")
+    assert coordinator.data["mode"] == "quick_comfort"
+    assert coordinator.data["target_temperature"] == 21.0
+
+    # An open window still wins.
+    hass.states.async_set("binary_sensor.living_room_window", "on")
+    await coordinator.async_refresh()
+    assert coordinator.data["mode"] == "window"
+    hass.states.async_set("binary_sensor.living_room_window", "off")
+
+    with patch(
+        "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+        return_value=dt_util.utcnow() + timedelta(minutes=31),
+    ):
+        hass.states.async_set(
+            "sensor.living_room_temperature",
+            "20.0",
+            force_update=True,
+            timestamp=(dt_util.utcnow() + timedelta(minutes=31)).timestamp(),
+        )
+        await coordinator.async_refresh()
+    assert coordinator.data["quick_mode"] == "auto"
+    assert not coordinator.data["mode"].startswith("quick_")
+
+
+@pytest.mark.asyncio
+async def test_quick_mode_off_boost_and_back_to_automatic(
+    hass, enable_custom_integrations
+):
+    """Aus holds frost protection, Boost starts a boost, Automatik ends both."""
+    _set_up_test_entities(hass, room_temperature="20.0")
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["frost_protection_temperature"] = 8.0
+
+    await coordinator.async_set_quick_mode("off")
+    assert coordinator.data["mode"] == "quick_off"
+    assert coordinator.data["target_temperature"] == 8.0
+
+    await coordinator.async_set_quick_mode("boost")
+    assert coordinator.data["mode"] == "boost"
+    assert coordinator.data["quick_mode"] == "boost"
+
+    await coordinator.async_set_quick_mode("auto")
+    assert coordinator.boost_until is None
+    assert coordinator.data["quick_mode"] == "auto"
+    assert coordinator.data["mode"] not in ("boost", "quick_off")
+
+
+@pytest.mark.asyncio
+async def test_notifications_report_alerts_once_and_their_end(
+    hass, enable_custom_integrations
+):
+    """Alerts go to the notify service after their delay, once, then a recovery."""
+    _set_up_test_entities(hass, room_temperature="20.0")
+    sent = []
+
+    async def capture(call):
+        sent.append(call.data["message"])
+
+    hass.services.async_register("notify", "mobile_app_test", capture)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["notify_service"] = "notify.mobile_app_test"
+    start = dt_util.utcnow()
+
+    async def refresh_at(minutes: int) -> None:
+        at = start + timedelta(minutes=minutes)
+        hass.states.async_set(
+            "sensor.living_room_temperature",
+            hass.states.get("sensor.living_room_temperature").state,
+            force_update=True,
+            timestamp=at.timestamp(),
+        )
+        with patch(
+            "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+            return_value=at,
+        ):
+            await coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+    with _capture_climate_calls(hass):
+        coordinator.enabled = True
+        hass.states.async_set(
+            "binary_sensor.living_room_window",
+            "on",
+            timestamp=start.timestamp(),
+        )
+        await refresh_at(0)
+        await refresh_at(30)
+        assert sent == []
+        await refresh_at(61)
+        await refresh_at(70)
+        assert sent == ["Das Fenster ist seit über einer Stunde offen."]
+
+        hass.states.async_set("binary_sensor.living_room_window", "off")
+        hass.states.async_set("sensor.living_room_temperature", "10.5")
+        await refresh_at(80)
+        assert sent[-1] == "Frostgefahr: nur noch 10.5 °C im Raum."
+        hass.states.async_set("sensor.living_room_temperature", "15.0")
+        await refresh_at(90)
+        assert sent[-1] == "Wieder in Ordnung: keine Frostgefahr mehr."
+        assert len(sent) == 3
