@@ -189,6 +189,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._proximity_direction: str | None = None
         self._proximity_age_seconds: float | None = None
         self._proximity_status = "Proximity nicht konfiguriert"
+        # Last settled decision of the presence sensor; held while a new
+        # sensor state is still inside its on/off stability window.
+        self._sensor_present: bool | None = None
         self._proximity_status_category = "unconfigured"
         self._proximity_metrics_dirty = False
         self._proximity_last_state_update: datetime | None = None
@@ -1086,12 +1089,20 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     CONF_PRESENCE_OFF_DURATION, DEFAULT_PRESENCE_OFF_DURATION
                 )
             )
-            if state.state == "on":
-                sensor_present = self._presence_is_active(state, True, on_delay)
-            elif state.state == "off":
-                sensor_present = not self._presence_is_active(state, False, off_delay)
-            else:
+            if state.state not in ("on", "off"):
                 return None, "Anwesenheitssensor liefert ungültigen Zustand – keine Sollwertänderung"
+            sensor_on = state.state == "on"
+            if self._presence_is_active(
+                state, sensor_on, on_delay if sensor_on else off_delay
+            ):
+                self._sensor_present = sensor_on
+            elif self._sensor_present is None:
+                # Nothing settled yet (fresh start): an unconfirmed "on" is not
+                # presence yet, a fresh "off" still counts as presence.
+                self._sensor_present = not sensor_on
+            # A short flicker keeps the last settled decision instead of
+            # flipping to the opposite one.
+            sensor_present = self._sensor_present
 
             present = (
                 household_present and sensor_present
