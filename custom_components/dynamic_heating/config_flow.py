@@ -20,8 +20,14 @@ from .const import (
     CONF_EXTERNAL_TEMPERATURE,
     ENTRY_TYPE_HOUSE,
     CONF_HYSTERESIS,
+    CONF_ACTIVITY_TEMPERATURE,
+    CONF_HOME_TEMPERATURE,
+    CONF_SLEEP_TEMPERATURE,
+    DEFAULT_ACTIVITY_TEMPERATURE,
     DEFAULT_BOOST_DURATION,
     DEFAULT_BOOST_TEMPERATURE,
+    DEFAULT_HOME_TEMPERATURE,
+    DEFAULT_SLEEP_TEMPERATURE,
     DEFAULT_HYSTERESIS,
     CONF_VALVE_MAINTENANCE,
     CONF_CLIMATE_ENTITY,
@@ -551,6 +557,15 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             self._duration_field(
                 CONF_BOOST_DURATION, current, DEFAULT_BOOST_DURATION
             )[0]: _duration_selector(),
+            **{
+                vol.Optional(key, default=float(current.get(key, default))):
+                    _temperature_selector(5, 30)
+                for key, default in (
+                    (CONF_HOME_TEMPERATURE, DEFAULT_HOME_TEMPERATURE),
+                    (CONF_ACTIVITY_TEMPERATURE, DEFAULT_ACTIVITY_TEMPERATURE),
+                    (CONF_SLEEP_TEMPERATURE, DEFAULT_SLEEP_TEMPERATURE),
+                )
+            },
         })
 
     def _presence_schema(self, current: dict) -> vol.Schema:

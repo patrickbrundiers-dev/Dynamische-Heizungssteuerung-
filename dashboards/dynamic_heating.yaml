@@ -76,6 +76,48 @@ views:
                     entity_id: select.dynamische_heizungssteuerung_betriebsart
                   data:
                     option: Aus
+          - type: horizontal-stack
+            cards:
+              - type: button
+                entity: button.dynamische_heizungssteuerung_zuhause
+                name: Zuhause
+                icon: mdi:home
+                show_state: false
+                tap_action:
+                  action: perform-action
+                  perform_action: button.press
+                  target:
+                    entity_id: button.dynamische_heizungssteuerung_zuhause
+              - type: button
+                entity: button.dynamische_heizungssteuerung_aktivitat
+                name: Aktivität
+                icon: mdi:run
+                show_state: false
+                tap_action:
+                  action: perform-action
+                  perform_action: button.press
+                  target:
+                    entity_id: button.dynamische_heizungssteuerung_aktivitat
+              - type: button
+                entity: button.dynamische_heizungssteuerung_schlafen
+                name: Schlafen
+                icon: mdi:bed
+                show_state: false
+                tap_action:
+                  action: perform-action
+                  perform_action: button.press
+                  target:
+                    entity_id: button.dynamische_heizungssteuerung_schlafen
+              - type: button
+                entity: button.dynamische_heizungssteuerung_abwesend
+                name: Abwesend
+                icon: mdi:home-export-outline
+                show_state: false
+                tap_action:
+                  action: perform-action
+                  perform_action: button.press
+                  target:
+                    entity_id: button.dynamische_heizungssteuerung_abwesend
       - type: entities
         title: Status und Heizentscheidung
         show_header_toggle: false

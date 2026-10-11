@@ -2,7 +2,20 @@
 // Add it from the card picker ("Dynamische Heizung"); only the room's
 // "Betriebsart" select is needed, everything else is found on its device.
 
+// Fallback when the select does not list its options (older versions).
 const MODES = ["Automatik", "Komfort", "Eco", "Boost", "Aus"];
+// Icons of the mode buttons, as on the room's button entities.
+const ICONS = {
+  Automatik: "mdi:calendar-clock",
+  Komfort: "mdi:sofa",
+  Zuhause: "mdi:home",
+  "Aktivität": "mdi:run",
+  Eco: "mdi:leaf",
+  Schlafen: "mdi:bed",
+  Abwesend: "mdi:home-export-outline",
+  Boost: "mdi:fire",
+  Aus: "mdi:snowflake",
+};
 const SUFFIXES = {
   status: "_status",
   room: "_raumtemperatur",
@@ -60,7 +73,7 @@ class DynamicHeatingCard extends HTMLElement {
   }
 
   getCardSize() {
-    return 5;
+    return 6;
   }
 
   _related() {
@@ -130,8 +143,11 @@ class DynamicHeatingCard extends HTMLElement {
     const next = time(attributes.next_event);
     const valves = Object.entries(attributes.thermostat_setpoints || {});
 
-    const modeButtons = MODES.map((mode) => `
-      <button data-action="mode" data-value="${mode}" class="${select.state === mode ? "active" : ""}">${mode}</button>`).join("");
+    const modes = this._config.modes || select.attributes.options || MODES;
+    const modeButtons = modes.map((mode) => `
+      <button data-action="mode" data-value="${escape(mode)}" class="mode ${select.state === mode ? "active" : ""}">
+        ${ICONS[mode] ? `<ha-icon icon="${ICONS[mode]}"></ha-icon>` : ""}<span>${escape(mode)}</span>
+      </button>`).join("");
     const durationButtons = (duration?.attributes.options || []).map((option) => `
       <button data-action="duration" data-value="${escape(option)}" class="chip ${duration.state === option ? "active" : ""}">${escape(option)}</button>`).join("");
     const valveRows = valves.map(([id, setpoint]) => {
@@ -157,6 +173,9 @@ class DynamicHeatingCard extends HTMLElement {
         button { flex: 1 1 auto; border: 1px solid var(--divider-color); border-radius: 8px;
           background: var(--card-background-color); color: var(--primary-text-color);
           padding: 8px 6px; font: inherit; cursor: pointer; }
+        .modes { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; margin: 8px 0; }
+        button.mode { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 0.85em; }
+        button.mode ha-icon { --mdc-icon-size: 22px; }
         button.active { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: var(--primary-color); }
         button.chip { flex: 0 1 auto; font-size: 0.85em; padding: 4px 10px; border-radius: 16px; }
         .valve { display: flex; justify-content: space-between; font-size: 0.9em; padding: 4px 0;
@@ -178,7 +197,7 @@ class DynamicHeatingCard extends HTMLElement {
         <div class="status" data-action="more" data-value="${escape(related.status || "")}">
           ${escape(status?.state || "")}${until ? ` · bis ${until} Uhr` : ""}
         </div>
-        <div class="row">${modeButtons}</div>
+        <div class="modes">${modeButtons}</div>
         ${durationButtons ? `<div class="row">${durationButtons}</div>` : ""}
         ${valveRows}
         <div class="foot">

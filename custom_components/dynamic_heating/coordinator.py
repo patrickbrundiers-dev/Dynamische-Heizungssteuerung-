@@ -46,8 +46,18 @@ from .const import (
     HOUSE_AWAY,
     HOUSE_DATA_KEY,
     HOUSE_VACATION,
+    CONF_ACTIVITY_TEMPERATURE,
+    CONF_HOME_TEMPERATURE,
+    CONF_SLEEP_TEMPERATURE,
+    DEFAULT_ACTIVITY_TEMPERATURE,
+    DEFAULT_HOME_TEMPERATURE,
+    DEFAULT_SLEEP_TEMPERATURE,
+    QUICK_ACTIVITY,
     QUICK_AUTO,
+    QUICK_AWAY,
     QUICK_DURATIONS,
+    QUICK_HOME,
+    QUICK_SLEEP,
     QUICK_MODES,
     QUICK_MORNING_HOUR,
     QUICK_UNTIL_1H,
@@ -1794,6 +1804,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         eco_temperature: float,
         frost_value: object,
         off_temperature: float | None,
+        away_temperature: float | None = None,
     ) -> tuple[str, str, float] | None:
         """The (mode, status, target) of a hand-picked quick mode, if any."""
         if self.quick_mode != QUICK_AUTO and self.quick_until is not None and (
@@ -1820,6 +1831,23 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return "quick_comfort", f"Komfort von Hand{until}", comfort_temperature
         if self.quick_mode == QUICK_ECO:
             return "quick_eco", f"Eco von Hand{until}", eco_temperature
+        if self.quick_mode == QUICK_AWAY:
+            away = away_temperature if away_temperature is not None else eco_temperature
+            return "quick_away", f"Abwesend von Hand{until}", away
+        for mode, label, key, default in (
+            (QUICK_SLEEP, "Schlafen", CONF_SLEEP_TEMPERATURE, DEFAULT_SLEEP_TEMPERATURE),
+            (QUICK_HOME, "Zuhause", CONF_HOME_TEMPERATURE, DEFAULT_HOME_TEMPERATURE),
+            (
+                QUICK_ACTIVITY,
+                "Aktivität",
+                CONF_ACTIVITY_TEMPERATURE,
+                DEFAULT_ACTIVITY_TEMPERATURE,
+            ),
+        ):
+            if self.quick_mode == mode:
+                value = self.config.get(key)
+                target = float(value) if value is not None else default
+                return f"quick_{mode}", f"{label} von Hand{until}", target
         off = (
             float(frost_value)
             if frost_value is not None
@@ -2346,7 +2374,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             off_temperature=off_temperature,
             boost_temperature=boost_temperature,
             quick_mode=self._quick_target(
-                comfort_temperature, eco_temperature, frost_value, off_temperature
+                comfort_temperature,
+                eco_temperature,
+                frost_value,
+                off_temperature,
+                away_temperature,
             ) or self._house_target(
                 comfort_temperature=comfort_temperature,
                 eco_temperature=eco_temperature,

@@ -2641,3 +2641,55 @@ async def test_weekly_report_sums_up_every_room(hass, enable_custom_integrations
     assert "Hausmodus: Zuhause" in message
     assert " h geheizt" in message
     assert coordinator._week["window_events"] == 0
+
+
+@pytest.mark.asyncio
+async def test_preset_buttons_switch_the_room_like_better_thermostat(
+    hass, enable_custom_integrations
+):
+    """Each mode has a button; sleep, home, activity and away use their temps."""
+    _set_up_test_entities(hass, room_temperature="20.0")
+    entry, coordinator = await _setup_integration(hass)
+    registry = er.async_get(hass)
+
+    def button(mode: str) -> str:
+        return registry.async_get_entity_id(
+            "button", DOMAIN, f"{entry.entry_id}_quick_button_{mode}"
+        )
+
+    for mode in ("auto", "comfort", "home", "activity", "eco", "sleep", "away",
+                 "boost", "off"):
+        assert button(mode) is not None
+
+    async def press(mode: str) -> None:
+        await hass.services.async_call(
+            "button", "press", {"entity_id": button(mode)}, blocking=True
+        )
+        await hass.async_block_till_done()
+
+    await press("sleep")
+    assert coordinator.data["mode"] == "quick_sleep"
+    assert coordinator.data["target_temperature"] == 18.0
+    assert hass.states.get(button("sleep")).attributes["active"] is True
+    assert hass.states.get(button("eco")).attributes["active"] is False
+
+    coordinator.config["activity_temperature"] = 23.5
+    await press("activity")
+    assert coordinator.data["mode"] == "quick_activity"
+    assert coordinator.data["target_temperature"] == 23.5
+
+    await press("home")
+    assert coordinator.data["target_temperature"] == 20.0
+
+    # Away uses the away temperature, or eco without one.
+    await press("away")
+    assert coordinator.data["mode"] == "quick_away"
+    assert coordinator.data["target_temperature"] == 18.0
+    coordinator.config["away_temperature"] = 16.0
+    await coordinator.async_refresh()
+    assert coordinator.data["target_temperature"] == 16.0
+
+    await press("boost")
+    assert coordinator.data["mode"] == "boost"
+    await press("auto")
+    assert coordinator.data["quick_mode"] == "auto"
