@@ -10,6 +10,36 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_COMMAND_DELAY,
+    CONF_DOOR_CLOSE_DELAY,
+    CONF_DOOR_ENTITIES,
+    CONF_DOOR_OPEN_DELAY,
+    CONF_FOLLOW_HOUSE_CALENDAR,
+    CONF_FORCE_COMFORT_ENTITIES,
+    CONF_FORCE_ECO_ENTITIES,
+    CONF_HEATING_LIMIT_AVERAGE,
+    CONF_HEATING_LIMIT_FALLBACK_OFF,
+    CONF_HOUSE_CALENDAR,
+    CONF_MAINTENANCE_DURATION,
+    CONF_MAINTENANCE_HOUR,
+    CONF_MAINTENANCE_WEEKDAY,
+    CONF_WINDOW_CHANGE,
+    CONF_ZONE_WINDOW_CLOSE_DELAY,
+    CONF_ZONE_WINDOW_ENTITIES,
+    CONF_ZONE_WINDOW_OPEN_DELAY,
+    DEFAULT_COMMAND_DELAY,
+    DEFAULT_DOOR_CLOSE_DELAY,
+    DEFAULT_DOOR_OPEN_DELAY,
+    DEFAULT_FOLLOW_HOUSE_CALENDAR,
+    DEFAULT_HEATING_LIMIT_AVERAGE,
+    DEFAULT_ZONE_WINDOW_CLOSE_DELAY,
+    DEFAULT_ZONE_WINDOW_OPEN_DELAY,
+    MAINTENANCE_ANY_DAY,
+    SETTINGS_GROUPS,
+    VALVE_MAINTENANCE_HOUR,
+    VALVE_MAINTENANCE_PHASE_SECONDS,
+    WINDOW_CHANGE_DISCARD,
+    WINDOW_CHANGE_KEEP,
     CONF_ADDITIONAL_WINDOW_ENTITIES,
     CONF_HUMIDITY_ENTITY,
     CONF_LOCK_VALVES,
@@ -137,7 +167,59 @@ _DURATION_OPTIONS = (
     CONF_WINDOW_CLOSE_DELAY,
     CONF_BOOST_DURATION,
     CONF_FROST_AFTER_ABSENCE,
+    CONF_DOOR_OPEN_DELAY,
+    CONF_DOOR_CLOSE_DELAY,
+    CONF_ZONE_WINDOW_OPEN_DELAY,
+    CONF_ZONE_WINDOW_CLOSE_DELAY,
+    CONF_MAINTENANCE_DURATION,
 )
+
+_WEEKDAYS = (
+    "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"
+)
+
+
+def _weekday_selector() -> selector.SelectSelector:
+    """Weekday of the valve maintenance, or every 7 days."""
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=[
+                selector.SelectOptionDict(
+                    value=MAINTENANCE_ANY_DAY, label="Alle 7 Tage"
+                ),
+                *(
+                    selector.SelectOptionDict(value=str(index), label=name)
+                    for index, name in enumerate(_WEEKDAYS)
+                ),
+            ],
+            mode=selector.SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
+def _window_change_selector() -> selector.SelectSelector:
+    """What happens to a setpoint changed while a window is open."""
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=[
+                selector.SelectOptionDict(
+                    value=WINDOW_CHANGE_KEEP, label="Merken und nach dem Schließen anwenden"
+                ),
+                selector.SelectOptionDict(value=WINDOW_CHANGE_DISCARD, label="Verwerfen"),
+            ],
+            mode=selector.SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
+def _force_selector() -> selector.EntitySelector:
+    """Switches, sensors or timers that force comfort or eco while on."""
+    return selector.EntitySelector(
+        selector.EntitySelectorConfig(
+            domain=["input_boolean", "binary_sensor", "switch", "timer"],
+            multiple=True,
+        )
+    )
 
 
 def _degrees_selector(maximum: float, step: float) -> selector.NumberSelector:
@@ -191,7 +273,12 @@ def _notify_selector(hass) -> selector.SelectSelector:
 
 
 def _house_schema(hass) -> vol.Schema:
-    return vol.Schema({vol.Optional(CONF_NOTIFY_SERVICE): _notify_selector(hass)})
+    return vol.Schema({
+        vol.Optional(CONF_NOTIFY_SERVICE): _notify_selector(hass),
+        vol.Optional(CONF_HOUSE_CALENDAR): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain=["calendar", "schedule"])
+        ),
+    })
 
 
 def _away_below_comfort(values: dict, comfort: float) -> bool:
@@ -367,7 +454,8 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 title="Haus",
                 data={CONF_ENTRY_TYPE: ENTRY_TYPE_HOUSE},
                 options={
-                    CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE) or None
+                    CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE) or None,
+                    CONF_HOUSE_CALENDAR: user_input.get(CONF_HOUSE_CALENDAR) or None,
                 },
             )
         return self.async_show_form(
@@ -408,6 +496,8 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             for key in (
                 CONF_ADDITIONAL_CLIMATE_ENTITIES,
                 CONF_WINDOW_ENTITY,
+                CONF_ADDITIONAL_WINDOW_ENTITIES,
+                CONF_DOOR_ENTITIES,
                 CONF_PRESENCE_ENTITY,
             ):
                 data.pop(key, None)
@@ -492,6 +582,11 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         values.setdefault(CONF_PRESENCE_OFF_DURATION, DEFAULT_PRESENCE_OFF_DURATION)
         values.setdefault(CONF_WINDOW_OPEN_DELAY, DEFAULT_WINDOW_OPEN_DELAY)
         values.setdefault(CONF_WINDOW_CLOSE_DELAY, DEFAULT_WINDOW_CLOSE_DELAY)
+        values.setdefault(CONF_DOOR_OPEN_DELAY, DEFAULT_DOOR_OPEN_DELAY)
+        values.setdefault(CONF_DOOR_CLOSE_DELAY, DEFAULT_DOOR_CLOSE_DELAY)
+        values.setdefault(CONF_ZONE_WINDOW_OPEN_DELAY, DEFAULT_ZONE_WINDOW_OPEN_DELAY)
+        values.setdefault(CONF_ZONE_WINDOW_CLOSE_DELAY, DEFAULT_ZONE_WINDOW_CLOSE_DELAY)
+        values.setdefault(CONF_MAINTENANCE_DURATION, VALVE_MAINTENANCE_PHASE_SECONDS)
         return values
 
     def _values(self) -> dict:
@@ -550,9 +645,30 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 default=bool(current.get(CONF_VALVE_MAINTENANCE, False)),
             ): selector.BooleanSelector(),
             vol.Optional(
+                CONF_MAINTENANCE_WEEKDAY,
+                default=str(current.get(CONF_MAINTENANCE_WEEKDAY) or MAINTENANCE_ANY_DAY),
+            ): _weekday_selector(),
+            vol.Optional(
+                CONF_MAINTENANCE_HOUR,
+                default=int(current.get(CONF_MAINTENANCE_HOUR, VALVE_MAINTENANCE_HOUR)),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=23, step=1, mode="box")
+            ),
+            self._duration_field(
+                CONF_MAINTENANCE_DURATION, current, VALVE_MAINTENANCE_PHASE_SECONDS
+            )[0]: _duration_selector(),
+            vol.Optional(
                 CONF_HYSTERESIS,
                 default=float(current.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS)),
             ): _hysteresis_selector(),
+            vol.Optional(
+                CONF_COMMAND_DELAY,
+                default=float(current.get(CONF_COMMAND_DELAY, DEFAULT_COMMAND_DELAY)),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0, max=5, step=0.1, mode="slider", unit_of_measurement="s"
+                )
+            ),
             vol.Optional(
                 CONF_SYNC_MANUAL_CHANGE,
                 default=bool(
@@ -645,6 +761,14 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             CONF_FROST_AFTER_ABSENCE, current, DEFAULT_FROST_AFTER_ABSENCE
         )
         schema[item[0]] = item[1]
+        schema[vol.Optional(CONF_FORCE_COMFORT_ENTITIES)] = _force_selector()
+        schema[vol.Optional(CONF_FORCE_ECO_ENTITIES)] = _force_selector()
+        schema[vol.Optional(
+            CONF_FOLLOW_HOUSE_CALENDAR,
+            default=bool(
+                current.get(CONF_FOLLOW_HOUSE_CALENDAR, DEFAULT_FOLLOW_HOUSE_CALENDAR)
+            ),
+        )] = selector.BooleanSelector()
         return vol.Schema(schema)
 
     def _proximity_schema(self, current: dict) -> vol.Schema:
@@ -673,8 +797,24 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             ),
             self._duration_field(CONF_WINDOW_OPEN_DELAY, current, DEFAULT_WINDOW_OPEN_DELAY),
             self._duration_field(CONF_WINDOW_CLOSE_DELAY, current, DEFAULT_WINDOW_CLOSE_DELAY),
+            self._entity_field(CONF_DOOR_ENTITIES, "binary_sensor", current, multiple=True),
+            self._duration_field(CONF_DOOR_OPEN_DELAY, current, DEFAULT_DOOR_OPEN_DELAY),
+            self._duration_field(CONF_DOOR_CLOSE_DELAY, current, DEFAULT_DOOR_CLOSE_DELAY),
+            self._entity_field(
+                CONF_ZONE_WINDOW_ENTITIES, "binary_sensor", current, multiple=True
+            ),
+            self._duration_field(
+                CONF_ZONE_WINDOW_OPEN_DELAY, current, DEFAULT_ZONE_WINDOW_OPEN_DELAY
+            ),
+            self._duration_field(
+                CONF_ZONE_WINDOW_CLOSE_DELAY, current, DEFAULT_ZONE_WINDOW_CLOSE_DELAY
+            ),
         ):
             schema[item[0]] = item[1]
+        schema[vol.Optional(
+            CONF_WINDOW_CHANGE,
+            default=current.get(CONF_WINDOW_CHANGE) or WINDOW_CHANGE_KEEP,
+        )] = _window_change_selector()
         schema[vol.Optional(CONF_WINDOW_TEMPERATURE)] = _temperature_selector(5, 21)
         schema[vol.Optional(
             CONF_WINDOW_DROP_DETECTION,
@@ -694,6 +834,16 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         ):
             schema[item[0]] = item[1]
         schema[vol.Optional(CONF_HEATING_LIMIT_TEMPERATURE)] = _temperature_selector(10, 25)
+        schema[vol.Optional(
+            CONF_HEATING_LIMIT_AVERAGE,
+            default=bool(
+                current.get(CONF_HEATING_LIMIT_AVERAGE, DEFAULT_HEATING_LIMIT_AVERAGE)
+            ),
+        )] = selector.BooleanSelector()
+        schema[vol.Optional(
+            CONF_HEATING_LIMIT_FALLBACK_OFF,
+            default=bool(current.get(CONF_HEATING_LIMIT_FALLBACK_OFF, False)),
+        )] = selector.BooleanSelector()
         schema[vol.Optional(CONF_NOTIFY_SERVICE)] = _notify_selector(self.hass)
         return vol.Schema(schema)
 
@@ -769,16 +919,23 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                         current.get(CONF_BOOST_DURATION, DEFAULT_BOOST_DURATION),
                     )
                 )
+                current[CONF_MAINTENANCE_DURATION] = _duration_to_seconds(
+                    user_input.get(
+                        CONF_MAINTENANCE_DURATION,
+                        current.get(
+                            CONF_MAINTENANCE_DURATION, VALVE_MAINTENANCE_PHASE_SECONDS
+                        ),
+                    )
+                ) or VALVE_MAINTENANCE_PHASE_SECONDS
+                if CONF_MAINTENANCE_HOUR in user_input:
+                    current[CONF_MAINTENANCE_HOUR] = int(user_input[CONF_MAINTENANCE_HOUR])
                 return await self.async_step_presence()
 
         suggested = dict(current)
         suggested.update(user_input or {})
-        if CONF_BOOST_DURATION in suggested and not isinstance(
-            suggested[CONF_BOOST_DURATION], dict
-        ):
-            suggested[CONF_BOOST_DURATION] = _seconds_to_duration(
-                suggested[CONF_BOOST_DURATION]
-            )
+        for key in (CONF_BOOST_DURATION, CONF_MAINTENANCE_DURATION):
+            if key in suggested and not isinstance(suggested[key], dict):
+                suggested[key] = _seconds_to_duration(suggested[key])
         # Keep the user's attempted values visible when validation fails.
         return self.async_show_form(
             step_id="init",
@@ -809,8 +966,12 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 user_input.get(CONF_AWAY_SCHEDULE_MODE, False)
             )
             for key in (CONF_PERSON_ENTITIES, CONF_GUEST_ENTITY, CONF_PRESENCE_ENTITY,
-                        CONF_PRESENCE_SCHEDULE_ENTITY):
+                        CONF_PRESENCE_SCHEDULE_ENTITY, CONF_FORCE_COMFORT_ENTITIES,
+                        CONF_FORCE_ECO_ENTITIES):
                 current[key] = user_input.get(key) or None
+            current[CONF_FOLLOW_HOUSE_CALENDAR] = bool(
+                user_input.get(CONF_FOLLOW_HOUSE_CALENDAR, DEFAULT_FOLLOW_HOUSE_CALENDAR)
+            )
             for key in (CONF_ENTER_HOME_DURATION, CONF_LEAVING_HOME_DURATION,
                         CONF_PRESENCE_ON_DURATION, CONF_PRESENCE_OFF_DURATION,
                         CONF_FROST_AFTER_ABSENCE):
@@ -862,8 +1023,20 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 for entity_id in user_input.get(CONF_ADDITIONAL_WINDOW_ENTITIES) or []
                 if entity_id != current[CONF_WINDOW_ENTITY]
             ]
-            for key in (CONF_WINDOW_OPEN_DELAY, CONF_WINDOW_CLOSE_DELAY):
+            for key in (CONF_DOOR_ENTITIES, CONF_ZONE_WINDOW_ENTITIES):
+                current[key] = list(user_input.get(key) or [])
+            for key in (CONF_WINDOW_OPEN_DELAY, CONF_WINDOW_CLOSE_DELAY,
+                        CONF_DOOR_OPEN_DELAY, CONF_DOOR_CLOSE_DELAY,
+                        CONF_ZONE_WINDOW_OPEN_DELAY, CONF_ZONE_WINDOW_CLOSE_DELAY):
                 current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
+            current[CONF_WINDOW_CHANGE] = (
+                user_input.get(CONF_WINDOW_CHANGE) or WINDOW_CHANGE_KEEP
+            )
+            for key, default in (
+                (CONF_HEATING_LIMIT_AVERAGE, DEFAULT_HEATING_LIMIT_AVERAGE),
+                (CONF_HEATING_LIMIT_FALLBACK_OFF, False),
+            ):
+                current[key] = bool(user_input.get(key, default))
             current[CONF_WINDOW_TEMPERATURE] = user_input.get(CONF_WINDOW_TEMPERATURE)
             current[CONF_WINDOW_DROP_DETECTION] = bool(
                 user_input.get(CONF_WINDOW_DROP_DETECTION, False)
@@ -893,20 +1066,96 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
 
 
 class HouseOptionsFlow(config_entries.OptionsFlowWithReload):
-    """Settings of the house entry."""
+    """Settings of the house entry, and copying settings between rooms."""
 
     async def async_step_init(self, user_input=None):
-        return await self.async_step_house_settings()
+        return await self.async_step_house_menu()
+
+    async def async_step_house_menu(self, user_input=None):
+        return self.async_show_menu(
+            step_id="house_menu", menu_options=["house_settings", "copy_settings"]
+        )
 
     async def async_step_house_settings(self, user_input=None):
         if user_input is not None:
             return self.async_create_entry(
                 title="",
-                data={CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE) or None},
+                data={
+                    CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE) or None,
+                    CONF_HOUSE_CALENDAR: user_input.get(CONF_HOUSE_CALENDAR) or None,
+                },
             )
         return self.async_show_form(
             step_id="house_settings",
             data_schema=self.add_suggested_values_to_schema(
                 _house_schema(self.hass), dict(self.config_entry.options)
             ),
+        )
+
+    def _rooms(self) -> list[ConfigEntry]:
+        return [
+            entry
+            for entry in self.hass.config_entries.async_entries(DOMAIN)
+            if entry.data.get(CONF_ENTRY_TYPE) != ENTRY_TYPE_HOUSE
+        ]
+
+    async def async_step_copy_settings(self, user_input=None):
+        """Write chosen groups of settings from one room to other rooms."""
+        rooms = self._rooms()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            source = self.hass.config_entries.async_get_entry(user_input["source"])
+            targets = [
+                entry
+                for entry in rooms
+                if entry.entry_id in (user_input.get("targets") or [])
+                and source is not None
+                and entry.entry_id != source.entry_id
+            ]
+            groups = user_input.get("groups") or []
+            if source is None or not targets or not groups:
+                errors["base"] = "copy_nothing_selected"
+            else:
+                values = {**dict(source.data), **dict(source.options)}
+                keys = [key for group in groups for key in SETTINGS_GROUPS.get(group, ())]
+                for target in targets:
+                    options = {**dict(target.data), **dict(target.options)}
+                    for key in keys:
+                        if key in values:
+                            options[key] = values[key]
+                        else:
+                            options.pop(key, None)
+                    self.hass.config_entries.async_update_entry(target, options=options)
+                    self.hass.config_entries.async_schedule_reload(target.entry_id)
+                return self.async_create_entry(
+                    title="", data=dict(self.config_entry.options)
+                )
+        room_options = [
+            selector.SelectOptionDict(value=entry.entry_id, label=entry.title)
+            for entry in rooms
+        ]
+        schema = vol.Schema({
+            vol.Required("source"): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=room_options, mode=selector.SelectSelectorMode.DROPDOWN
+                )
+            ),
+            vol.Required("targets"): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=room_options,
+                    multiple=True,
+                    mode=selector.SelectSelectorMode.LIST,
+                )
+            ),
+            vol.Required("groups"): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(SETTINGS_GROUPS),
+                    multiple=True,
+                    mode=selector.SelectSelectorMode.LIST,
+                    translation_key="settings_groups",
+                )
+            ),
+        })
+        return self.async_show_form(
+            step_id="copy_settings", data_schema=schema, errors=errors
         )

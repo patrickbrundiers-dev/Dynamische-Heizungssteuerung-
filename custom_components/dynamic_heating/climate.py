@@ -129,6 +129,8 @@ class RoomClimate(CoordinatorEntity[DynamicHeatingCoordinator], ClimateEntity):
             "until": until,
             "room_offset": self._data.get("room_offset"),
             "temperature_trend": self._data.get("temperature_trend"),
+            "last_change_source": self._data.get("last_change_source"),
+            "last_change_at": self._data.get("last_change_at"),
         }
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
@@ -146,14 +148,15 @@ class RoomClimate(CoordinatorEntity[DynamicHeatingCoordinator], ClimateEntity):
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Off is the mode Aus; heat goes back to automatic control."""
         if hvac_mode == HVACMode.OFF:
-            await self.coordinator.async_set_quick_mode(QUICK_OFF)
+            await self.coordinator.async_set_quick_mode(QUICK_OFF, source="Raum-Thermostat")
         elif self.coordinator.current_quick_mode == QUICK_OFF:
-            await self.coordinator.async_set_quick_mode(QUICK_AUTO)
+            await self.coordinator.async_set_quick_mode(QUICK_AUTO, source="Raum-Thermostat")
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """A preset is the quick mode of the same name; none is Automatik."""
         await self.coordinator.async_set_quick_mode(
-            QUICK_AUTO if preset_mode == PRESET_NONE else preset_mode
+            QUICK_AUTO if preset_mode == PRESET_NONE else preset_mode,
+            source="Raum-Thermostat",
         )
 
     async def async_turn_on(self) -> None:

@@ -29,9 +29,11 @@ async def async_setup_entry(
     if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HOUSE:
         async_add_entities([SendReportButton(entry.runtime_data, entry, "send_report")])
         return
-    async_add_entities(
+    entities: list[ButtonEntity] = [
         QuickModeButton(entry.runtime_data, entry, mode) for mode in QUICK_MODES
-    )
+    ]
+    entities.append(ValveMaintenanceButton(entry.runtime_data, entry))
+    async_add_entities(entities)
 
 
 class QuickModeButton(CoordinatorEntity[DynamicHeatingCoordinator], ButtonEntity):
@@ -56,7 +58,25 @@ class QuickModeButton(CoordinatorEntity[DynamicHeatingCoordinator], ButtonEntity
 
     async def async_press(self) -> None:
         """Pick this mode; it holds for the chosen Betriebsart-Dauer."""
-        await self.coordinator.async_set_quick_mode(self._mode)
+        await self.coordinator.async_set_quick_mode(self._mode, source="Taste")
+
+
+class ValveMaintenanceButton(CoordinatorEntity[DynamicHeatingCoordinator], ButtonEntity):
+    """Exercises the room's valves now (open fully, then close)."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Ventilwartung starten"
+    _attr_icon = "mdi:valve"
+
+    def __init__(
+        self, coordinator: DynamicHeatingCoordinator, entry: ConfigEntry
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_valve_maintenance_button"
+        self._attr_device_info = device_info(entry)
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_start_valve_maintenance()
 
 
 class SendReportButton(HouseEntity, ButtonEntity):
