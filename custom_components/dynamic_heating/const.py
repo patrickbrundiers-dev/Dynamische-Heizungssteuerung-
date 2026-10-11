@@ -170,6 +170,9 @@ QUICK_ACTIVITY: Final = "activity"
 # A temperature set on the room thermostat entity; it holds like the other
 # modes for the chosen duration. Not offered as a button.
 QUICK_MANUAL: Final = "manual"
+# Every valve fully open regardless of windows or season, e.g. for boiler
+# service or the chimney sweep (AHC "force max temperature").
+QUICK_MAINTENANCE: Final = "maintenance"
 QUICK_MODES: Final = (
     QUICK_AUTO,
     QUICK_COMFORT,
@@ -179,6 +182,7 @@ QUICK_MODES: Final = (
     QUICK_SLEEP,
     QUICK_AWAY,
     QUICK_BOOST,
+    QUICK_MAINTENANCE,
     QUICK_OFF,
 )
 # German names of the quick modes, used by the select and the buttons.
@@ -191,6 +195,7 @@ QUICK_LABELS: Final = {
     QUICK_SLEEP: "Schlafen",
     QUICK_AWAY: "Abwesend",
     QUICK_BOOST: "Boost",
+    QUICK_MAINTENANCE: "Wartung",
     QUICK_OFF: "Aus",
     QUICK_MANUAL: "Manuell",
 }
@@ -203,6 +208,7 @@ QUICK_ICONS: Final = {
     QUICK_SLEEP: "mdi:bed",
     QUICK_AWAY: "mdi:home-export-outline",
     QUICK_BOOST: "mdi:fire",
+    QUICK_MAINTENANCE: "mdi:wrench",
     QUICK_OFF: "mdi:snowflake",
     QUICK_MANUAL: "mdi:hand-back-right",
 }
@@ -268,3 +274,41 @@ HEAT_DEMAND_KEYS: Final = ("pi_heating_demand", "valve_position", "position")
 # Weekly report of the house entry: Sunday evening.
 REPORT_WEEKDAY: Final = 6
 REPORT_HOUR: Final = 18
+
+# Turning a valve by hand: the new setpoint goes to every thermostat of the
+# room and is held as quick mode Manuell (AHC "physical change / sync").
+# Without it, control only pauses until the next mode change.
+CONF_SYNC_MANUAL_CHANGE: Final = "sync_manual_change"
+DEFAULT_SYNC_MANUAL_CHANGE: Final = True
+
+# Graded absence (AHC away mode): while the schedule asks for comfort but the
+# room is empty although somebody is home, heat to comfort minus this offset
+# instead of the setback. Optionally also while nobody is home at all.
+CONF_AWAY_OFFSET: Final = "away_offset"
+CONF_AWAY_SCHEDULE_MODE: Final = "away_schedule_mode"
+
+# After this long without anybody home the room drops to frost protection
+# (AHC "frost protection fallback duration"). 0 turns it off.
+CONF_FROST_AFTER_ABSENCE: Final = "frost_after_absence"
+DEFAULT_FROST_AFTER_ABSENCE: Final = 0
+
+# More comfort schedules per room; the "Zeitplan" select picks the active one.
+CONF_ADDITIONAL_SCHEDULE_ENTITIES: Final = "additional_schedule_entities"
+
+# A schedule whose blocks carry a ``temperature`` in their data sets the eco
+# temperature while that block is active (AHC heating plan adjustments).
+CONF_ECO_SCHEDULE_ENTITY: Final = "eco_schedule_entity"
+
+# Aggressive mode: outside +/- range around the target, send target +/- offset
+# so sluggish valves open or close decisively. No range turns it off.
+CONF_AGGRESSIVE_RANGE: Final = "aggressive_range"
+CONF_AGGRESSIVE_OFFSET: Final = "aggressive_offset"
+DEFAULT_AGGRESSIVE_OFFSET: Final = 2.0
+
+# Turn off the thermostats' own window detection when the room has a window
+# contact, so a valve does not close on its own while the room should heat.
+CONF_DISABLE_TRV_WINDOW_DETECTION: Final = "disable_trv_window_detection"
+TRV_WINDOW_DETECTION_SUFFIX: Final = "_window_detection"
+
+# Fired on the event bus whenever the decided mode or target changes.
+EVENT_MODE_CHANGED: Final = "dynamic_heating_mode_changed"

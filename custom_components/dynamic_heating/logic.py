@@ -77,6 +77,9 @@ def decide_heating_target(
     boost_temperature: float | None = None,
     quick_mode: tuple[str, str, float] | None = None,
     forecast_temperature: float | None = None,
+    maintenance_temperature: float | None = None,
+    reduced_comfort: tuple[str, float] | None = None,
+    long_absence_temperature: float | None = None,
 ) -> HeatingDecision:
     """Return the target and reason for the current conditions.
 
@@ -89,7 +92,16 @@ def decide_heating_target(
     A ``quick_mode`` (mode, status, target) picked by hand has the same rank.
     ``forecast_temperature`` is the outdoor temperature forecast for the start
     of the next comfort period; preheating is timed with it when known.
+    ``maintenance_temperature`` opens every valve fully and wins over
+    everything, open windows and the end of the heating season included.
+    ``reduced_comfort`` (status, target) replaces the setback while nobody is
+    in the room but the schedule asks for comfort; ``long_absence_temperature``
+    replaces it after a long absence. Both apply only without presence.
     """
+    if maintenance_temperature is not None:
+        return HeatingDecision(
+            "Wartung – Ventile voll geöffnet", "maintenance", maintenance_temperature, 0
+        )
     if not heating_season:
         decision = HeatingDecision(
             "Heizperiode aus – nicht geheizt",
@@ -122,6 +134,8 @@ def decide_heating_target(
             heating_limit_reached=heating_limit_reached,
             window_temperature=window_temperature,
             forecast_temperature=forecast_temperature,
+            reduced_comfort=reduced_comfort,
+            long_absence_temperature=long_absence_temperature,
         )
     if (
         frost_protection_temperature is not None
@@ -156,6 +170,8 @@ def _decide(
     heating_limit_reached: bool,
     window_temperature: float | None,
     forecast_temperature: float | None = None,
+    reduced_comfort: tuple[str, float] | None = None,
+    long_absence_temperature: float | None = None,
 ) -> HeatingDecision:
     """Decide without the frost-protection floor.
 
@@ -186,6 +202,20 @@ def _decide(
         )
 
     if not present:
+        if long_absence_temperature is not None:
+            return HeatingDecision(
+                "Lange niemand zuhause – Frostschutz",
+                "long_absence",
+                long_absence_temperature,
+                0,
+            )
+        if (
+            reduced_comfort is not None
+            and schedule_active
+            and not heating_limit_reached
+        ):
+            status, target = reduced_comfort
+            return HeatingDecision(status, "away_reduced", target, 0)
         return HeatingDecision(
             "Keine Anwesenheit – abgesenkt", "away", away_target, 0
         )
@@ -570,3 +600,39 @@ def valve_maintenance_phase(
     if elapsed < 2 * phase_seconds:
         return "close"
     return None
+
+
+def aggressive_setpoint(
+    target: float, room_temperature: float, band: float, offset: float
+) -> float:
+    """Push a sluggish valve: target +/- offset outside target +/- band."""
+    if room_temperature < target - band:
+        return target + offset
+    if room_temperature > target + band:
+        return target - offset
+    return target
+
+
+def select_schedule(
+    schedules: list[tuple[str, str]], choice: str | None
+) -> str:
+    """The schedule entity picked by ``choice`` from (entity_id, name) pairs.
+
+    ``choice`` may be an entity id, a 1-based number or a (partial) name;
+    anything else picks the first schedule.
+    """
+    if not choice:
+        return schedules[0][0]
+    text = choice.strip().casefold()
+    for entity_id, _name in schedules:
+        if entity_id.casefold() == text:
+            return entity_id
+    if text.isdigit() and 1 <= int(text) <= len(schedules):
+        return schedules[int(text) - 1][0]
+    for entity_id, name in schedules:
+        if name.casefold() == text:
+            return entity_id
+    for entity_id, name in schedules:
+        if text and text in name.casefold():
+            return entity_id
+    return schedules[0][0]

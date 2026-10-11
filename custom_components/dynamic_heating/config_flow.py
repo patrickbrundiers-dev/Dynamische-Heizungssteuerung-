@@ -10,6 +10,18 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_ADDITIONAL_SCHEDULE_ENTITIES,
+    CONF_AGGRESSIVE_OFFSET,
+    CONF_AGGRESSIVE_RANGE,
+    CONF_AWAY_OFFSET,
+    CONF_AWAY_SCHEDULE_MODE,
+    CONF_DISABLE_TRV_WINDOW_DETECTION,
+    CONF_ECO_SCHEDULE_ENTITY,
+    CONF_FROST_AFTER_ABSENCE,
+    CONF_SYNC_MANUAL_CHANGE,
+    DEFAULT_AGGRESSIVE_OFFSET,
+    DEFAULT_FROST_AFTER_ABSENCE,
+    DEFAULT_SYNC_MANUAL_CHANGE,
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_AWAY_TEMPERATURE,
     CONF_BOOST_DURATION,
@@ -121,7 +133,17 @@ _DURATION_OPTIONS = (
     CONF_WINDOW_OPEN_DELAY,
     CONF_WINDOW_CLOSE_DELAY,
     CONF_BOOST_DURATION,
+    CONF_FROST_AFTER_ABSENCE,
 )
+
+
+def _degrees_selector(maximum: float, step: float) -> selector.NumberSelector:
+    """A small temperature difference in Celsius."""
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=0, max=maximum, step=step, mode="slider", unit_of_measurement="°C"
+        )
+    )
 
 
 def _temperature_selector(minimum: float, maximum: float) -> selector.NumberSelector:
@@ -526,6 +548,19 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 CONF_HYSTERESIS,
                 default=float(current.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS)),
             ): _hysteresis_selector(),
+            vol.Optional(
+                CONF_SYNC_MANUAL_CHANGE,
+                default=bool(
+                    current.get(CONF_SYNC_MANUAL_CHANGE, DEFAULT_SYNC_MANUAL_CHANGE)
+                ),
+            ): selector.BooleanSelector(),
+            vol.Optional(CONF_AGGRESSIVE_RANGE): _degrees_selector(2, 0.1),
+            vol.Optional(
+                CONF_AGGRESSIVE_OFFSET,
+                default=float(
+                    current.get(CONF_AGGRESSIVE_OFFSET, DEFAULT_AGGRESSIVE_OFFSET)
+                ),
+            ): _degrees_selector(5, 0.5),
             vol.Required(
                 CONF_ROOM_TEMPERATURE_ENTITY,
                 default=current[CONF_ROOM_TEMPERATURE_ENTITY],
@@ -533,6 +568,12 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             vol.Required(
                 CONF_SCHEDULE_ENTITY, default=current[CONF_SCHEDULE_ENTITY]
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="schedule")),
+            vol.Optional(CONF_ADDITIONAL_SCHEDULE_ENTITIES): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="schedule", multiple=True)
+            ),
+            vol.Optional(CONF_ECO_SCHEDULE_ENTITY): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="schedule")
+            ),
             vol.Required(
                 CONF_COMFORT_TEMPERATURE,
                 default=float(current[CONF_COMFORT_TEMPERATURE]),
@@ -583,6 +624,15 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         ):
             schema[item[0]] = item[1]
         schema[vol.Optional(CONF_AWAY_TEMPERATURE)] = _temperature_selector(5, 21)
+        schema[vol.Optional(CONF_AWAY_OFFSET)] = _degrees_selector(6, 0.5)
+        schema[vol.Optional(
+            CONF_AWAY_SCHEDULE_MODE,
+            default=bool(current.get(CONF_AWAY_SCHEDULE_MODE, False)),
+        )] = selector.BooleanSelector()
+        item = self._duration_field(
+            CONF_FROST_AFTER_ABSENCE, current, DEFAULT_FROST_AFTER_ABSENCE
+        )
+        schema[item[0]] = item[1]
         return vol.Schema(schema)
 
     def _proximity_schema(self, current: dict) -> vol.Schema:
@@ -614,6 +664,10 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         schema[vol.Optional(
             CONF_WINDOW_DROP_DETECTION,
             default=bool(current.get(CONF_WINDOW_DROP_DETECTION, False)),
+        )] = selector.BooleanSelector()
+        schema[vol.Optional(
+            CONF_DISABLE_TRV_WINDOW_DETECTION,
+            default=bool(current.get(CONF_DISABLE_TRV_WINDOW_DETECTION, False)),
         )] = selector.BooleanSelector()
         for item in (
             self._entity_field(CONF_OUTDOOR_TEMPERATURE_ENTITY, "sensor", current),
@@ -683,6 +737,16 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 current[CONF_FROST_PROTECTION_TEMPERATURE] = user_input.get(
                     CONF_FROST_PROTECTION_TEMPERATURE
                 )
+                current[CONF_ADDITIONAL_SCHEDULE_ENTITIES] = [
+                    entity_id
+                    for entity_id in user_input.get(CONF_ADDITIONAL_SCHEDULE_ENTITIES) or []
+                    if entity_id != user_input[CONF_SCHEDULE_ENTITY]
+                ]
+                current[CONF_ECO_SCHEDULE_ENTITY] = (
+                    user_input.get(CONF_ECO_SCHEDULE_ENTITY) or None
+                )
+                # An empty range turns aggressive mode off.
+                current[CONF_AGGRESSIVE_RANGE] = user_input.get(CONF_AGGRESSIVE_RANGE)
                 current[CONF_BOOST_DURATION] = _duration_to_seconds(
                     user_input.get(
                         CONF_BOOST_DURATION,
@@ -724,11 +788,16 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             current.update(user_input)
             # A cleared field must override a value saved earlier.
             current[CONF_AWAY_TEMPERATURE] = user_input.get(CONF_AWAY_TEMPERATURE)
+            current[CONF_AWAY_OFFSET] = user_input.get(CONF_AWAY_OFFSET) or None
+            current[CONF_AWAY_SCHEDULE_MODE] = bool(
+                user_input.get(CONF_AWAY_SCHEDULE_MODE, False)
+            )
             for key in (CONF_PERSON_ENTITIES, CONF_GUEST_ENTITY, CONF_PRESENCE_ENTITY,
                         CONF_PRESENCE_SCHEDULE_ENTITY):
                 current[key] = user_input.get(key) or None
             for key in (CONF_ENTER_HOME_DURATION, CONF_LEAVING_HOME_DURATION,
-                        CONF_PRESENCE_ON_DURATION, CONF_PRESENCE_OFF_DURATION):
+                        CONF_PRESENCE_ON_DURATION, CONF_PRESENCE_OFF_DURATION,
+                        CONF_FROST_AFTER_ABSENCE):
                 current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
             return await self.async_step_geofencing()
 
@@ -777,6 +846,9 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             current[CONF_WINDOW_TEMPERATURE] = user_input.get(CONF_WINDOW_TEMPERATURE)
             current[CONF_WINDOW_DROP_DETECTION] = bool(
                 user_input.get(CONF_WINDOW_DROP_DETECTION, False)
+            )
+            current[CONF_DISABLE_TRV_WINDOW_DETECTION] = bool(
+                user_input.get(CONF_DISABLE_TRV_WINDOW_DETECTION, False)
             )
             # A cleared field must override a value saved earlier.
             current[CONF_HEATING_LIMIT_TEMPERATURE] = user_input.get(
