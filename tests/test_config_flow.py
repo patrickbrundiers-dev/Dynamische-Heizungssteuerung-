@@ -7,6 +7,17 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.dynamic_heating.const import DOMAIN
 
 
+async def _start_room_flow(hass):
+    """Open the setup menu and pick a new room."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    assert result["type"] is FlowResultType.MENU
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "room"}
+    )
+
+
 def _valid_input():
     """Return a minimal valid configuration without real devices."""
     return {
@@ -145,11 +156,9 @@ async def _finish_editor_flow(
 @pytest.mark.asyncio
 async def test_user_flow_creates_entry(hass, enable_custom_integrations):
     """A valid initial configuration creates a room."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    result = await _start_room_flow(hass)
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "user"
+    assert result["step_id"] == "room"
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], user_input=_valid_input()
@@ -172,9 +181,7 @@ async def test_user_flow_rejects_eco_temperature_at_or_above_comfort(
     hass, enable_custom_integrations
 ):
     """Invalid temperatures are rejected without creating an entry."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    result = await _start_room_flow(hass)
     user_input = _valid_input()
     user_input["eco_temperature"] = 21.0
 
@@ -192,9 +199,7 @@ async def test_user_flow_accepts_optional_weather_forecast_entity(
     hass, enable_custom_integrations
 ):
     """Weather can be supplied during setup, but is not required."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    result = await _start_room_flow(hass)
     user_input = _valid_input()
     user_input["weather_entity"] = "weather.home_forecast"
 
@@ -353,9 +358,7 @@ async def test_user_flow_validates_optional_away_temperature(
     hass, enable_custom_integrations
 ):
     """An away temperature is optional but must stay below comfort."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    result = await _start_room_flow(hass)
     user_input = _valid_input() | {"away_temperature": 21.0}
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], user_input=user_input
@@ -541,3 +544,75 @@ async def test_editor_saves_boost_settings_in_seconds(
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["boost_temperature"] == 23.0
     assert entry.options["boost_duration"] == 2700
+
+
+@pytest.mark.asyncio
+async def test_new_room_copies_the_settings_of_another_room(
+    hass, enable_custom_integrations
+):
+    """Only the new room's devices are asked for; the rest is copied."""
+    source = _mock_room(
+        hass,
+        options={
+            "comfort_temperature": 22.0,
+            "person_entities": ["person.patrick"],
+            "proximity_zone": "zone_home",
+            "window_entity": "binary_sensor.living_room_window",
+            "presence_entity": "binary_sensor.living_room_presence",
+            "notify_service": "notify.phone",
+        },
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    assert set(result["menu_options"]) == {"room", "copy", "house"}
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "copy"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"source": source.entry_id}
+    )
+    assert result["step_id"] == "copy_room"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "climate_entity": "climate.bathroom",
+            "room_temperature_entity": "sensor.bathroom_temperature",
+            "schedule_entity": "schedule.living_room_comfort",
+            "window_entity": "binary_sensor.bathroom_window",
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    data = result["data"]
+    assert data["climate_entity"] == "climate.bathroom"
+    assert data["room_temperature_entity"] == "sensor.bathroom_temperature"
+    assert data["window_entity"] == "binary_sensor.bathroom_window"
+    assert "presence_entity" not in data
+    assert data["comfort_temperature"] == 22.0
+    assert data["person_entities"] == ["person.patrick"]
+    assert data["proximity_zone"] == "zone_home"
+    assert data["notify_service"] == "notify.phone"
+
+
+@pytest.mark.asyncio
+async def test_house_settings_are_created_once(hass, enable_custom_integrations):
+    """The house entry is offered until it exists."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    assert result["menu_options"] == ["room", "house"]
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "house"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"notify_service": "notify.phone"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {"entry_type": "house"}
+    assert result["options"] == {"notify_service": "notify.phone"}
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    assert result["menu_options"] == ["room"]

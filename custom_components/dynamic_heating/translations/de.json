@@ -2,6 +2,15 @@
   "config": {
     "step": {
       "user": {
+        "title": "Dynamische Heizung",
+        "description": "Was möchtest du einrichten?",
+        "menu_options": {
+          "room": "Neuen Raum einrichten",
+          "copy": "Raum mit den Einstellungen eines anderen Raums anlegen",
+          "house": "Haus-Einstellungen (Hausmodus, Urlaub, Übersicht)"
+        }
+      },
+      "room": {
         "title": "Dynamische Heizungssteuerung",
         "description": "Wähle Thermostat, Raumtemperatursensor und Schedule-Helfer. Die Regelung bleibt nach der Einrichtung zunächst ausgeschaltet.",
         "data": {
@@ -37,7 +46,8 @@
           "calibration": "Sollwert mit Raumfühler kalibrieren",
           "external_temperature": "Raumtemperatur an die Thermostate senden",
           "valve_maintenance": "Wöchentliche Ventilwartung",
-          "hysteresis": "Hysterese der Kalibrierung"
+          "hysteresis": "Hysterese der Kalibrierung",
+          "window_drop_detection": "Fenster ohne Kontakt erkennen"
         },
         "data_description": {
           "person_entities": "Komfortheizung ist erlaubt, wenn mindestens eine ausgewählte Person oder ein Geräte-Tracker zu Hause ist. Geräte-Tracker mit einfachem Zuhause/Nicht-zuhause-Status werden empfohlen.",
@@ -63,7 +73,37 @@
           "calibration": "Das Thermostat misst direkt am Heizkörper. Ist dies aktiv, wird sein Sollwert um die Differenz zwischen Thermostat- und Raumtemperatur verschoben (wie die zieltemperaturbasierte Kalibrierung von Better Thermostat), damit es nach dem Raumfühler regelt. Die Abweichung wird höchstens alle 10 Minuten neu berechnet. Nicht einschalten, wenn das gewählte Thermostat bereits ein Better-Thermostat ist.",
           "external_temperature": "Für Thermostate mit Eingang für eine externe Temperatur (z. B. Aqara E1 über Zigbee2MQTT): Die Integration schaltet sie auf den externen Sensor und schickt ihnen die Temperatur des Raumfühlers, wie Better Thermostat. Das Ventil regelt dann selbst nach der Raumtemperatur, eine Kalibrierung ist für diese Thermostate nicht nötig. Ist die Regelung aus oder der Raumfühler nicht verfügbar, werden sie wieder auf ihren eigenen Sensor geschaltet.",
           "valve_maintenance": "Gegen Verkalkung werden die Ventile einmal pro Woche gegen 11 Uhr für 5 Minuten ganz geöffnet und danach 5 Minuten ganz geschlossen (Maximal- bzw. Minimaltemperatur des Thermostats), wie bei Better Thermostat. Bei offenem Fenster oder manueller Übersteuerung wird sie verschoben. Nur bei aktiver Regelung.",
-          "hysteresis": "Eine neu berechnete Kalibrierung wird nur übernommen, wenn sie sich um mindestens diesen Wert geändert hat. So werden die Thermostate nicht bei jeder kleinen Temperaturschwankung nachgestellt. 0 schaltet die Hysterese ab."
+          "hysteresis": "Eine neu berechnete Kalibrierung wird nur übernommen, wenn sie sich um mindestens diesen Wert geändert hat. So werden die Thermostate nicht bei jeder kleinen Temperaturschwankung nachgestellt. 0 schaltet die Hysterese ab.",
+          "window_drop_detection": "Fällt die Raumtemperatur innerhalb von 10 Minuten um 1 °C, wird der Raum 15 Minuten wie bei offenem Fenster abgesenkt. Funktioniert zusätzlich zum Fensterkontakt."
+        }
+      },
+      "copy": {
+        "title": "Einstellungen übernehmen",
+        "description": "Zeitplan, Temperaturen, Personen, Proximity-Zone, Fenster-Verzögerungen, Benachrichtigung und alle anderen Einstellungen werden aus diesem Raum übernommen.",
+        "data": {
+          "source": "Raum als Vorlage"
+        }
+      },
+      "copy_room": {
+        "title": "Geräte des neuen Raums",
+        "description": "Alles andere wird aus {source} übernommen und lässt sich danach im Editor ändern.",
+        "data": {
+          "climate_entity": "Thermostat",
+          "additional_climate_entities": "Weitere Thermostate im Raum (optional)",
+          "room_temperature_entity": "Raumtemperatursensor",
+          "schedule_entity": "Komfort-Zeitplan",
+          "window_entity": "Fensterkontakt (optional)",
+          "presence_entity": "Anwesenheitssensor im Raum (optional)"
+        }
+      },
+      "house": {
+        "title": "Haus-Einstellungen",
+        "description": "Legt den Hausmodus (Zuhause, Abwesend, Urlaub), das Urlaubsende und eine Übersicht aller Räume an.",
+        "data": {
+          "notify_service": "Benachrichtigungsdienst (optional)"
+        },
+        "data_description": {
+          "notify_service": "Für den Wochenbericht, z. B. notify.mobile_app_patrick."
         }
       }
     },
@@ -74,7 +114,8 @@
       "frost_must_be_below_comfort": "Die Frostschutztemperatur muss unter der Komforttemperatur liegen."
     },
     "abort": {
-      "already_configured": "Für dieses Thermostat ist bereits eine dynamische Heizungssteuerung eingerichtet."
+      "already_configured": "Für dieses Thermostat ist bereits eine dynamische Heizungssteuerung eingerichtet.",
+      "source_missing": "Der Vorlage-Raum ist nicht mehr vorhanden."
     }
   },
   "options": {
@@ -169,7 +210,8 @@
           "window_close_delay": "Fenster: Wartezeit nach dem Schließen",
           "window_temperature": "Temperatur bei offenem Fenster (°C, optional)",
           "heating_season_entity": "Heizperiode / Wintermodus (optional)",
-          "notify_service": "Push-Benachrichtigung (optional)"
+          "notify_service": "Push-Benachrichtigung (optional)",
+          "window_drop_detection": "Fenster ohne Kontakt erkennen"
         },
         "data_description": {
           "window_entity": "EIN erzwingt Absenkung. Ist ein ausgewählter Fensterkontakt nicht verfügbar, wird kein neuer Sollwert geschrieben.",
@@ -180,7 +222,17 @@
           "window_close_delay": "Nach dem Schließen bleibt die Fensterabsenkung so lange bestehen, damit sich die Raumluft beruhigt. 0 = sofort.",
           "window_temperature": "Eigener Sollwert bei offenem Fenster, z. B. 15 °C. Leer lassen, um wie bisher die Absenk- bzw. Abwesenheitstemperatur zu verwenden. Muss unter der Komforttemperatur liegen.",
           "heating_season_entity": "Schalter oder Sensor für die Heizperiode, z. B. ein Wintermodus. Ist er AUS, wird nicht geheizt: der Sollwert geht auf die Frostschutztemperatur oder, ohne sie, auf das Minimum des Thermostats. Ist die Entität nicht verfügbar, wird normal weitergeheizt. Leer lassen zum Abschalten.",
-          "notify_service": "Notify-Dienst fürs Handy, z. B. notify.mobile_app_patrick. Meldet bei aktiver Regelung: Thermostat-Problem oder ausgefallenen Raumfühler nach 30 Minuten, eine wartende Regelung nach 30 Minuten, Heizproblem, Frostgefahr und ein Fenster, das in der Heizperiode über eine Stunde offen ist. Leer lassen zum Abschalten."
+          "notify_service": "Notify-Dienst fürs Handy, z. B. notify.mobile_app_patrick. Meldet bei aktiver Regelung: Thermostat-Problem oder ausgefallenen Raumfühler nach 30 Minuten, eine wartende Regelung nach 30 Minuten, Heizproblem, Frostgefahr und ein Fenster, das in der Heizperiode über eine Stunde offen ist. Leer lassen zum Abschalten.",
+          "window_drop_detection": "Fällt die Raumtemperatur innerhalb von 10 Minuten um 1 °C, wird der Raum 15 Minuten wie bei offenem Fenster abgesenkt. Funktioniert zusätzlich zum Fensterkontakt."
+        }
+      },
+      "house_settings": {
+        "title": "Haus-Einstellungen",
+        "data": {
+          "notify_service": "Benachrichtigungsdienst (optional)"
+        },
+        "data_description": {
+          "notify_service": "Für den Wochenbericht, z. B. notify.mobile_app_patrick."
         }
       }
     },

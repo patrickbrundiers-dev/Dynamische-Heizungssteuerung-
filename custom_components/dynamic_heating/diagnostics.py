@@ -11,6 +11,8 @@ from homeassistant.core import HomeAssistant
 from .const import (
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_CLIMATE_ENTITY,
+    CONF_ENTRY_TYPE,
+    ENTRY_TYPE_HOUSE,
     CONF_GUEST_ENTITY,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_PERSON_ENTITIES,
@@ -46,6 +48,15 @@ async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> dict[str, Any]:
     """Return useful runtime diagnostics while hiding configured entity IDs."""
+    if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HOUSE:
+        house = entry.runtime_data
+        return {
+            "mode": house.mode,
+            "vacation_until": (
+                house.vacation_until.isoformat() if house.vacation_until else None
+            ),
+            "rooms": len(house.rooms()),
+        }
     coordinator = hass.data[DOMAIN][entry.entry_id]
     runtime = {
         "enabled": coordinator.enabled,

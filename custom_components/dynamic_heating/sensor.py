@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -18,8 +19,12 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import CONF_ENTRY_TYPE, DOMAIN, ENTRY_TYPE_HOUSE
 from .coordinator import DynamicHeatingCoordinator
+from .house_entities import HouseEntity
+
+# Only the house overview polls; room sensors follow their coordinator.
+SCAN_INTERVAL = timedelta(seconds=30)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -241,6 +246,20 @@ SENSORS = (
         native_unit_of_measurement="min",
         state_class=SensorStateClass.MEASUREMENT,
     ),
+    HeatingSensorDescription(
+        key="heat_demand",
+        name="Wärmebedarf",
+        icon="mdi:fire",
+        native_unit_of_measurement="%",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="forecast_temperature",
+        name="Vorhergesagte Außentemperatur zum Komfortbeginn",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
 )
 
 
@@ -249,7 +268,13 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Create controller sensors."""
+    """Create controller sensors, or the overview for the house entry."""
+    if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HOUSE:
+        async_add_entities([
+            HouseOverviewSensor(entry.runtime_data, entry, "overview"),
+            HouseHeatDemandSensor(entry.runtime_data, entry, "heat_demand"),
+        ])
+        return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
     async_add_entities(
         HeatingSensor(coordinator, entry, description) for description in SENSORS
@@ -316,6 +341,9 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "proximity_direction",
             "proximity_age_seconds",
             "preheat_minutes",
+            "forecast_temperature",
+            "heat_demand",
+            "heat_demand_source",
             "heating_rate",
             "cooling_rate",
             "projected_temperature",
@@ -355,4 +383,66 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             key: self.coordinator.data[key]
             for key in diagnostic_keys
             if key in self.coordinator.data
+        }
+
+
+class HouseHeatDemandSensor(HouseEntity, SensorEntity):
+    """Highest heat demand of all rooms, e.g. for a boiler or flow temperature."""
+
+    _attr_name = "Wärmebedarf"
+    _attr_icon = "mdi:fire"
+    _attr_should_poll = True
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def _demands(self) -> dict[str, int]:
+        return {
+            room.room_name: room.data.get("heat_demand")
+            for room in self.house.rooms()
+            if room.data and room.data.get("heat_demand") is not None
+        }
+
+    @property
+    def native_value(self) -> int:
+        return max(self._demands().values(), default=0)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        demands = self._demands()
+        return {
+            "average": round(sum(demands.values()) / len(demands)) if demands else 0,
+            "rooms": demands,
+        }
+
+
+class HouseOverviewSensor(HouseEntity, SensorEntity):
+    """Number of rooms heating right now; every room in the attributes."""
+
+    _attr_name = "Räume heizen"
+    _attr_icon = "mdi:home-thermometer-outline"
+    _attr_should_poll = True
+    _attr_native_unit_of_measurement = "Räume"
+
+    @property
+    def native_value(self) -> int:
+        return sum(
+            1
+            for room in self.house.rooms_overview()
+            if room["room_temperature"] is not None
+            and room["target_temperature"] is not None
+            and room["target_temperature"] > room["room_temperature"]
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rooms = self.house.rooms_overview()
+        return {
+            "house_mode": self.house.mode,
+            "vacation_until": (
+                self.house.vacation_until.isoformat()
+                if self.house.vacation_until
+                else None
+            ),
+            "rooms": rooms,
+            "problems": [room["room"] for room in rooms if room["problem"]],
         }

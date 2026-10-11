@@ -4,6 +4,7 @@ This module intentionally has no Home Assistant imports so its calculations
 can be tested independently of the runtime.
 """
 
+import math
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal
@@ -75,6 +76,7 @@ def decide_heating_target(
     off_temperature: float | None = None,
     boost_temperature: float | None = None,
     quick_mode: tuple[str, str, float] | None = None,
+    forecast_temperature: float | None = None,
 ) -> HeatingDecision:
     """Return the target and reason for the current conditions.
 
@@ -85,6 +87,8 @@ def decide_heating_target(
     A ``boost_temperature`` wins over schedule, presence and heating limit,
     but not over an open window or the end of the heating season.
     A ``quick_mode`` (mode, status, target) picked by hand has the same rank.
+    ``forecast_temperature`` is the outdoor temperature forecast for the start
+    of the next comfort period; preheating is timed with it when known.
     """
     if not heating_season:
         decision = HeatingDecision(
@@ -117,6 +121,7 @@ def decide_heating_target(
             away_temperature=away_temperature,
             heating_limit_reached=heating_limit_reached,
             window_temperature=window_temperature,
+            forecast_temperature=forecast_temperature,
         )
     if (
         frost_protection_temperature is not None
@@ -150,6 +155,7 @@ def _decide(
     away_temperature: float | None,
     heating_limit_reached: bool,
     window_temperature: float | None,
+    forecast_temperature: float | None = None,
 ) -> HeatingDecision:
     """Decide without the frost-protection floor.
 
@@ -218,7 +224,7 @@ def _decide(
         temperature_for_lead,
         comfort_temperature,
         heating_rate_c_per_hour,
-        outdoor_temperature,
+        forecast_temperature if forecast_temperature is not None else outdoor_temperature,
         max_preheat_minutes,
     )
 
@@ -317,6 +323,57 @@ def select_forecast_condition(
     if nearest_delta is None or nearest_delta > 90 * 60:
         return None
     return nearest_condition
+
+
+def detect_temperature_drop(
+    samples: list[tuple[datetime, float]],
+    now: datetime,
+    window_seconds: float,
+    drop: float,
+) -> bool:
+    """True when the room fell by ``drop`` within the last ``window_seconds``."""
+    recent = [
+        temperature
+        for moment, temperature in samples
+        if (now - moment).total_seconds() <= window_seconds
+    ]
+    if len(recent) < 2:
+        return False
+    return max(recent) - recent[-1] >= drop
+
+
+def select_forecast_temperature(
+    forecast: list[dict], target_time: datetime | None, now: datetime
+) -> float | None:
+    """Forecast outdoor temperature nearest to the next target time."""
+    if target_time is None or target_time <= now:
+        return None
+    nearest: float | None = None
+    nearest_delta: float | None = None
+    for item in forecast:
+        raw_datetime = item.get("datetime")
+        raw_temperature = item.get("temperature")
+        if not isinstance(raw_datetime, str) or isinstance(raw_temperature, bool):
+            continue
+        try:
+            temperature = float(raw_temperature)
+            forecast_time = datetime.fromisoformat(raw_datetime.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(temperature):
+            continue
+        comparison_time = target_time
+        if forecast_time.tzinfo is None and comparison_time.tzinfo is not None:
+            forecast_time = forecast_time.replace(tzinfo=comparison_time.tzinfo)
+        elif forecast_time.tzinfo is not None and comparison_time.tzinfo is None:
+            comparison_time = comparison_time.replace(tzinfo=forecast_time.tzinfo)
+        delta = abs((forecast_time - comparison_time).total_seconds())
+        if nearest_delta is None or delta < nearest_delta:
+            nearest_delta = delta
+            nearest = temperature
+    if nearest_delta is None or nearest_delta > 90 * 60:
+        return None
+    return nearest
 
 
 def apply_forecast_solar_adjustment(
