@@ -2074,3 +2074,32 @@ async def test_heating_watchdog_flags_a_room_that_does_not_warm_up(
         # It warms up again: the problem clears.
         assert await refresh_at(130, "18.5") is False
         assert await refresh_at(200, "18.5") is False
+
+
+@pytest.mark.asyncio
+async def test_heating_watchdog_ignores_thermostats_switched_off(
+    hass, enable_custom_integrations
+):
+    """A thermostat switched off by hand is no heating problem."""
+    _set_up_test_entities(hass, room_temperature="18.0")
+    _, coordinator = await _setup_integration(hass)
+    _set_climate(hass, state="off")
+    start = dt_util.utcnow()
+
+    with _capture_climate_calls(hass):
+        coordinator.enabled = True
+        for minutes in (0, 60, 130):
+            at = start + timedelta(minutes=minutes)
+            hass.states.async_set(
+                "sensor.living_room_temperature",
+                "18.0",
+                force_update=True,
+                timestamp=at.timestamp(),
+            )
+            with patch(
+                "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+                return_value=at,
+            ):
+                await coordinator.async_refresh()
+
+    assert coordinator.data["heating_problem"] is False

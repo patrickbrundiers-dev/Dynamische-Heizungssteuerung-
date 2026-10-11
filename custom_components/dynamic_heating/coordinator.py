@@ -1799,10 +1799,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._apply_target(
                 decision.mode, decision.target_temperature, room_temperature, result
             )
+            # Only watch while the thermostats really got the target: not with
+            # an open window, a manual override or every thermostat off.
             self._update_heating_watchdog(
                 target_temperature,
                 room_temperature,
-                watch=not (window_open or result["manual_override"]),
+                watch=bool(result.get("thermostat_setpoints"))
+                and not (window_open or result["manual_override"]),
             )
         else:
             self._update_heating_watchdog(None, room_temperature, watch=False)
