@@ -285,3 +285,11 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 - **Temperaturen** (Editor, Seite **Raum und Heizverhalten**): *Zuhause* 20 °C, *Aktivität* 22 °C, *Schlafen* 18 °C als Standard. *Abwesend* nutzt die Abwesenheitstemperatur, ohne sie die Eco-Temperatur.
 - **Tasten je Raum**: Für jede Betriebsart gibt es eine Taste-Entität (z. B. `button.<raum>_schlafen`), die den Raum sofort umschaltet, auch für Automationen, Sprachassistenten oder NFC-Tags. Das Attribut `active` zeigt, ob diese Betriebsart gerade läuft.
 - **Raumkarte**: zeigt alle Betriebsarten als Tasten mit Symbol. Mit `modes:` lässt sich die Auswahl eingrenzen, z. B. `modes: [Automatik, Komfort, Schlafen, Abwesend, Boost]`.
+
+## Version 0.5.3: Raum-Thermostat wie bei Better Thermostat
+
+- **Thermostat-Entität je Raum** (`climate.<raum>_heizung` o. ä.): zeigt Raumtemperatur und das Ziel, das die Steuerung gerade gewählt hat. Damit funktionieren die normale Thermostat-Karte, Mushroom-, Tile- und Better-Thermostat-Karten sowie Sprachassistenten wie bisher mit dem BT-Thermostat.
+- **Temperatur einstellen**: hält den Wert für die gewählte **Betriebsart-Dauer** (z. B. bis zum nächsten Zeitplanwechsel), danach regelt der Raum wieder automatisch. Die Betriebsart zeigt dann *Manuell*, der Status z. B. „21,5 °C von Hand bis 22:30 Uhr“. Der Wert übersteht Neustarts.
+- **Presets** sind die Betriebsarten (*Komfort*, *Zuhause*, *Aktivität*, *Eco*, *Schlafen*, *Abwesend*, *Boost*); *Kein Preset* ist Automatik.
+- **Aus** setzt die Betriebsart *Aus* (Frostschutz), **Heizen** geht zurück auf Automatik.
+- Ein offenes Fenster und das Ende der Heizperiode haben weiter Vorrang.

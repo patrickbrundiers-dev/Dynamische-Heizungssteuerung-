@@ -2693,3 +2693,80 @@ async def test_preset_buttons_switch_the_room_like_better_thermostat(
     assert coordinator.data["mode"] == "boost"
     await press("auto")
     assert coordinator.data["quick_mode"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_room_thermostat_entity_sets_temperature_presets_and_off(
+    hass, enable_custom_integrations
+):
+    """The room climate entity shows the room and drives the quick modes."""
+    _set_up_test_entities(hass, room_temperature="20.0")
+    entry, coordinator = await _setup_integration(hass)
+    registry = er.async_get(hass)
+    climate_id = registry.async_get_entity_id(
+        "climate", DOMAIN, f"{entry.entry_id}_room_climate"
+    )
+    select_id = registry.async_get_entity_id(
+        "select", DOMAIN, f"{entry.entry_id}_quick_mode"
+    )
+    state = hass.states.get(climate_id)
+    assert state.state == "heat"
+    assert state.attributes["current_temperature"] == 20.0
+    assert state.attributes["preset_mode"] == "none"
+    assert "comfort" in state.attributes["preset_modes"]
+
+    await hass.services.async_call(
+        "climate", "set_temperature",
+        {"entity_id": climate_id, "temperature": 21.5}, blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert coordinator.data["mode"] == "quick_manual"
+    assert coordinator.data["target_temperature"] == 21.5
+    assert coordinator.data["status"].startswith("21,5 °C von Hand")
+    state = hass.states.get(climate_id)
+    assert state.attributes["temperature"] == 21.5
+    assert state.attributes["manual"] is True
+    assert hass.states.get(select_id).state == "Manuell"
+
+    # The manual temperature survives a restart.
+    coordinator._save_runtime_state()
+    await coordinator._state_store._async_handle_write_data()
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    assert coordinator.quick_mode == "manual"
+    assert coordinator.data["target_temperature"] == 21.5
+
+    await hass.services.async_call(
+        "climate", "set_preset_mode",
+        {"entity_id": climate_id, "preset_mode": "eco"}, blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert coordinator.data["mode"] == "quick_eco"
+    assert hass.states.get(climate_id).attributes["preset_mode"] == "eco"
+
+    await hass.services.async_call(
+        "climate", "set_hvac_mode",
+        {"entity_id": climate_id, "hvac_mode": "off"}, blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert coordinator.data["mode"] == "quick_off"
+    assert hass.states.get(climate_id).state == "off"
+
+    await hass.services.async_call(
+        "climate", "set_hvac_mode",
+        {"entity_id": climate_id, "hvac_mode": "heat"}, blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert coordinator.data["quick_mode"] == "auto"
+    assert hass.states.get(climate_id).attributes["preset_mode"] == "none"
+
+    # Picking Manuell in the select holds the current target.
+    target = coordinator.data["target_temperature"]
+    await hass.services.async_call(
+        "select", "select_option", {"entity_id": select_id, "option": "Manuell"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert coordinator.data["mode"] == "quick_manual"
+    assert coordinator.data["target_temperature"] == target

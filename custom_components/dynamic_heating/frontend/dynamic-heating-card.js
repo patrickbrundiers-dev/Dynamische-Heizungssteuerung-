@@ -143,7 +143,9 @@ class DynamicHeatingCard extends HTMLElement {
     const next = time(attributes.next_event);
     const valves = Object.entries(attributes.thermostat_setpoints || {});
 
-    const modes = this._config.modes || select.attributes.options || MODES;
+    // Manuell is set through the temperature, not picked as a button.
+    const modes = (this._config.modes || select.attributes.options || MODES)
+      .filter((mode) => mode !== "Manuell");
     const modeButtons = modes.map((mode) => `
       <button data-action="mode" data-value="${escape(mode)}" class="mode ${select.state === mode ? "active" : ""}">
         ${ICONS[mode] ? `<ha-icon icon="${ICONS[mode]}"></ha-icon>` : ""}<span>${escape(mode)}</span>
