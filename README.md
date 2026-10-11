@@ -305,3 +305,15 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 - **Ereignis `dynamic_heating_mode_changed`**: Bei jedem Wechsel von Modus oder Sollwert, mit `room`, `mode`, `previous_mode`, `target_temperature`, `status`, `present`, `window_open`, `active_schedule` und `quick_mode`.
 - **Aggressiv-Modus**: Liegt der Raum weiter als der eingestellte Bereich unter oder über dem Soll, wird Soll plus bzw. minus Versatz an die Ventile gesendet. Angezeigt wird weiter der eigentliche Sollwert. Standardmäßig aus.
 - **Fenstererkennung der Thermostate abschalten**: Bei aktiver Regelung und vorhandenem Fensterkontakt schaltet die Integration die eigenen Fenstererkennungs-Schalter der Thermostate (`…_window_detection`, z. B. Aqara E1) aus.
+
+## Version 0.7.0: Ideen aus Better Thermostat und Climate Group Helper
+
+- **Mehrere Fenster- und Türkontakte**: Unter *Weitere Fenster- und Türkontakte* zählt jeder offene Kontakt, mit denselben Verzögerungen. Ein ausgefallener zusätzlicher Kontakt gilt als geschlossen.
+- **Kalender als Zeitplan**: Statt eines Zeitplan-Helfers kann auch eine Kalender-Entität dienen, als Haupt-, weiterer oder Eco-Zeitplan. Ein laufender Termin ist Komfortzeit; `temperature: 22` in der Beschreibung setzt die Temperatur.
+- **Temperatur-Regler**: Komfort-, Eco-, Zuhause-, Aktivität-, Schlafen- und Boost-Temperatur gibt es als Regler-Entitäten fürs Dashboard (wie die Preset-Temperaturen von Better Thermostat). Sie werden in den Raum-Optionen gespeichert, ohne den Raum neu zu laden.
+- **Raum-Versatz**: verschiebt alle Sollwerte des Raums um bis zu ±3 °C (nicht bei offenem Fenster, Frostschutz, Aus, Wartung). Eine direkt am Raum-Thermostat eingestellte Temperatur setzt ihn auf 0.
+- **Versatz je Ventil**: Bei mehreren Thermostaten pro Raum bekommt jedes einen eigenen Versatz-Regler, z. B. für ein Ventil in einer kalten Ecke.
+- **Ventile sperren**: Wird an einem Thermostat gedreht, stellt die Regelung den Sollwert des Raums sofort wieder her. Hat Vorrang vor „Drehen am Ventil gilt für den Raum“.
+- **Kindersicherung**: Ein Schalter je Raum sperrt die Tasten aller Thermostate, wenn sie einen Kindersicherungs-Schalter haben (z. B. Aqara E1).
+- **Luftfeuchte**: Ein optionaler Luftfeuchtesensor wird am Raum-Thermostat angezeigt.
+- **Temperaturtrend**: Sensor mit der Änderung der Raumtemperatur in °C pro Stunde über die letzte halbe Stunde.

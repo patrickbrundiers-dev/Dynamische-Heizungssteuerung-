@@ -145,7 +145,8 @@
           "eco_schedule_entity": "Eco schedule (optional)",
           "sync_manual_change": "Turning a valve applies to the room",
           "aggressive_range": "Aggressive mode: range (°C, optional)",
-          "aggressive_offset": "Aggressive mode: offset"
+          "aggressive_offset": "Aggressive mode: offset",
+          "lock_valves": "Lock valves"
         },
         "data_description": {
           "climate_entity": "Select the climate entity this room controller may adjust. Avoid running another automation that writes targets to the same thermostat.",
@@ -169,7 +170,8 @@
           "eco_schedule_entity": "Schedule helper whose blocks carry a temperature in their additional data (e.g. temperature: 17). While a block is active it replaces the setback temperature, at most up to the comfort temperature.",
           "sync_manual_change": "A setpoint turned at a thermostat goes to every thermostat of the room and holds as quick mode Manuell for the chosen duration. Off: control only pauses until the next mode change.",
           "aggressive_range": "When the room is more than this below or above the target, target plus or minus the offset is sent so sluggish valves open or close decisively. Leave empty to turn off.",
-          "aggressive_offset": "How far the sent setpoint is raised or lowered outside the range."
+          "aggressive_offset": "How far the sent setpoint is raised or lowered outside the range.",
+          "lock_valves": "A setpoint turned at a thermostat is set back to the room's target at once (like Better Thermostat's child lock or Climate Group Helper's lock sync mode). Wins over 'Turning a valve applies to the room'."
         }
       },
       "presence": {
@@ -234,7 +236,9 @@
           "heating_season_entity": "Heating season / winter mode (optional)",
           "notify_service": "Push notification (optional)",
           "window_drop_detection": "Detect windows without a contact",
-          "disable_trv_window_detection": "Turn off the thermostats' window detection"
+          "disable_trv_window_detection": "Turn off the thermostats' window detection",
+          "additional_window_entities": "More window and door contacts (optional)",
+          "humidity_entity": "Humidity sensor (optional)"
         },
         "data_description": {
           "window_entity": "When ON, setback is enforced. If configured but unavailable, the controller avoids writing a new target.",
@@ -247,7 +251,9 @@
           "heating_season_entity": "Switch or sensor for the heating season, e.g. a winter mode. While it is OFF the room is not heated: the setpoint goes to the frost protection temperature or, without one, the thermostat minimum. If the entity is unavailable, heating continues normally. Leave empty to disable.",
           "notify_service": "Notify service for your phone, e.g. notify.mobile_app_phone. While control is on it reports thermostat problems or a failed room sensor after 30 minutes, blocked control after 30 minutes, heating problems, frost risk and a window open for over an hour in the heating season. Leave empty to turn off.",
           "window_drop_detection": "When the room cools by 1 °C within 10 minutes it is lowered for 15 minutes as with an open window. Works in addition to a window contact.",
-          "disable_trv_window_detection": "While control is on and the room has a window contact, turn off the thermostats' own window detection (switch …_window_detection), so no valve closes on its own while the room should heat."
+          "disable_trv_window_detection": "While control is on and the room has a window contact, turn off the thermostats' own window detection (switch …_window_detection), so no valve closes on its own while the room should heat.",
+          "additional_window_entities": "If any of them is open, the room counts as open, with the same delays. An extra contact that drops out counts as closed.",
+          "humidity_entity": "The humidity is shown on the room thermostat."
         }
       },
       "house_settings": {

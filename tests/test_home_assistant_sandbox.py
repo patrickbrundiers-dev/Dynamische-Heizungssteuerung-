@@ -3018,3 +3018,216 @@ async def test_thermostat_window_detection_is_turned_off(
     assert [call.data["entity_id"] for call in turn_off] == [
         "switch.living_room_trv_window_detection"
     ]
+
+
+@pytest.mark.asyncio
+async def test_any_extra_window_contact_opens_the_room(
+    hass, enable_custom_integrations
+):
+    """A door contact next to the window contact lowers the room as well."""
+    _set_up_test_entities(hass)
+    hass.states.async_set("binary_sensor.living_room_door", "off")
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_window_entities"] = ["binary_sensor.living_room_door"]
+    await coordinator.async_refresh()
+    assert coordinator.data["window_open"] is False
+
+    hass.states.async_set("binary_sensor.living_room_door", "on")
+    await coordinator.async_refresh()
+    assert coordinator.data["window_open"] is True
+    assert coordinator.data["mode"] == "window"
+
+    # A dropped-out extra contact counts as closed.
+    hass.states.async_set("binary_sensor.living_room_door", "unavailable")
+    await coordinator.async_refresh()
+    assert coordinator.data["window_open"] is False
+
+
+@pytest.mark.asyncio
+async def test_calendar_event_works_as_comfort_schedule(
+    hass, enable_custom_integrations
+):
+    """A running calendar event is comfort time, with its description temperature."""
+    _set_up_test_entities(hass)
+    end = (dt_util.now() + timedelta(hours=3)).replace(tzinfo=None)
+    hass.states.async_set(
+        "calendar.holidays",
+        "on",
+        {
+            "friendly_name": "Ferien",
+            "description": "temperature: 23",
+            "end_time": end.strftime("%Y-%m-%d %H:%M:%S"),
+        },
+    )
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_schedule_entities"] = ["calendar.holidays"]
+    await coordinator.async_set_schedule("calendar.holidays")
+
+    assert coordinator.data["mode"] == "comfort"
+    assert coordinator.data["target_temperature"] == 23.0
+    assert coordinator.data["next_event"] is not None
+
+
+@pytest.mark.asyncio
+async def test_room_offset_shifts_targets_until_a_temperature_is_set(
+    hass, enable_custom_integrations
+):
+    """The room offset moves the target; a temperature set directly resets it."""
+    _set_up_test_entities(hass)
+    _comfort_now(hass)
+    _, coordinator = await _setup_integration(hass)
+    await coordinator.async_set_room_offset(1.0)
+    assert coordinator.data["target_temperature"] == 22.0
+    assert coordinator.data["room_offset"] == 1.0
+
+    # Not on top of an open window.
+    hass.states.async_set("binary_sensor.living_room_window", "on")
+    await coordinator.async_refresh()
+    assert coordinator.data["target_temperature"] == 18.0
+    hass.states.async_set("binary_sensor.living_room_window", "off")
+
+    await coordinator.async_set_manual_temperature(20.5)
+    assert coordinator.room_offset == 0.0
+    assert coordinator.data["target_temperature"] == 20.5
+
+
+@pytest.mark.asyncio
+async def test_valve_offset_shifts_one_valve(hass, enable_custom_integrations):
+    """A valve in a cold corner gets its own offset on top of the target."""
+    _set_up_test_entities(hass)
+    _comfort_now(hass)
+    _set_trv(hass, "climate.living_room_2")
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["additional_climate_entities"] = ["climate.living_room_2"]
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_set_valve_offset("climate.living_room_2", 1.5)
+
+    assert sorted(
+        (call[2]["entity_id"], call[2]["temperature"]) for call in calls
+    ) == [("climate.living_room", 21.0), ("climate.living_room_2", 22.5)]
+    assert coordinator.valve_offsets == {"climate.living_room_2": 1.5}
+
+
+@pytest.mark.asyncio
+async def test_locked_valves_are_set_back(hass, enable_custom_integrations):
+    """With locked valves a turned thermostat gets the room target again."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["lock_valves"] = True
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        _set_climate(hass, temperature=21.0)
+        await coordinator.async_refresh()
+        _set_climate(hass, temperature=25.0)
+        await coordinator.async_refresh()
+
+    assert coordinator.data["manual_override"] is False
+    assert coordinator.quick_mode == "auto"
+    assert coordinator.data["valve_reset"] == "climate.living_room"
+    assert [call[2]["temperature"] for call in calls] == [21.0, 21.0]
+
+
+@pytest.mark.asyncio
+async def test_temperature_trend_sensor(hass, enable_custom_integrations):
+    """The room's trend in °C per hour over the last half hour."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    now = dt_util.utcnow()
+    coordinator._trend_samples = [
+        (now - timedelta(minutes=20), 17.0),
+        (now - timedelta(minutes=10), 17.5),
+    ]
+    await coordinator.async_refresh()
+    assert coordinator.data["temperature_trend"] == pytest.approx(3.0, abs=0.05)
+
+
+@pytest.mark.asyncio
+async def test_temperature_sliders_save_the_options(
+    hass, enable_custom_integrations
+):
+    """Comfort set on its slider is saved and used without a reload."""
+    _set_up_test_entities(hass)
+    _comfort_now(hass)
+    entry, coordinator = await _setup_integration(hass)
+    number_id = er.async_get(hass).async_get_entity_id(
+        "number", DOMAIN, f"{entry.entry_id}_comfort_temperature"
+    )
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": number_id, "value": 22.5}, blocking=True
+    )
+    await hass.async_block_till_done()
+    assert entry.options["comfort_temperature"] == 22.5
+    assert coordinator.data["target_temperature"] == 22.5
+    assert hass.data[DOMAIN][entry.entry_id] is coordinator
+
+    eco_id = er.async_get(hass).async_get_entity_id(
+        "number", DOMAIN, f"{entry.entry_id}_eco_temperature"
+    )
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": eco_id, "value": 23}, blocking=True
+        )
+
+
+@pytest.mark.asyncio
+async def test_child_lock_switch_locks_every_valve(hass, enable_custom_integrations):
+    """The room's Kindersicherung switches the valves' child lock."""
+    _set_up_test_entities(hass)
+    trv_entry = MockConfigEntry(domain="mqtt")
+    trv_entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=trv_entry.entry_id, identifiers={("mqtt", "trv_1")}
+    )
+    registry = er.async_get(hass)
+    for domain, unique_id, object_id in (
+        ("climate", "trv_1_climate", "living_room_trv"),
+        ("switch", "trv_1_lock", "living_room_child_lock"),
+    ):
+        registry.async_get_or_create(
+            domain,
+            "mqtt",
+            unique_id,
+            suggested_object_id=object_id,
+            device_id=device.id,
+            config_entry=trv_entry,
+        )
+    hass.states.async_set("switch.living_room_child_lock", "off")
+    _set_trv(hass, "climate.living_room_trv")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Test Wohnzimmer",
+        unique_id="climate.living_room",
+        data={**_config_data(), "additional_climate_entities": ["climate.living_room_trv"]},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    turn_on = async_mock_service(hass, "switch", "turn_on")
+    lock_id = registry.async_get_entity_id("switch", DOMAIN, f"{entry.entry_id}_child_lock")
+    assert hass.states.get(lock_id).state == "off"
+
+    # The mocked service would also swallow the call to the room switch, so
+    # drive the coordinator the switch calls.
+    await hass.data[DOMAIN][entry.entry_id].async_set_child_lock(True)
+    assert [call.data["entity_id"] for call in turn_on] == [
+        "switch.living_room_child_lock"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_room_thermostat_shows_humidity(hass, enable_custom_integrations):
+    """A configured humidity sensor appears on the room thermostat."""
+    _set_up_test_entities(hass)
+    hass.states.async_set("sensor.living_room_humidity", "54")
+    entry, coordinator = await _setup_integration(hass)
+    coordinator.config["humidity_entity"] = "sensor.living_room_humidity"
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    climate_id = er.async_get(hass).async_get_entity_id(
+        "climate", DOMAIN, f"{entry.entry_id}_room_climate"
+    )
+    assert hass.states.get(climate_id).attributes["current_humidity"] == 54.0

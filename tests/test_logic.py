@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 from custom_components.dynamic_heating.logic import (
     TrendSample,
     aggressive_setpoint,
+    calendar_temperature,
+    temperature_trend,
     select_schedule,
     apply_hysteresis,
     calculate_lead_minutes,
@@ -622,3 +624,19 @@ def test_schedule_selection_by_id_number_or_name() -> None:
     assert select_schedule(schedules, "2") == "schedule.holidays"
     assert select_schedule(schedules, "ferien") == "schedule.holidays"
     assert select_schedule(schedules, "unbekannt") == "schedule.school"
+
+
+def test_calendar_description_carries_a_temperature() -> None:
+    assert calendar_temperature("Ferien\ntemperature: 22,5") == 22.5
+    assert calendar_temperature("Temperature: 19") == 19.0
+    assert calendar_temperature("keine Angabe") is None
+    assert calendar_temperature(None) is None
+    assert calendar_temperature("temperature: 80") is None
+
+
+def test_temperature_trend_is_a_slope_per_hour() -> None:
+    start = datetime(2026, 10, 11, 12, 0, tzinfo=UTC)
+    samples = [(start + timedelta(minutes=m), 20.0 + m / 60) for m in range(0, 31, 5)]
+    assert temperature_trend(samples, 600) == 1.0
+    assert temperature_trend(samples[:2], 600) is None
+    assert temperature_trend([], 600) is None

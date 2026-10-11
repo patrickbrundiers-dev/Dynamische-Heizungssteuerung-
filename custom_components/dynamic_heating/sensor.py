@@ -48,6 +48,13 @@ SENSORS = (
         state_class=SensorStateClass.MEASUREMENT,
     ),
     HeatingSensorDescription(
+        key="temperature_trend",
+        name="Temperaturtrend",
+        icon="mdi:chart-line-variant",
+        native_unit_of_measurement="°C/h",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
         key="outdoor_temperature",
         name="Außentemperatur",
         device_class=SensorDeviceClass.TEMPERATURE,
