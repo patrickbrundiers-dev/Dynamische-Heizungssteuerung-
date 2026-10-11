@@ -134,3 +134,19 @@ DEFAULT_BOOST_DURATION: Final = 3600
 # data (e.g. ``temperature: 22``); it replaces the comfort temperature while
 # that block is active.
 SCHEDULE_TEMPERATURE_ATTRIBUTE: Final = "temperature"
+
+# Problem entities of a thermostat's device that are not reported. Aqara E1's
+# "valve_alarm" comes from its valve detection and stays on for days while the
+# valve works normally (typically with an external sensor or several valves
+# per room), which would keep the problem sensor on permanently.
+IGNORED_PROBLEM_ENTITY_SUFFIXES: Final = ("_valve_alarm",)
+
+# A room sensor that has not reported for this long counts as failed, so the
+# room falls back to the thermostats' readings instead of a frozen value.
+ROOM_SENSOR_STALE_SECONDS: Final = 21600
+
+# Heating watchdog: the room stays at least this far below its target for this
+# long without warming by the given amount (valve stuck, boiler off, ...).
+HEATING_WATCHDOG_GAP: Final = 1.0
+HEATING_WATCHDOG_SECONDS: Final = 7200
+HEATING_WATCHDOG_MIN_RISE: Final = 0.3

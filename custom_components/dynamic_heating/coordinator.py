@@ -29,7 +29,12 @@ from .const import (
     CONF_HYSTERESIS,
     EXTERNAL_TEMPERATURE_MIN_CHANGE,
     EXTERNAL_TEMPERATURE_RESEND_SECONDS,
+    HEATING_WATCHDOG_GAP,
+    HEATING_WATCHDOG_MIN_RISE,
+    HEATING_WATCHDOG_SECONDS,
+    IGNORED_PROBLEM_ENTITY_SUFFIXES,
     LOW_BATTERY_PERCENT,
+    ROOM_SENSOR_STALE_SECONDS,
     DEFAULT_HYSTERESIS,
     CONF_VALVE_MAINTENANCE,
     CONF_CLIMATE_ENTITY,
@@ -192,6 +197,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Last settled decision of the presence sensor; held while a new
         # sensor state is still inside its on/off stability window.
         self._sensor_present: bool | None = None
+        # Heating watchdog: since when the room has been well below its target
+        # without warming up, and the temperature at that moment.
+        self._shortfall_since: datetime | None = None
+        self._shortfall_temperature: float | None = None
+        self.heating_problem = False
         self._proximity_status_category = "unconfigured"
         self._proximity_metrics_dirty = False
         self._proximity_last_state_update: datetime | None = None
@@ -515,7 +525,6 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         climate_state: State | None,
         *,
         window_open: bool,
-        present: bool,
         schedule_active: bool,
         eco_temperature: float,
     ) -> None:
@@ -525,13 +534,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         is_heating = self._is_heating(climate_state, room_temperature, setpoint_value)
         now = dt_util.utcnow()
 
-        if window_open or not present:
+        # Absence only lowers the target; the room still heats and cools
+        # normally, and the night setback is the main cooling phase to learn.
+        if window_open:
             self._heating_sample.reset()
             self._cooling_sample.reset()
-            self._last_learning_status = (
-                "Lernen pausiert: Fenster offen" if window_open
-                else "Lernen pausiert: keine Anwesenheit"
-            )
+            self._last_learning_status = "Lernen pausiert: Fenster offen"
             return
 
         if is_heating:
@@ -1154,6 +1162,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if level is not None and level <= LOW_BATTERY_PERCENT:
                         found.append(f"Batterie schwach ({level:.0f} %)")
                 elif device_entry.domain == "binary_sensor" and state.state == "on":
+                    if device_entry.entity_id.endswith(IGNORED_PROBLEM_ENTITY_SUFFIXES):
+                        continue
                     if device_class == "battery":
                         found.append("Batterie schwach")
                     elif device_class == "problem":
@@ -1162,6 +1172,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if found:
                 warnings[entity_id] = found
         return warnings
+
+    def _room_temperature(self) -> float | None:
+        """The room sensor's reading, or None when it failed or went silent."""
+        state = self._state(CONF_ROOM_TEMPERATURE_ENTITY)
+        value = _as_float(state)
+        if value is None:
+            return None
+        reported = getattr(state, "last_reported", None) or state.last_updated
+        if (dt_util.utcnow() - reported).total_seconds() > ROOM_SENSOR_STALE_SECONDS:
+            return None
+        return value
 
     def _thermostat_temperature(self, entity_id: str) -> float | None:
         """The thermostat's own temperature reading, if it reports one."""
@@ -1335,6 +1356,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         unavailable = [entity_id for entity_id in states if entity_id not in available]
         result["unavailable_thermostats"] = unavailable
+        for entity_id in unavailable:
+            # After a dropout (Zigbee, restart) the thermostat may come back with
+            # another setpoint. That is not a manual change: forget what was
+            # written so the target is sent again once it is reachable.
+            self._written.pop(entity_id, None)
 
         if self._manual_override is None:
             for entity_id, state in available.items():
@@ -1391,6 +1417,41 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "nicht verfügbar"
             )
 
+    def _update_heating_watchdog(
+        self, target: float | None, room_temperature: float, *, watch: bool
+    ) -> None:
+        """Flag a room that stays well below its target without warming up."""
+        now = dt_util.utcnow()
+        if (
+            not watch
+            or target is None
+            or target - room_temperature < HEATING_WATCHDOG_GAP
+        ):
+            self._shortfall_since = None
+            self._shortfall_temperature = None
+            self.heating_problem = False
+            return
+        if (
+            self._shortfall_since is None
+            or self._shortfall_temperature is None
+            or room_temperature - self._shortfall_temperature
+            >= HEATING_WATCHDOG_MIN_RISE
+        ):
+            # Warming up as it should: watch from here on.
+            self._shortfall_since = now
+            self._shortfall_temperature = room_temperature
+            self.heating_problem = False
+            return
+        if (now - self._shortfall_since).total_seconds() >= HEATING_WATCHDOG_SECONDS:
+            if not self.heating_problem:
+                _LOGGER.warning(
+                    "Room stays at %.1f °C, well below its target of %.1f °C, "
+                    "without warming up",
+                    room_temperature,
+                    target,
+                )
+            self.heating_problem = True
+
     async def async_start_boost(self) -> None:
         """Heat to the boost temperature for the configured duration."""
         duration = int(self.config.get(CONF_BOOST_DURATION) or DEFAULT_BOOST_DURATION)
@@ -1407,6 +1468,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._sync_external_temperature()
         result = await self._async_control_cycle()
         result["thermostat_warnings"] = self._thermostat_warnings()
+        result["heating_problem"] = self.heating_problem
         result["external_temperature_thermostats"] = sorted(self._external_fed)
         return result
 
@@ -1458,7 +1520,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self.config.get(CONF_EXTERNAL_TEMPERATURE):
             self._external_fed.clear()
             return
-        room_temperature = _as_float(self._state(CONF_ROOM_TEMPERATURE_ENTITY))
+        room_temperature = self._room_temperature()
         feed = self.enabled and room_temperature is not None and not release
         now = dt_util.utcnow()
         fed: set[str] = set()
@@ -1506,7 +1568,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_control_cycle(self) -> dict[str, Any]:
         """Read Home Assistant states, calculate a target and optionally apply it."""
-        room_temperature = _as_float(self._state(CONF_ROOM_TEMPERATURE_ENTITY))
+        room_temperature = self._room_temperature()
         schedule_state = self._state(CONF_SCHEDULE_ENTITY)
         climate_state = self._state(CONF_CLIMATE_ENTITY)
         outdoor_temperature = self._outdoor_temperature()
@@ -1625,7 +1687,6 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 room_temperature,
                 climate_state,
                 window_open=window_open,
-                present=present,
                 schedule_active=schedule_active,
                 eco_temperature=eco_temperature,
             )
@@ -1738,7 +1799,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._apply_target(
                 decision.mode, decision.target_temperature, room_temperature, result
             )
+            self._update_heating_watchdog(
+                target_temperature,
+                room_temperature,
+                watch=not (window_open or result["manual_override"]),
+            )
         else:
+            self._update_heating_watchdog(None, room_temperature, watch=False)
             self._written.clear()
             self._calibration.clear()
             self._maintenance_started = None

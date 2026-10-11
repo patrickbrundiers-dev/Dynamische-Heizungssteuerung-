@@ -43,7 +43,7 @@ Eine neu eingerichtete Regelung startet ausgeschaltet und muss bewusst eingescha
 
 Die Komfort- und Absenktemperatur sowie die maximale Vorheizzeit werden beim Einrichten konfiguriert. Fenster offen oder keine Anwesenheit führt zur Absenkung. Ist ein notwendiger Messwert nicht verfügbar, wird kein neuer Sollwert gesetzt. Ist das Thermostat selbst nicht verfügbar, stoppt die Regelung ebenfalls mit einem klaren Status.
 
-Die Abkühlrate wird nur gelernt, wenn das Fenster geschlossen ist, Anwesenheit erkannt wird, der Schedule-Helfer inaktiv ist und das Thermostat auf einer Absenktemperatur steht. Das Lernen ignoriert kleine/unplausible Temperaturänderungen und begrenzt die resultierende Rate. Anfangs wird ein konservativer Startwert verwendet; der Wert wird erst durch reale stabile Beobachtungen angepasst. Außentemperaturkorrektur und Abkühlrate sind Schätzungen, keine Wetter- oder Gebäudesimulation.
+Die Abkühlrate wird nur gelernt, wenn das Fenster geschlossen ist, der Schedule-Helfer inaktiv ist und das Thermostat auf einer Absenktemperatur steht. Das Lernen ignoriert kleine/unplausible Temperaturänderungen und begrenzt die resultierende Rate. Anfangs wird ein konservativer Startwert verwendet; der Wert wird erst durch reale stabile Beobachtungen angepasst. Außentemperaturkorrektur und Abkühlrate sind Schätzungen, keine Wetter- oder Gebäudesimulation.
 
 ### Diagnose bei der ersten Raumprobe
 
@@ -243,3 +243,11 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 
 - **Komforttemperatur je Zeitfenster:** Ein Block im Zeitplan-Helfer kann unter „Zusätzliche Daten“ eine eigene Temperatur tragen, z. B. `temperature: 22`. Solange dieser Block aktiv ist, gilt sie statt der Komforttemperatur des Raums; Blöcke ohne Angabe nutzen weiter die normale Komforttemperatur. Das Vorheizen zielt auf die normale Komforttemperatur, weil der Zeitplan die Daten des nächsten Blocks erst zeigt, wenn er beginnt. Die Attribute `comfort_temperature` und `schedule_comfort_temperature` zeigen den gerade gültigen Wert.
 - **Boost:** Der neue Schalter **Boost** heizt für die eingestellte Dauer (Standard 60 Minuten) auf die Boost-Temperatur (Standard 24 °C) und schaltet sich danach selbst aus. Boost hat Vorrang vor Zeitplan, Anwesenheit und Heizgrenze, nicht aber vor einem offenen Fenster oder ausgeschalteter Heizperiode. Temperatur und Dauer stehen auf der Seite **Raum und Heizverhalten**.
+
+### Selbstüberwachung (Version 0.4.7)
+
+- **Thermostat-Problem** meldet schwache Batterien, nicht erreichbare Thermostate und Gerätefehler. Den `valve_alarm` der Aqara E1 ignoriert er, weil die Ventilerkennung ihn auch bei einwandfrei arbeitenden Ventilen tagelang setzt.
+- **Heizproblem** schaltet ein, wenn der Raum mindestens 1 °C unter dem Ziel liegt und sich zwei Stunden lang um weniger als 0,3 °C erwärmt (Ventil hängt, Heizung aus). Bei offenem Fenster und manueller Übersteuerung wird nicht überwacht.
+- Kommt ein Thermostat nach einem Funk- oder Neustart-Ausfall mit einem anderen Sollwert zurück, wird das Ziel erneut gesendet und nicht als manuelle Änderung gewertet.
+- Meldet der Raumfühler sechs Stunden lang keinen Wert, gilt er als ausgefallen: Die Regelung nutzt dann die Thermostat-Messwerte, und Thermostate mit externem Fühler werden auf ihren eigenen Sensor zurückgestellt.
+- Abwesenheit pausiert das Lernen nicht mehr; nur ein offenes Fenster tut das. So wird nachts im Absenkbetrieb die Abkühlrate gelernt.
