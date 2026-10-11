@@ -478,3 +478,25 @@ async def test_target_reached_fires_when_the_room_warms_up(
     assert [event.data["type"] for event in events] == [
         "target_reached", "window_opened"
     ]
+
+
+def test_valve_entity_names_follow_the_valve_once_it_has_a_state() -> None:
+    """After a restart the valve may have no state yet; the name must catch up."""
+    from unittest.mock import MagicMock
+
+    from custom_components.dynamic_heating.number import ValveOffset
+    from custom_components.dynamic_heating.switch import SkipValveSwitch
+
+    names = {}
+    coordinator = MagicMock()
+    coordinator._friendly_name.side_effect = lambda entity_id: names.get(
+        entity_id, entity_id
+    )
+    entry = MagicMock(entry_id="room")
+    offset = ValveOffset(coordinator, entry, "climate.sofa")
+    skip = SkipValveSwitch(coordinator, entry, "climate.sofa")
+    assert offset.name == "Versatz climate.sofa"
+
+    names["climate.sofa"] = "Hinter Sofa"
+    assert offset.name == "Versatz Hinter Sofa"
+    assert skip.name == "Auslassen Hinter Sofa"
