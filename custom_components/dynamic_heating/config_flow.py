@@ -13,6 +13,7 @@ from .const import (
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_AWAY_TEMPERATURE,
     CONF_BOOST_DURATION,
+    CONF_NOTIFY_SERVICE,
     CONF_BOOST_TEMPERATURE,
     CONF_CALIBRATION,
     CONF_EXTERNAL_TEMPERATURE,
@@ -474,6 +475,18 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         ):
             schema[item[0]] = item[1]
         schema[vol.Optional(CONF_HEATING_LIMIT_TEMPERATURE)] = _temperature_selector(10, 25)
+        notify_services = sorted(
+            f"notify.{name}"
+            for name in self.hass.services.async_services().get("notify", {})
+            if name not in ("send_message", "persistent_notification")
+        )
+        schema[vol.Optional(CONF_NOTIFY_SERVICE)] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=notify_services,
+                custom_value=True,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
         return vol.Schema(schema)
 
     def _show_step(
@@ -626,6 +639,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             current[CONF_HEATING_LIMIT_TEMPERATURE] = user_input.get(
                 CONF_HEATING_LIMIT_TEMPERATURE
             )
+            current[CONF_NOTIFY_SERVICE] = user_input.get(CONF_NOTIFY_SERVICE) or None
 
             climate_entity = current[CONF_CLIMATE_ENTITY]
             options = dict(current)

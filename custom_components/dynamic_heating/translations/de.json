@@ -172,7 +172,8 @@
           "window_open_delay": "Fenster: Reaktionszeit beim Öffnen",
           "window_close_delay": "Fenster: Wartezeit nach dem Schließen",
           "window_temperature": "Temperatur bei offenem Fenster (°C, optional)",
-          "heating_season_entity": "Heizperiode / Wintermodus (optional)"
+          "heating_season_entity": "Heizperiode / Wintermodus (optional)",
+          "notify_service": "Push-Benachrichtigung (optional)"
         },
         "data_description": {
           "window_entity": "EIN erzwingt Absenkung. Ist ein ausgewählter Fensterkontakt nicht verfügbar, wird kein neuer Sollwert geschrieben.",
@@ -182,7 +183,8 @@
           "window_open_delay": "Erst wenn das Fenster so lange offen ist, wird abgesenkt. Kurzes Öffnen oder Durchzug ändert den Sollwert nicht. 0 = sofort.",
           "window_close_delay": "Nach dem Schließen bleibt die Fensterabsenkung so lange bestehen, damit sich die Raumluft beruhigt. 0 = sofort.",
           "window_temperature": "Eigener Sollwert bei offenem Fenster, z. B. 15 °C. Leer lassen, um wie bisher die Absenk- bzw. Abwesenheitstemperatur zu verwenden. Muss unter der Komforttemperatur liegen.",
-          "heating_season_entity": "Schalter oder Sensor für die Heizperiode, z. B. ein Wintermodus. Ist er AUS, wird nicht geheizt: der Sollwert geht auf die Frostschutztemperatur oder, ohne sie, auf das Minimum des Thermostats. Ist die Entität nicht verfügbar, wird normal weitergeheizt. Leer lassen zum Abschalten."
+          "heating_season_entity": "Schalter oder Sensor für die Heizperiode, z. B. ein Wintermodus. Ist er AUS, wird nicht geheizt: der Sollwert geht auf die Frostschutztemperatur oder, ohne sie, auf das Minimum des Thermostats. Ist die Entität nicht verfügbar, wird normal weitergeheizt. Leer lassen zum Abschalten.",
+          "notify_service": "Notify-Dienst fürs Handy, z. B. notify.mobile_app_patrick. Meldet bei aktiver Regelung: Thermostat-Problem oder ausgefallenen Raumfühler nach 30 Minuten, eine wartende Regelung nach 30 Minuten, Heizproblem, Frostgefahr und ein Fenster, das in der Heizperiode über eine Stunde offen ist. Leer lassen zum Abschalten."
         }
       }
     },

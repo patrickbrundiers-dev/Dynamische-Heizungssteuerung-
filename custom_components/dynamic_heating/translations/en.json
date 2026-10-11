@@ -172,7 +172,8 @@
           "window_open_delay": "Window: reaction time when opened",
           "window_close_delay": "Window: wait time after closing",
           "window_temperature": "Temperature while window is open (°C, optional)",
-          "heating_season_entity": "Heating season / winter mode (optional)"
+          "heating_season_entity": "Heating season / winter mode (optional)",
+          "notify_service": "Push notification (optional)"
         },
         "data_description": {
           "window_entity": "When ON, setback is enforced. If configured but unavailable, the controller avoids writing a new target.",
@@ -182,7 +183,8 @@
           "window_open_delay": "Setback starts only after the window stayed open this long. Short airing or a draft does not change the setpoint. 0 = immediately.",
           "window_close_delay": "After closing, the window setback is kept this long so the room air settles. 0 = immediately.",
           "window_temperature": "Own setpoint while a window is open, e.g. 15 °C. Leave empty to use the eco or away temperature as before. Must be below the comfort temperature.",
-          "heating_season_entity": "Switch or sensor for the heating season, e.g. a winter mode. While it is OFF the room is not heated: the setpoint goes to the frost protection temperature or, without one, the thermostat minimum. If the entity is unavailable, heating continues normally. Leave empty to disable."
+          "heating_season_entity": "Switch or sensor for the heating season, e.g. a winter mode. While it is OFF the room is not heated: the setpoint goes to the frost protection temperature or, without one, the thermostat minimum. If the entity is unavailable, heating continues normally. Leave empty to disable.",
+          "notify_service": "Notify service for your phone, e.g. notify.mobile_app_phone. While control is on it reports thermostat problems or a failed room sensor after 30 minutes, blocked control after 30 minutes, heating problems, frost risk and a window open for over an hour in the heating season. Leave empty to turn off."
         }
       }
     },

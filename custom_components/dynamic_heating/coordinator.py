@@ -10,6 +10,8 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -34,6 +36,15 @@ from .const import (
     HEATING_WATCHDOG_SECONDS,
     IGNORED_PROBLEM_ENTITY_SUFFIXES,
     LOW_BATTERY_PERCENT,
+    CONF_NOTIFY_SERVICE,
+    NOTIFY_FROST_FALLBACK_TEMPERATURE,
+    NOTIFY_FROST_MARGIN,
+    NOTIFY_PROBLEM_DELAY_SECONDS,
+    NOTIFY_WINDOW_SECONDS,
+    QUICK_AUTO,
+    QUICK_BOOST,
+    QUICK_COMFORT,
+    QUICK_ECO,
     ROOM_SENSOR_STALE_SECONDS,
     DEFAULT_HYSTERESIS,
     CONF_VALVE_MAINTENANCE,
@@ -202,6 +213,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._shortfall_since: datetime | None = None
         self._shortfall_temperature: float | None = None
         self.heating_problem = False
+        # Quick selection: the mode picked by hand and when it ends (UTC);
+        # a boost is tracked by boost_until instead.
+        self.quick_mode = QUICK_AUTO
+        self.quick_until: datetime | None = None
+        self._next_event: datetime | None = None
+        # Notifications: since when each alert condition holds and whether
+        # it was already sent.
+        self._alerts: dict[str, tuple[datetime, bool]] = {}
         self._proximity_status_category = "unconfigured"
         self._proximity_metrics_dirty = False
         self._proximity_last_state_update: datetime | None = None
@@ -1456,12 +1475,68 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Heat to the boost temperature for the configured duration."""
         duration = int(self.config.get(CONF_BOOST_DURATION) or DEFAULT_BOOST_DURATION)
         self.boost_until = dt_util.utcnow() + timedelta(seconds=duration)
+        self.quick_mode = QUICK_AUTO
+        self.quick_until = None
         await self.async_request_refresh()
+
+    @property
+    def current_quick_mode(self) -> str:
+        """The quick selection as shown: a running boost wins."""
+        return QUICK_BOOST if self.boost_until is not None else self.quick_mode
+
+    async def async_set_quick_mode(self, mode: str) -> None:
+        """Pick a mode by hand; it holds until the next schedule switch."""
+        if mode == QUICK_BOOST:
+            duration = int(
+                self.config.get(CONF_BOOST_DURATION) or DEFAULT_BOOST_DURATION
+            )
+            self.boost_until = dt_util.utcnow() + timedelta(seconds=duration)
+            self.quick_mode = QUICK_AUTO
+            self.quick_until = None
+        else:
+            self.boost_until = None
+            self.quick_mode = mode
+            self.quick_until = None if mode == QUICK_AUTO else self._next_event
+        # A tap on the dashboard should act at once, not after the debounce.
+        await self.async_refresh()
 
     async def async_stop_boost(self) -> None:
         """End a running boost early."""
         self.boost_until = None
         await self.async_request_refresh()
+
+    def _quick_target(
+        self,
+        comfort_temperature: float,
+        eco_temperature: float,
+        frost_value: object,
+        off_temperature: float | None,
+    ) -> tuple[str, str, float] | None:
+        """The (mode, status, target) of a hand-picked quick mode, if any."""
+        if self.quick_mode != QUICK_AUTO and self.quick_until is not None and (
+            dt_util.utcnow() >= self.quick_until
+        ):
+            self.quick_mode = QUICK_AUTO
+            self.quick_until = None
+        if self.quick_mode == QUICK_AUTO:
+            return None
+        until = (
+            f" bis {dt_util.as_local(self.quick_until).strftime('%H:%M')} Uhr"
+            if self.quick_until is not None
+            else ""
+        )
+        if self.quick_mode == QUICK_COMFORT:
+            return "quick_comfort", f"Komfort von Hand{until}", comfort_temperature
+        if self.quick_mode == QUICK_ECO:
+            return "quick_eco", f"Eco von Hand{until}", eco_temperature
+        off = (
+            float(frost_value)
+            if frost_value is not None
+            else off_temperature
+            if off_temperature is not None
+            else eco_temperature
+        )
+        return "quick_off", f"Aus von Hand{until}", off
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Run one control cycle and attach the thermostats' health."""
@@ -1469,8 +1544,112 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result = await self._async_control_cycle()
         result["thermostat_warnings"] = self._thermostat_warnings()
         result["heating_problem"] = self.heating_problem
+        await self._send_notifications(result)
         result["external_temperature_thermostats"] = sorted(self._external_fed)
         return result
+
+    def _room_name(self) -> str:
+        """The area of the room's main thermostat, else the entry title."""
+        climate_id = self.config.get(CONF_CLIMATE_ENTITY)
+        entry = er.async_get(self.hass).async_get(climate_id) if climate_id else None
+        area_id = entry.area_id if entry is not None else None
+        if entry is not None and area_id is None and entry.device_id:
+            device = dr.async_get(self.hass).async_get(entry.device_id)
+            area_id = device.area_id if device is not None else None
+        area = ar.async_get(self.hass).async_get_area(area_id) if area_id else None
+        if area is not None:
+            return area.name
+        config_entry = self.hass.config_entries.async_get_entry(self.entry_id)
+        return config_entry.title if config_entry is not None else "Heizung"
+
+    def _alert_conditions(self, result: dict[str, Any]) -> dict[str, tuple[int, str]]:
+        """Active alert conditions: key -> (delay in seconds, message)."""
+        conditions: dict[str, tuple[int, str]] = {}
+        warnings = result.get("thermostat_warnings") or {}
+        if warnings:
+            details = "; ".join(
+                f"{self._friendly_name(entity_id)}: {', '.join(items)}"
+                for entity_id, items in warnings.items()
+            )
+            conditions["thermostat"] = (
+                NOTIFY_PROBLEM_DELAY_SECONDS,
+                f"Thermostat-Problem – {details}",
+            )
+        if result.get("heating_problem"):
+            conditions["heating"] = (
+                0,
+                "Der Raum wird seit zwei Stunden nicht wärmer, obwohl geheizt "
+                "werden soll. Ventil oder Heizung prüfen.",
+            )
+        if result.get("mode") == "waiting":
+            conditions["blocked"] = (
+                NOTIFY_PROBLEM_DELAY_SECONDS,
+                f"Die Regelung wartet: {result.get('status')}",
+            )
+        elif self._room_fallback:
+            conditions["sensor"] = (
+                NOTIFY_PROBLEM_DELAY_SECONDS,
+                "Der Raumfühler liefert keine Werte – geregelt wird mit den "
+                "Thermostat-Messwerten.",
+            )
+        if result.get("window_contact_open") and result.get("heating_season", True):
+            conditions["window"] = (
+                NOTIFY_WINDOW_SECONDS,
+                "Das Fenster ist seit über einer Stunde offen.",
+            )
+        frost_value = self.config.get(CONF_FROST_PROTECTION_TEMPERATURE)
+        frost_limit = (
+            float(frost_value) if frost_value is not None
+            else NOTIFY_FROST_FALLBACK_TEMPERATURE
+        ) + NOTIFY_FROST_MARGIN
+        room_temperature = result.get("room_temperature")
+        if room_temperature is not None and room_temperature < frost_limit:
+            conditions["frost"] = (
+                0,
+                f"Frostgefahr: nur noch {room_temperature:.1f} °C im Raum.",
+            )
+        return conditions
+
+    def _friendly_name(self, entity_id: str) -> str:
+        state = self.hass.states.get(entity_id)
+        name = state.attributes.get("friendly_name") if state is not None else None
+        return str(name).strip(" -") if name else entity_id
+
+    async def _send_notifications(self, result: dict[str, Any]) -> None:
+        """Push new alerts (and their end) to the configured notify service."""
+        service = (self.config.get(CONF_NOTIFY_SERVICE) or "").strip()
+        if not service or not self.enabled:
+            self._alerts.clear()
+            return
+        domain, _, name = service.partition(".")
+        if not name:
+            domain, name = "notify", domain
+        now = dt_util.utcnow()
+        title = f"Heizung {self._room_name()}"
+        conditions = self._alert_conditions(result)
+        for key in list(self._alerts):
+            if key not in conditions:
+                _, sent = self._alerts.pop(key)
+                if sent:
+                    await self._call(
+                        domain,
+                        name,
+                        {"title": title, "message": "Wieder in Ordnung: " + {
+                            "thermostat": "die Thermostate melden kein Problem mehr.",
+                            "heating": "der Raum wird wieder warm.",
+                            "sensor": "der Raumfühler liefert wieder Werte.",
+                            "blocked": "die Regelung arbeitet wieder.",
+                            "frost": "keine Frostgefahr mehr.",
+                            "window": "das Fenster ist wieder geschlossen.",
+                        }.get(key, key)},
+                    )
+        for key, (delay, message) in conditions.items():
+            since, sent = self._alerts.get(key, (now, False))
+            if not sent and (now - since).total_seconds() >= delay:
+                sent = await self._call(
+                    domain, name, {"title": title, "message": message}
+                )
+            self._alerts[key] = (since, sent)
 
     def _external_temperature_entities(
         self, entity_id: str
@@ -1692,6 +1871,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
         next_event = self._parse_next_event(schedule_state)
+        self._next_event = next_event
         if self._preheat_event is not None and self._preheat_event != next_event:
             self._preheat_event = None
         forecast_items = await self._async_get_forecast_items()
@@ -1726,6 +1906,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             heating_season=heating_season,
             off_temperature=off_temperature,
             boost_temperature=boost_temperature,
+            quick_mode=self._quick_target(
+                comfort_temperature, eco_temperature, frost_value, off_temperature
+            ),
         )
         if decision.mode == "boost":
             end = dt_util.as_local(self.boost_until).strftime("%H:%M")
@@ -1772,6 +1955,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "schedule_comfort_temperature": slot_comfort,
             "boost_until": (
                 self.boost_until.isoformat() if self.boost_until is not None else None
+            ),
+            "quick_mode": self.current_quick_mode,
+            "quick_until": (
+                self.quick_until.isoformat() if self.quick_until is not None else None
             ),
             "heating_limit_reached": self._heating_limit_reached,
             "present": present,

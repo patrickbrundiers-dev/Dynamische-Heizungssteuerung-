@@ -3,7 +3,7 @@
 from typing import Final
 
 DOMAIN: Final = "dynamic_heating"
-PLATFORMS: Final = ["binary_sensor", "sensor", "switch"]
+PLATFORMS: Final = ["binary_sensor", "select", "sensor", "switch"]
 
 CONF_CLIMATE_ENTITY: Final = "climate_entity"
 # Further thermostats of the same room; they get the same target.
@@ -150,3 +150,24 @@ ROOM_SENSOR_STALE_SECONDS: Final = 21600
 HEATING_WATCHDOG_GAP: Final = 1.0
 HEATING_WATCHDOG_SECONDS: Final = 7200
 HEATING_WATCHDOG_MIN_RISE: Final = 0.3
+
+# Quick selection ("Betriebsart"): a mode picked by hand holds until the next
+# switch of the comfort schedule, then the room returns to automatic control.
+QUICK_AUTO: Final = "auto"
+QUICK_COMFORT: Final = "comfort"
+QUICK_ECO: Final = "eco"
+QUICK_BOOST: Final = "boost"
+QUICK_OFF: Final = "off"
+QUICK_MODES: Final = (QUICK_AUTO, QUICK_COMFORT, QUICK_ECO, QUICK_BOOST, QUICK_OFF)
+
+# Push notifications through a notify service (e.g. notify.mobile_app_phone).
+CONF_NOTIFY_SERVICE: Final = "notify_service"
+# A thermostat problem or a failed room sensor is only reported after this
+# long, so short radio dropouts stay quiet.
+NOTIFY_PROBLEM_DELAY_SECONDS: Final = 1800
+# An open window is reported after this long during the heating season.
+NOTIFY_WINDOW_SECONDS: Final = 3600
+# Frost warning when the room falls this close to frost protection (or to the
+# fallback limit below without frost protection).
+NOTIFY_FROST_MARGIN: Final = 1.0
+NOTIFY_FROST_FALLBACK_TEMPERATURE: Final = 10.0
