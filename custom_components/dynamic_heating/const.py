@@ -3,7 +3,7 @@
 from typing import Final
 
 DOMAIN: Final = "dynamic_heating"
-PLATFORMS: Final = ["binary_sensor", "button", "select", "sensor", "switch"]
+PLATFORMS: Final = ["binary_sensor", "button", "climate", "select", "sensor", "switch"]
 
 CONF_CLIMATE_ENTITY: Final = "climate_entity"
 # Further thermostats of the same room; they get the same target.
@@ -167,6 +167,9 @@ QUICK_AWAY: Final = "away"
 QUICK_SLEEP: Final = "sleep"
 QUICK_HOME: Final = "home"
 QUICK_ACTIVITY: Final = "activity"
+# A temperature set on the room thermostat entity; it holds like the other
+# modes for the chosen duration. Not offered as a button.
+QUICK_MANUAL: Final = "manual"
 QUICK_MODES: Final = (
     QUICK_AUTO,
     QUICK_COMFORT,
@@ -189,6 +192,7 @@ QUICK_LABELS: Final = {
     QUICK_AWAY: "Abwesend",
     QUICK_BOOST: "Boost",
     QUICK_OFF: "Aus",
+    QUICK_MANUAL: "Manuell",
 }
 QUICK_ICONS: Final = {
     QUICK_AUTO: "mdi:calendar-clock",
@@ -200,7 +204,12 @@ QUICK_ICONS: Final = {
     QUICK_AWAY: "mdi:home-export-outline",
     QUICK_BOOST: "mdi:fire",
     QUICK_OFF: "mdi:snowflake",
+    QUICK_MANUAL: "mdi:hand-back-right",
 }
+# Range and step of a temperature set on the room thermostat entity.
+ROOM_MIN_TEMPERATURE: Final = 5.0
+ROOM_MAX_TEMPERATURE: Final = 30.0
+ROOM_TEMPERATURE_STEP: Final = 0.5
 CONF_SLEEP_TEMPERATURE: Final = "sleep_temperature"
 CONF_HOME_TEMPERATURE: Final = "home_temperature"
 CONF_ACTIVITY_TEMPERATURE: Final = "activity_temperature"

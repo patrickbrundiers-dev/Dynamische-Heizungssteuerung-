@@ -57,6 +57,7 @@ from .const import (
     QUICK_AWAY,
     QUICK_DURATIONS,
     QUICK_HOME,
+    QUICK_MANUAL,
     QUICK_SLEEP,
     QUICK_MODES,
     QUICK_MORNING_HOUR,
@@ -265,6 +266,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.quick_mode = QUICK_AUTO
         self.quick_until: datetime | None = None
         self.quick_duration = QUICK_UNTIL_SCHEDULE
+        # Temperature of the manual mode (set on the room thermostat entity).
+        self.quick_temperature: float | None = None
         self._next_event: datetime | None = None
         # Mode, boost, alerts and the presence decision survive a restart.
         self._state_store = Store(hass, 1, f"{DOMAIN}_{entry_id}_state")
@@ -316,6 +319,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "quick_mode": self.quick_mode,
             "quick_until": self.quick_until.isoformat() if self.quick_until else None,
             "quick_duration": self.quick_duration,
+            "quick_temperature": self.quick_temperature,
             "boost_until": self.boost_until.isoformat() if self.boost_until else None,
             "alerts": {
                 key: [since.isoformat(), sent]
@@ -411,11 +415,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if boost_until is not None and boost_until > now:
             self.boost_until = boost_until
         quick_until = moment(stored.get("quick_until"))
-        if stored.get("quick_mode") in QUICK_MODES and stored["quick_mode"] not in (
-            QUICK_AUTO, QUICK_BOOST
-        ) and (quick_until is None or quick_until > now):
-            self.quick_mode = stored["quick_mode"]
+        quick_temperature = _as_number(stored.get("quick_temperature"))
+        mode = stored.get("quick_mode")
+        if (
+            (mode in QUICK_MODES or (mode == QUICK_MANUAL and quick_temperature is not None))
+            and mode not in (QUICK_AUTO, QUICK_BOOST)
+            and (quick_until is None or quick_until > now)
+        ):
+            self.quick_mode = mode
             self.quick_until = quick_until
+            if mode == QUICK_MANUAL:
+                self.quick_temperature = quick_temperature
         alerts = stored.get("alerts")
         if isinstance(alerts, dict):
             for key, value in alerts.items():
@@ -1761,10 +1771,28 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.quick_mode = QUICK_AUTO
             self.quick_until = None
         else:
+            if mode == QUICK_MANUAL:
+                # Picked without a temperature: hold the current target.
+                current = (self.data or {}).get("target_temperature")
+                self.quick_temperature = float(
+                    current
+                    if current is not None
+                    else self.config.get(
+                        CONF_COMFORT_TEMPERATURE, DEFAULT_COMFORT_TEMPERATURE
+                    )
+                )
             self.boost_until = None
             self.quick_mode = mode
             self.quick_until = None if mode == QUICK_AUTO else self._quick_end()
         # A tap on the dashboard should act at once, not after the debounce.
+        await self.async_refresh()
+
+    async def async_set_manual_temperature(self, temperature: float) -> None:
+        """Hold a temperature set by hand for the chosen Betriebsart-Dauer."""
+        self.boost_until = None
+        self.quick_mode = QUICK_MANUAL
+        self.quick_temperature = float(temperature)
+        self.quick_until = self._quick_end()
         await self.async_refresh()
 
     def _quick_end(self) -> datetime | None:
@@ -1827,6 +1855,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             until = " (dauerhaft)"
         else:
             until = ""
+        if self.quick_mode == QUICK_MANUAL and self.quick_temperature is not None:
+            value = f"{self.quick_temperature:g}".replace(".", ",")
+            return (
+                "quick_manual",
+                f"{value} °C von Hand{until}",
+                self.quick_temperature,
+            )
         if self.quick_mode == QUICK_COMFORT:
             return "quick_comfort", f"Komfort von Hand{until}", comfort_temperature
         if self.quick_mode == QUICK_ECO:

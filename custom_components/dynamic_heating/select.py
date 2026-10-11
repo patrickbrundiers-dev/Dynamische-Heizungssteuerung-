@@ -19,6 +19,7 @@ from .const import (
     HOUSE_VACATION,
     QUICK_DURATIONS,
     QUICK_LABELS,
+    QUICK_MANUAL,
     QUICK_MODES,
     QUICK_UNTIL_1H,
     QUICK_UNTIL_3H,
@@ -70,7 +71,8 @@ class QuickModeSelect(CoordinatorEntity[DynamicHeatingCoordinator], SelectEntity
 
     _attr_name = "Betriebsart"
     _attr_icon = "mdi:radiator"
-    _attr_options = [_LABELS[mode] for mode in QUICK_MODES]
+    # Manuell shows a temperature set on the room thermostat entity.
+    _attr_options = [_LABELS[mode] for mode in (*QUICK_MODES, QUICK_MANUAL)]
 
     def __init__(
         self, coordinator: DynamicHeatingCoordinator, entry: ConfigEntry
