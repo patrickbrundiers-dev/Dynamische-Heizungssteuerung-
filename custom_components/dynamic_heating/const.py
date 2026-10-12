@@ -574,3 +574,9 @@ EARLY_STOP_DROP: Final = 0.5
 SOLAR_PAUSE_MIN_GAIN: Final = 0.1
 # Days of recorder history the room model learns from at its first start.
 MODEL_HISTORY_DAYS: Final = 7
+
+# "Kurz wärmer" (button, e.g. for Alexa): raise by this much for this long.
+CONF_WARM_UP_STEP: Final = "warm_up_step"
+CONF_WARM_UP_DURATION: Final = "warm_up_duration"
+DEFAULT_WARM_UP_STEP: Final = 1.0
+DEFAULT_WARM_UP_DURATION: Final = 3600

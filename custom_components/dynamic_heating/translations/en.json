@@ -123,69 +123,103 @@
   "options": {
     "step": {
       "init": {
-        "title": "1. Room and heating",
-        "description": "Set the thermostat, room-temperature sensor, comfort schedule and temperature targets. Comfort must be higher than setback.",
+        "title": "Edit room",
+        "description": "Pick a page. Changes are stored with \"Save\".",
+        "menu_options": {
+          "basics": "Basics: valves, sensor, schedule, temperatures",
+          "valves": "Valves in detail: send room temperature, calibration, maintenance",
+          "modes": "Modes: more schedules, boost, warm up",
+          "presence": "People and presence",
+          "geofencing": "Geofencing",
+          "environment": "Windows, outdoor temperature, weather, notifications",
+          "intelligence": "Smart control",
+          "save": "Save"
+        }
+      },
+      "basics": {
+        "title": "Basics",
+        "description": "The essentials of the room. Comfort must be above the setback temperature.",
         "data": {
           "climate_entity": "Thermostat to control",
+          "additional_climate_entities": "Additional thermostats in the room (optional)",
           "room_temperature_entity": "Room temperature sensor",
           "schedule_entity": "Comfort schedule",
           "comfort_temperature": "Comfort target (°C)",
           "eco_temperature": "Setback target (°C)",
           "max_preheat_minutes": "Maximum preheating (minutes)",
-          "frost_protection_temperature": "Frost protection temperature (°C, optional)",
-          "additional_climate_entities": "Additional thermostats in the room (optional)",
-          "calibration": "Calibrate setpoint with the room sensor",
-          "external_temperature": "Send the room temperature to the thermostats",
-          "valve_maintenance": "Weekly valve maintenance",
-          "hysteresis": "Calibration hysteresis",
-          "boost_temperature": "Boost temperature",
-          "boost_duration": "Boost duration",
-          "home_temperature": "\"Home\" temperature",
-          "activity_temperature": "\"Activity\" temperature",
-          "sleep_temperature": "\"Sleep\" temperature",
-          "additional_schedule_entities": "More schedules (optional)",
-          "eco_schedule_entity": "Eco schedule (optional)",
-          "sync_manual_change": "Turning a valve applies to the room",
-          "aggressive_range": "Aggressive mode: range (°C, optional)",
-          "aggressive_offset": "Aggressive mode: offset",
-          "lock_valves": "Lock valves",
-          "maintenance_weekday": "Valve maintenance: weekday",
-          "maintenance_hour": "Valve maintenance: hour",
-          "maintenance_duration": "Valve maintenance: duration per phase",
-          "command_delay": "Pause between valve commands"
+          "frost_protection_temperature": "Frost protection temperature (°C, optional)"
         },
         "data_description": {
           "climate_entity": "Select the climate entity this room controller may adjust. Avoid running another automation that writes targets to the same thermostat.",
+          "additional_climate_entities": "Further radiator thermostats of the same room. They get the same setpoint as the main thermostat, like a climate group. An unavailable additional thermostat is skipped; a manual change on any of them pauses control for the room.",
           "room_temperature_entity": "Use a room sensor in °C. The value is used to estimate heat-up and cool-down behaviour.",
           "schedule_entity": "A Home Assistant schedule entity: ON means comfort time. Its next_event is used to plan preheating.",
           "comfort_temperature": "Desired room temperature during active comfort periods.",
           "eco_temperature": "Setback target outside comfort periods, during absence or when a window is open. It must be below the comfort target.",
           "max_preheat_minutes": "Hard limit for how early preheating may start.",
-          "frost_protection_temperature": "No setpoint goes below this value, not even with an open window or while away, e.g. 12 °C. Leave empty to disable. Must be below the comfort temperature.",
-          "additional_climate_entities": "Further radiator thermostats of the same room. They get the same setpoint as the main thermostat, like a climate group. An unavailable additional thermostat is skipped; a manual change on any of them pauses control for the room.",
+          "frost_protection_temperature": "No setpoint goes below this value, not even with an open window or while away, e.g. 12 °C. Leave empty to disable. Must be below the comfort temperature."
+        }
+      },
+      "valves": {
+        "title": "Valves in detail",
+        "description": "How the valves are driven. The defaults suit most rooms.",
+        "data": {
+          "calibration": "Calibrate setpoint with the room sensor",
+          "external_temperature": "Send the room temperature to the thermostats",
+          "valve_maintenance": "Weekly valve maintenance",
+          "maintenance_weekday": "Valve maintenance: weekday",
+          "maintenance_hour": "Valve maintenance: hour",
+          "maintenance_duration": "Valve maintenance: duration per phase",
+          "hysteresis": "Calibration hysteresis",
+          "command_delay": "Pause between valve commands",
+          "sync_manual_change": "Turning a valve applies to the room",
+          "lock_valves": "Lock valves",
+          "aggressive_range": "Aggressive mode: range (°C, optional)",
+          "aggressive_offset": "Aggressive mode: offset"
+        },
+        "data_description": {
           "calibration": "The thermostat measures right at the radiator. When enabled, its setpoint is shifted by the difference between thermostat and room temperature (like Better Thermostat's target-temperature calibration) so it regulates on the room sensor. The difference is recomputed at most every 10 minutes. Do not enable when the selected thermostat already is a Better Thermostat.",
           "external_temperature": "For thermostats with an external temperature input (e.g. Aqara E1 via Zigbee2MQTT): the integration switches them to the external sensor and sends them the room sensor's temperature, like Better Thermostat. The valve then regulates on the room temperature itself, so no calibration is needed for these thermostats. While control is off or the room sensor is unavailable they are switched back to their own sensor.",
           "valve_maintenance": "Against calcification the valves are fully opened for 5 minutes and then fully closed for 5 minutes once a week around 11:00 (thermostat maximum and minimum temperature), as in Better Thermostat. Postponed while a window is open or control is manually overridden. Only while control is active.",
+          "maintenance_weekday": "Day the valves are exercised. \"Every 7 days\" means seven days after the last run.",
+          "maintenance_hour": "Hour the valve maintenance starts (0-23).",
+          "maintenance_duration": "How long the valves stay fully open, then closed.",
           "hysteresis": "A recomputed calibration is only applied when it changed by at least this value, so the thermostats are not re-adjusted for every small temperature fluctuation. 0 disables the hysteresis.",
+          "command_delay": "Wait between two commands to valves, also across rooms, so Zigbee does not drop any when many are sent at once. 0 = no pause.",
+          "sync_manual_change": "A setpoint turned at a thermostat goes to every thermostat of the room and holds as quick mode Manuell for the chosen duration. Off: control only pauses until the next mode change.",
+          "lock_valves": "A setpoint turned at a thermostat is set back to the room's target at once (like Better Thermostat's child lock or Climate Group Helper's lock sync mode). Wins over 'Turning a valve applies to the room'.",
+          "aggressive_range": "When the room is more than this below or above the target, target plus or minus the offset is sent so sluggish valves open or close decisively. Leave empty to turn off.",
+          "aggressive_offset": "How far the sent setpoint is raised or lowered outside the range."
+        }
+      },
+      "modes": {
+        "title": "Modes",
+        "description": "More schedules, boost, the quick mode temperatures and \"warm up\".",
+        "data": {
+          "additional_schedule_entities": "More schedules (optional)",
+          "eco_schedule_entity": "Eco schedule (optional)",
+          "boost_temperature": "Boost temperature",
+          "boost_duration": "Boost duration",
+          "home_temperature": "\"Home\" temperature",
+          "activity_temperature": "\"Activity\" temperature",
+          "sleep_temperature": "\"Sleep\" temperature",
+          "warm_up_step": "Warm up: raise by",
+          "warm_up_duration": "Warm up: for"
+        },
+        "data_description": {
+          "additional_schedule_entities": "Further comfort schedules, e.g. holidays or home office. Pick the active one with the room's \"Zeitplan\" entity; without a choice the first schedule applies.",
+          "eco_schedule_entity": "Schedule helper whose blocks carry a temperature in their additional data (e.g. temperature: 17). While a block is active it replaces the setback temperature, at most up to the comfort temperature.",
           "boost_temperature": "Target temperature while the \"Boost\" switch is on. Boost wins over schedule, presence and heating limit, but not over an open window or the heating season being off.",
           "boost_duration": "The boost turns itself off after this time.",
           "home_temperature": "Target of the \"Zuhause\" (home) button and mode, like Better Thermostat's home preset.",
           "activity_temperature": "Target of the \"Aktivität\" (activity) button and mode, like Better Thermostat's activity preset.",
           "sleep_temperature": "Target of the \"Schlafen\" (sleep) button and mode, like Better Thermostat's sleep preset. \"Abwesend\" (away) uses the away temperature, or eco without one.",
-          "additional_schedule_entities": "Further comfort schedules, e.g. holidays or home office. Pick the active one with the room's \"Zeitplan\" entity; without a choice the first schedule applies.",
-          "eco_schedule_entity": "Schedule helper whose blocks carry a temperature in their additional data (e.g. temperature: 17). While a block is active it replaces the setback temperature, at most up to the comfort temperature.",
-          "sync_manual_change": "A setpoint turned at a thermostat goes to every thermostat of the room and holds as quick mode Manuell for the chosen duration. Off: control only pauses until the next mode change.",
-          "aggressive_range": "When the room is more than this below or above the target, target plus or minus the offset is sent so sluggish valves open or close decisively. Leave empty to turn off.",
-          "aggressive_offset": "How far the sent setpoint is raised or lowered outside the range.",
-          "lock_valves": "A setpoint turned at a thermostat is set back to the room's target at once (like Better Thermostat's child lock or Climate Group Helper's lock sync mode). Wins over 'Turning a valve applies to the room'.",
-          "maintenance_weekday": "Day the valves are exercised. \"Every 7 days\" means seven days after the last run.",
-          "maintenance_hour": "Hour the valve maintenance starts (0-23).",
-          "maintenance_duration": "How long the valves stay fully open, then closed.",
-          "command_delay": "Wait between two commands to valves, also across rooms, so Zigbee does not drop any when many are sent at once. 0 = no pause."
+          "warm_up_step": "The \"Kurz wärmer\" button (also via Alexa) raises the current target by this much. Pressing again adds another step (at most three).",
+          "warm_up_duration": "Afterwards the room returns to automatic on its own."
         }
       },
       "presence": {
-        "title": "2. People and presence",
+        "title": "People and presence",
         "description": "Configure who is home and optional indoor presence detection. A guest toggle counts as someone being home. Sensor reaction delays reduce short false triggers.",
         "data": {
           "person_entities": "People / device trackers (optional)",
@@ -223,7 +257,7 @@
         }
       },
       "geofencing": {
-        "title": "3. Geo-fencing and location quality",
+        "title": "Geo-fencing and location quality",
         "description": "Choose the distance and direction sensors from the same Proximity zone. Distance is normalized to meters. Old location updates are ignored after the maximum age.",
         "data": {
           "proximity_zone": "Proximity zone (optional)",
@@ -239,7 +273,7 @@
         }
       },
       "environment": {
-        "title": "4. Window, outdoor temperature and weather",
+        "title": "Window, outdoor temperature and weather",
         "description": "Optional sensors refine safe setback and preheating. A configured window sensor must be available; otherwise no new thermostat target is written.",
         "data": {
           "window_entity": "Window contact (optional)",
@@ -318,7 +352,7 @@
         }
       },
       "intelligence": {
-        "title": "5. Smart control",
+        "title": "Smart control",
         "description": "The room model learns from every hour how strongly the radiators heat, how fast the room cools and how much sun and wind matter. It times preheating, limits the setback so the room is warm again in time and stops heating early at the end of a comfort block. It only acts once it has enough data (sensor \"Raummodell\").",
         "data": {
           "room_model": "Use the room model",
@@ -364,6 +398,10 @@
     "implausible_room_temperature": {
       "title": "Implausible room temperature in {room}",
       "description": "The room sensor {entity} reports {value} °C. The value is ignored and the room is controlled with the thermostats' readings. A flat battery is a common cause. This goes away once plausible values come in again."
+    },
+    "selftest_failed": {
+      "title": "Self-test in {room} found problems",
+      "description": "The self-test after the start found: {problems}. It repeats hourly; this goes away once everything is fine. The \"Selbsttest starten\" button repeats it now."
     }
   },
   "device_automation": {

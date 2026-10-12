@@ -33,6 +33,7 @@ from .const import (
     HOUSE_VACATION,
     QUICK_AUTO,
 )
+from .radiator import SUPPLY_COLD, SUPPLY_WARM, SupplyProfile, house_supply
 from .logic import (
     calendar_temperature,
     description_value,
@@ -41,6 +42,9 @@ from .logic import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# The boiler has to stay cold this long before the house says so.
+SUPPLY_NOTIFY_AFTER = timedelta(minutes=60)
 
 if TYPE_CHECKING:
     from .coordinator import DynamicHeatingCoordinator
@@ -57,6 +61,13 @@ class HouseManager:
         self._store = Store(hass, 1, f"{DOMAIN}_house")
         self._listeners: list[Callable[[], None]] = []
         self._unsubs: list[Callable[[], None]] = []
+        # When the central heating delivers, learned from all rooms together
+        # (there is one boiler for the whole house; persisted).
+        self.supply = SupplyProfile()
+        self.supply_state: str | None = None
+        self._supply_at: datetime | None = None
+        self._cold_since: datetime | None = None
+        self._cold_sent = False
 
     def rooms(self) -> list[DynamicHeatingCoordinator]:
         """All rooms that are set up right now."""
@@ -77,7 +88,11 @@ class HouseManager:
             raw = stored.get("vacation_until")
             parsed = dt_util.parse_datetime(raw) if isinstance(raw, str) else None
             self.vacation_until = dt_util.as_utc(parsed) if parsed else None
+            self.supply = SupplyProfile.from_list(stored.get("supply_profile"))
         self._unsubs = [
+            async_track_time_interval(
+                self.hass, self._async_observe_supply, timedelta(minutes=1)
+            ),
             async_track_time_interval(
                 self.hass, self._async_check_vacation, timedelta(minutes=1)
             ),
@@ -142,15 +157,118 @@ class HouseManager:
         self._listeners.append(listener)
         return lambda: self._listeners.remove(listener)
 
-    async def _async_changed(self) -> None:
+    async def _async_save(self) -> None:
         await self._store.async_save(
             {
                 "mode": self.mode,
                 "vacation_until": (
                     self.vacation_until.isoformat() if self.vacation_until else None
                 ),
+                "supply_profile": self.supply.as_list(),
             }
         )
+
+    def supply_verdict(self, overrides: dict[str, str | None] | None = None) -> str | None:
+        """Does the central heating deliver right now, judged by all rooms?
+
+        ``overrides`` holds a room's verdict of the running cycle (entry id ->
+        verdict), which is newer than the room's last data.
+        """
+        verdicts = dict(overrides or {})
+        for room in self.rooms():
+            if room.entry_id not in verdicts and room.enabled and room.data:
+                verdicts[room.entry_id] = room.data.get("radiator_supply")
+        return house_supply(list(verdicts.values()))
+
+    def supply_profile(self) -> SupplyProfile | None:
+        """The house's learned delivery hours, once it knows any."""
+        return self.supply if self.supply.known else None
+
+    async def _async_observe_supply(self, _now: Any = None) -> None:
+        """Learn the boiler's hours and tell once when it delivers nothing."""
+        if not self.supply.known:
+            # Start from what the rooms learned on their own.
+            for room in self.rooms():
+                self.supply.merge(room.supply)
+        now = dt_util.utcnow()
+        local = dt_util.as_local(now)
+        verdict = self.supply_verdict()
+        changed = verdict != self.supply_state
+        self.supply_state = verdict
+        seconds = 0.0 if self._supply_at is None else (now - self._supply_at).total_seconds()
+        self._supply_at = now
+        if self.supply.observe(local.hour, verdict, seconds):
+            await self._async_save()
+        await self._notify_supply(verdict, now)
+        if changed:
+            for listener in list(self._listeners):
+                listener()
+
+    def supply_text(self) -> str:
+        """The central heating's state in a few words."""
+        state = self.supply_state
+        hour = dt_util.now().hour
+        if state == SUPPLY_WARM:
+            return "Liefert Wärme"
+        if state == SUPPLY_COLD:
+            text = "Liefert keine Wärme"
+            if self.supply.usually_off(hour):
+                next_hour = self.supply.next_on_hour(hour)
+                text += (
+                    f" (um diese Zeit üblich, meist ab {next_hour}:00 Uhr)"
+                    if next_hour is not None
+                    else " (um diese Zeit üblich)"
+                )
+            return text
+        if state == "waiting":
+            return "Heizkörper werden warm"
+        if state == "idle":
+            return "Kein Heizbedarf"
+        return "Unbekannt"
+
+    async def _notify_supply(self, verdict: str | None, now: datetime) -> None:
+        """One push for the whole house when the boiler delivers nothing."""
+        if verdict != SUPPLY_COLD:
+            if self._cold_sent and verdict == SUPPLY_WARM:
+                await self._push("Die Zentralheizung liefert wieder Wärme.")
+            if verdict != "waiting":
+                self._cold_since = None
+                self._cold_sent = False
+            return
+        if self._cold_since is None:
+            self._cold_since = now
+        if self._cold_sent or (now - self._cold_since) < SUPPLY_NOTIFY_AFTER:
+            return
+        if self.supply.usually_off(dt_util.as_local(now).hour):
+            return
+        since = dt_util.as_local(self._cold_since).strftime("%H:%M")
+        self._cold_sent = await self._push(
+            "Die Zentralheizung liefert keine Wärme: in keinem Raum werden die "
+            f"Heizkörper warm (seit {since} Uhr), obwohl die Ventile offen sind. "
+            "Therme prüfen (aus, Absenkung oder Störung)."
+        )
+
+    async def _push(self, message: str) -> bool:
+        service = (self._notify_service() or "").strip()
+        if not service:
+            return False
+        domain, _, name = service.partition(".")
+        if not name:
+            domain, name = "notify", domain
+        try:
+            await self.hass.services.async_call(
+                domain,
+                name,
+                {"title": "Heizung Haus", "message": message},
+                blocking=True,
+            )
+        except HomeAssistantError as err:
+            _LOGGER.warning("House notification could not be sent: %s", err)
+            return False
+        return True
+
+    async def _async_changed(self) -> None:
+        await self._async_save()
         for listener in list(self._listeners):
             listener()
         for room in self.rooms():

@@ -21,6 +21,10 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_WARM_UP_DURATION,
+    CONF_WARM_UP_STEP,
+    DEFAULT_WARM_UP_DURATION,
+    DEFAULT_WARM_UP_STEP,
     CONF_EARLY_STOP,
     CONF_LEARN_USAGE,
     CONF_PREHEAT_WHEN_HOME,
@@ -288,14 +292,38 @@ from .radiator import (
     SUPPLY_PARTLY,
     SUPPLY_WAITING,
     SUPPLY_WARM,
+    RadiatorStats,
     RadiatorTracker,
     SupplyProfile,
+    balance_verdict,
     room_supply,
+)
+from .plan import (
+    CHECK_ALPHA,
+    CHECK_HOURS,
+    Block,
+    blocks_from_schedule,
+    simulate,
+    summary as plan_summary,
+    temperature_at,
 )
 
 # Bumped when the room model must forget what it learned: 2 = 0.9.3, which
 # no longer learns from hours in which the radiators stayed cold.
 ROOM_MODEL_VERSION = 2
+# Bumped when learning from the recorder improved: 1 = 0.9.4, which also
+# learns rooms without recorded heat demand (estimated from valve setpoints).
+SEED_VERSION = 1
+# The self-test runs this long after a start, and again while it fails.
+SELFTEST_DELAY = timedelta(minutes=10)
+SELFTEST_RETRY = timedelta(hours=1)
+# A valve fed with the room temperature should show it within this much.
+SELFTEST_VALVE_TOLERANCE = 0.5
+# The day plan is recalculated this often; the schedule's week read this often.
+PLAN_INTERVAL = timedelta(minutes=15)
+SCHEDULE_WEEK_INTERVAL = timedelta(minutes=30)
+# Modes the day plan describes; in others it is not checked against the room.
+_PLAN_MODES = frozenset({"comfort", "eco", "preheat", "early_stop"})
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -540,6 +568,29 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # How often the room is used per weekday and hour (persisted).
         self.usage = UsageProfile()
         self._usage_at: datetime | None = None
+        # How each radiator heats up, to compare them (persisted).
+        self.radiator_stats: dict[str, RadiatorStats] = {}
+        self._seed_version = 0
+        # Day plan, the schedule's week behind it and how well it predicted.
+        self.plan_points: list = []
+        self.plan_info: dict[str, Any] = {}
+        self._plan_at: datetime | None = None
+        self._schedule_week: list[Block] | None = None
+        self._schedule_week_key: tuple[str | None, str] | None = None
+        self._schedule_week_at: datetime | None = None
+        self._plan_checks: dict[datetime, float] = {}
+        self._plan_check_hour: int | None = None
+        self.plan_error: float | None = None
+        self.plan_checked = 0
+        # Self-test after a start: due time, last result, repair and push.
+        self._selftest_due: datetime | None = dt_util.utcnow() + SELFTEST_DELAY
+        self.selftest: dict[str, Any] | None = None
+        self._selftest_issue = False
+        self._selftest_sent: tuple[str, ...] = ()
+        # "Kurz wärmer": its starting target, steps taken and end.
+        self._warm_up_base: float | None = None
+        self._warm_up_steps = 0
+        self._warm_up_until: datetime | None = None
         # Somebody of the household is home (from the presence evaluation).
         self._household_present = False
         # Start of the running comfort block, for the empty-room grace time.
@@ -885,6 +936,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._model_seeded = False
         self.supply = SupplyProfile.from_list(stored.get("supply_profile"))
         self.usage = UsageProfile.from_list(stored.get("usage_profile"))
+        self._seed_version = self._stored_count(stored.get("seed_version"))
+        raw_stats = stored.get("radiator_stats")
+        if isinstance(raw_stats, dict):
+            self.radiator_stats = {
+                str(entity_id): RadiatorStats.from_dict(data)
+                for entity_id, data in raw_stats.items()
+            }
+        self.plan_error = self._stored_float(stored.get("plan_error"))
+        self.plan_checked = self._stored_count(stored.get("plan_checked"))
         raw_maintenance = self._stored_string(stored.get("valve_maintenance_last"))
         parsed_maintenance = (
             dt_util.parse_datetime(raw_maintenance) if raw_maintenance else None
@@ -1278,6 +1338,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "room_model_version": ROOM_MODEL_VERSION,
                 "supply_profile": self.supply.as_list(),
                 "usage_profile": self.usage.as_list(),
+                "seed_version": self._seed_version,
+                "radiator_stats": {
+                    entity_id: stats.as_dict()
+                    for entity_id, stats in self.radiator_stats.items()
+                },
+                "plan_error": self.plan_error,
+                "plan_checked": self.plan_checked,
             }
         )
 
@@ -3252,28 +3319,93 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._supply_at = now
         learned = self.supply.observe(local.hour, supply, seconds)
+        learned = self._learn_balance(sensors) or learned
+        house = self._house()
+        house_verdict = (
+            None if house is None else house.supply_verdict({self.entry_id: supply})
+        )
+        profile = self.supply_profile
         result["radiators"] = {
             self._friendly_name(entity_id): state for entity_id, state in states.items()
         }
         result["radiator_supply"] = supply
-        result["supply_usually_off"] = self.supply.usually_off(local.hour)
-        result["supply_off_hours"] = self.supply.off_hours()
-        result["supply_today"] = self.supply.as_list()
-        result["radiator_status"] = self._radiator_text(states, supply, local.hour)
+        result["house_supply"] = house_verdict
+        result["supply_usually_off"] = profile.usually_off(local.hour)
+        result["supply_off_hours"] = profile.off_hours()
+        result["supply_today"] = profile.as_list()
+        result["supply_source"] = "Haus" if profile is not self.supply else "Raum"
+        result["radiator_status"] = self._radiator_text(
+            states, supply, local.hour, house_verdict
+        )
         if supply == SUPPLY_COLD and result.get("status"):
             result["status"] = f"{result['status']} – Heizkörper bleiben kalt"
+        balance, weak = balance_verdict(
+            {
+                self._friendly_name(entity_id): self.radiator_stats.setdefault(
+                    entity_id, RadiatorStats()
+                )
+                for entity_id in sensors
+            }
+        )
+        result["radiator_balance"] = balance
+        result["radiator_balance_weak"] = weak
+        result["radiator_stats"] = {
+            self._friendly_name(entity_id): self.radiator_stats[entity_id].as_dict()
+            for entity_id in sensors
+            if entity_id in self.radiator_stats
+        }
         return learned
 
+    def _house(self):
+        """The house manager, if a house entry is set up."""
+        return self.hass.data.get(DOMAIN, {}).get(HOUSE_DATA_KEY)
+
+    @property
+    def supply_profile(self) -> SupplyProfile:
+        """When the central heating delivers: the house's view, else the room's."""
+        house = self._house()
+        profile = house.supply_profile() if house is not None else None
+        return profile if profile is not None else self.supply
+
+    def _learn_balance(self, sensors: dict[str, str]) -> bool:
+        """Count finished heating periods per radiator; True when one was added.
+
+        A period in which no radiator of the room got warm shows the central
+        heating, not the radiators, and is skipped.
+        """
+        periods = {
+            entity_id: tracker.period
+            for entity_id, tracker in self._radiators.items()
+            if entity_id in sensors and tracker.period is not None
+        }
+        if not periods or all(
+            period.warmup_minutes is None for period in periods.values()
+        ):
+            return False
+        for entity_id, period in periods.items():
+            self.radiator_stats.setdefault(entity_id, RadiatorStats()).add(period)
+        return True
+
     def _radiator_text(
-        self, states: dict[str, str], supply: str | None, hour: int
+        self,
+        states: dict[str, str],
+        supply: str | None,
+        hour: int,
+        house_verdict: str | None = None,
     ) -> str | None:
         """What the radiators say, in a few words."""
         if supply is None:
             return None
+        if supply == SUPPLY_COLD and house_verdict == SUPPLY_WARM:
+            return (
+                "Kalt, obwohl die Zentralheizung liefert (andere Räume werden "
+                "warm) – Ventile und Heizkörper prüfen"
+            )
         if supply == SUPPLY_COLD:
+            profile = self.supply_profile
             text = "Kalt – die Zentralheizung liefert keine Wärme"
-            if self.supply.usually_off(hour):
-                next_hour = self.supply.next_on_hour(hour)
+            if profile.usually_off(hour):
+                next_hour = profile.next_on_hour(hour)
                 text += (
                     f" (um diese Zeit üblich, meist wieder ab {next_hour}:00 Uhr)"
                     if next_hour is not None
@@ -3326,17 +3458,26 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_seed_model(self) -> None:
         """Learn the room model from the recorder once, at its first start."""
-        if self._model_seeded or self.room_model.samples:
+        if self.room_model.ready or (
+            self._model_seeded and self._seed_version >= SEED_VERSION
+        ):
             return
         if "recorder" not in self.hass.config.components:
             return
         room_id = self.config.get(CONF_ROOM_TEMPERATURE_ENTITY)
         outdoor_id = self.config.get(CONF_OUTDOOR_TEMPERATURE_ENTITY)
+        # A room set up only now has no recorded heat demand yet: the valves'
+        # setpoints of the past days stand in for it.
         demand_id = er.async_get(self.hass).async_get_entity_id(
             "sensor", DOMAIN, f"{self.entry_id}_heat_demand"
         )
-        if not room_id or not outdoor_id or not demand_id:
+        if not room_id or not outdoor_id:
             return
+        valves = [
+            entity_id
+            for entity_id in self._thermostat_ids()
+            if entity_id not in self.skipped_valves
+        ]
         from homeassistant.components.recorder import get_instance, history
 
         windows = [
@@ -3355,7 +3496,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         radiators = list(self._radiator_sensors().values())
         end = dt_util.utcnow()
         start = end - timedelta(days=MODEL_HISTORY_DAYS)
-        ids = [room_id, outdoor_id, demand_id, *windows, *optional, *radiators]
+        ids = [
+            entity_id
+            for entity_id in (room_id, outdoor_id, demand_id, *windows, *optional, *radiators)
+            if entity_id
+        ]
         try:
             states = await get_instance(self.hass).async_add_executor_job(
                 history.get_significant_states,
@@ -3369,9 +3514,34 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 False,
                 True,
             )
+            valve_states = await get_instance(self.hass).async_add_executor_job(
+                history.get_significant_states,
+                self.hass,
+                start,
+                end,
+                valves,
+                None,
+                True,
+                False,
+                False,
+                False,
+            )
         except Exception:  # noqa: BLE001 - history is a bonus, never fatal
             _LOGGER.debug("Room model history not available", exc_info=True)
             return
+        setpoints = {
+            f"setpoint:{entity_id}": [
+                (
+                    state.last_updated.timestamp(),
+                    "off" if state.state == "off" else str(
+                        state.attributes.get("temperature")
+                    ),
+                )
+                for state in valve_states.get(entity_id, [])
+                if isinstance(state, State)
+            ]
+            for entity_id in valves
+        }
         units = {
             entity_id: str(
                 (self.hass.states.get(entity_id).attributes.get("unit_of_measurement"))
@@ -3389,10 +3559,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if isinstance(state, State)
                 ]
                 for entity_id in ids
-            },
+            }
+            | setpoints,
             room_id=room_id,
             outdoor_id=outdoor_id,
-            demand_id=demand_id,
+            demand_id=demand_id or "",
             window_ids=windows,
             solar_id=self.config.get(CONF_SOLAR_RADIATION_ENTITY),
             wind_id=self.config.get(CONF_WIND_SPEED_ENTITY),
@@ -3400,10 +3571,426 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             start=start.timestamp(),
             end=end.timestamp(),
             radiator_ids=radiators,
+            setpoint_ids=list(setpoints),
+            full_gap=HEAT_DEMAND_FULL_GAP,
         )
         self._model_seeded = True
+        self._seed_version = SEED_VERSION
         _LOGGER.debug("Room model learned %s hours from the recorder", added)
+        if added:
+            self._log(f"Raummodell hat {added} Stunden aus dem Verlauf gelernt")
         await self._save_learning()
+
+    async def _schedule_blocks(self, now: datetime) -> list[Block] | None:
+        """Comfort blocks of the active schedule in the next 24 hours.
+
+        A schedule helper's week comes from ``schedule.get_schedule``, a
+        calendar's events from ``calendar.get_events``; None when neither
+        answers.
+        """
+        schedule_id = self.active_schedule
+        key = (schedule_id, dt_util.as_local(now).strftime("%Y-%m-%d %H"))
+        if (
+            self._schedule_week is not None
+            and self._schedule_week_key is not None
+            and self._schedule_week_key[0] == schedule_id
+            and self._schedule_week_at is not None
+            and now - self._schedule_week_at < SCHEDULE_WEEK_INTERVAL
+        ):
+            return [block for block in self._schedule_week if block.end > now]
+        if not schedule_id:
+            return None
+        local = dt_util.as_local(now)
+        blocks: list[Block] | None = None
+        try:
+            if schedule_id.startswith("schedule."):
+                response = await self.hass.services.async_call(
+                    "schedule",
+                    "get_schedule",
+                    {"entity_id": schedule_id},
+                    blocking=True,
+                    return_response=True,
+                )
+                weekly = response.get(schedule_id) if isinstance(response, dict) else None
+                blocks = blocks_from_schedule(
+                    weekly, local, schedule_comfort_temperature
+                )
+            elif schedule_id.startswith("calendar."):
+                response = await self.hass.services.async_call(
+                    "calendar",
+                    "get_events",
+                    {
+                        "entity_id": schedule_id,
+                        "start_date_time": local.isoformat(),
+                        "end_date_time": (local + timedelta(days=1)).isoformat(),
+                    },
+                    blocking=True,
+                    return_response=True,
+                )
+                events = (
+                    (response.get(schedule_id) or {}).get("events")
+                    if isinstance(response, dict)
+                    else None
+                )
+                blocks = []
+                for event in events or []:
+                    start = self._parse_local_time(event.get("start"))
+                    end = self._parse_local_time(event.get("end"))
+                    if start is None or end is None or end <= start:
+                        continue
+                    blocks.append(
+                        Block(
+                            dt_util.as_local(start),
+                            dt_util.as_local(end),
+                            calendar_temperature(
+                                event.get("description"), CALENDAR_TEMPERATURE_KEY
+                            ),
+                        )
+                    )
+                blocks.sort(key=lambda block: block.start)
+        except (HomeAssistantError, TypeError, ValueError, AttributeError) as err:
+            _LOGGER.debug("Schedule of %s not readable for the day plan: %s", schedule_id, err)
+            blocks = None
+        self._schedule_week = blocks
+        self._schedule_week_key = key
+        self._schedule_week_at = now
+        return blocks
+
+    def _outdoor_at(self, fallback: float) -> Any:
+        """A function giving the forecast outdoor temperature for a time."""
+        forecast: list[tuple[datetime, float]] = []
+        for item in self._forecast_items:
+            raw = item.get("datetime")
+            moment = dt_util.parse_datetime(raw) if isinstance(raw, str) else None
+            value = _as_number(item.get("temperature"))
+            if moment is not None and value is not None:
+                forecast.append((dt_util.as_utc(moment), value))
+        forecast.sort()
+
+        def outdoor_at(at: datetime) -> float:
+            value = fallback
+            moment = dt_util.as_utc(at)
+            for start, temperature in forecast:
+                if start > moment:
+                    break
+                value = temperature
+            return value
+
+        return outdoor_at
+
+    async def _update_plan(self, result: dict[str, Any]) -> None:
+        """Recalculate the day plan now and then and check it against the room."""
+        now = dt_util.utcnow()
+        room = result.get("room_temperature")
+        self._check_plan(result, now)
+        if self._plan_at is None or now - self._plan_at >= PLAN_INTERVAL:
+            self._plan_at = now
+            self.plan_points, self.plan_info = await self._calculate_plan(result, now)
+        result["day_plan"] = self.plan_info.get("text")
+        result["plan_error"] = self.plan_error
+        result["plan_checked"] = self.plan_checked
+        local_hour = dt_util.as_local(now).hour
+        if (
+            self.plan_points
+            and room is not None
+            and local_hour != self._plan_check_hour
+            and result.get("mode") in _PLAN_MODES
+        ):
+            self._plan_check_hour = local_hour
+            at = now + timedelta(hours=CHECK_HOURS)
+            predicted = temperature_at(self.plan_points, dt_util.as_local(at))
+            if predicted is not None:
+                self._plan_checks[at] = predicted
+
+    def _check_plan(self, result: dict[str, Any], now: datetime) -> None:
+        """Compare what the plan said a few hours ago with the room now."""
+        room = result.get("room_temperature")
+        for at in sorted(self._plan_checks):
+            if at > now:
+                break
+            predicted = self._plan_checks.pop(at)
+            if (
+                room is None
+                or now - at > PLAN_INTERVAL
+                or result.get("mode") not in _PLAN_MODES
+                or result.get("room_temperature_source") != "sensor"
+            ):
+                continue
+            error = abs(float(room) - predicted)
+            self.plan_error = round(
+                error
+                if self.plan_error is None
+                else (1 - CHECK_ALPHA) * self.plan_error + CHECK_ALPHA * error,
+                2,
+            )
+            self.plan_checked += 1
+
+    async def _calculate_plan(
+        self, result: dict[str, Any], now: datetime
+    ) -> tuple[list, dict[str, Any]]:
+        room = result.get("room_temperature")
+        outdoor = result.get("outdoor_temperature")
+        if not self.enabled:
+            return [], {"text": "Regelung aus – kein Tagesplan"}
+        if room is None or outdoor is None:
+            return [], {"text": "Raum- oder Außentemperatur fehlt – kein Tagesplan"}
+        view = self._model_view(float(outdoor), 0.0, 0.0)
+        if view is None:
+            return [], {"text": "Raummodell lernt noch – Tagesplan folgt"}
+        blocks = await self._schedule_blocks(now)
+        if blocks is None:
+            return [], {"text": "Zeitplan nicht lesbar – kein Tagesplan"}
+        profile = self.supply_profile
+        local = dt_util.as_local(now)
+        comfort = float(
+            self.config.get(CONF_COMFORT_TEMPERATURE, DEFAULT_COMFORT_TEMPERATURE)
+        )
+        eco = float(result.get("eco_temperature") or self.config.get(
+            CONF_ECO_TEMPERATURE, DEFAULT_ECO_TEMPERATURE
+        ))
+        points = simulate(
+            view,
+            now=local,
+            room=float(room),
+            comfort=comfort,
+            eco=eco,
+            blocks=blocks,
+            outdoor_at=self._outdoor_at(float(outdoor)),
+            supply_off=lambda at: profile.usually_off(dt_util.as_local(at).hour),
+            max_preheat_minutes=int(
+                self.config.get(CONF_MAX_PREHEAT_MINUTES, DEFAULT_MAX_PREHEAT_MINUTES)
+            ),
+        )
+        info = plan_summary(points, blocks, local)
+        if self.plan_error is not None and self.plan_checked >= 3:
+            info["text"] = (
+                f"{info['text']} (Abweichung bisher ±"
+                + f"{self.plan_error:.1f}".replace(".", ",")
+                + " °C)"
+            )
+        info["text"] = str(info.get("text") or "")[:250]
+        return points, info
+
+    def plan_attributes(self) -> dict[str, Any]:
+        """The day plan for dashboards: times, target and expected temperature."""
+        return {
+            **{key: value for key, value in self.plan_info.items() if key != "text"},
+            "plan_error": self.plan_error,
+            "plan_checked": self.plan_checked,
+            "calculated_at": self._plan_at.isoformat() if self._plan_at else None,
+            "forecast": [
+                {
+                    "time": point.at.isoformat(),
+                    "temperature": point.temperature,
+                    "target": point.target,
+                }
+                for point in self.plan_points[::2]
+            ],
+        }
+
+    async def async_run_selftest(self) -> None:
+        """Run the self-test with the next cycle (button)."""
+        self._selftest_due = dt_util.utcnow()
+        await self.async_refresh()
+
+    async def _maybe_selftest(self, result: dict[str, Any]) -> None:
+        """Check after a start (and hourly while it fails) that all is wired up."""
+        now = dt_util.utcnow()
+        if self._selftest_due is None or now < self._selftest_due:
+            result["selftest"] = self._selftest_state()
+            return
+        checks = self._selftest_checks(result)
+        problems = [check for check in checks if check["ok"] is False]
+        self.selftest = {
+            "at": now.isoformat(),
+            "checks": checks,
+            "problems": [f"{check['name']}: {check['detail']}" for check in problems],
+        }
+        self._selftest_due = now + SELFTEST_RETRY if problems else None
+        result["selftest"] = self._selftest_state()
+        issue_id = f"selftest_{self.entry_id}"
+        if problems:
+            text = "; ".join(self.selftest["problems"])
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="selftest_failed",
+                translation_placeholders={"room": self.room_name, "problems": text},
+            )
+            self._selftest_issue = True
+            names = tuple(sorted(check["name"] for check in problems))
+            if names != self._selftest_sent:
+                self._selftest_sent = names
+                self._log(f"Selbsttest: {text}")
+                await self._push_room(f"Selbsttest nach dem Start: {text}")
+        else:
+            if self._selftest_issue:
+                ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+                self._selftest_issue = False
+                if self._selftest_sent:
+                    await self._push_room("Selbsttest: wieder alles in Ordnung.")
+            self._selftest_sent = ()
+
+    def _selftest_state(self) -> str | None:
+        if self.selftest is None:
+            return "Läuft 10 Minuten nach dem Start" if self._selftest_due else None
+        problems = self.selftest["problems"]
+        if not problems:
+            return "Alles in Ordnung"
+        return f"{len(problems)} Problem" + ("e" if len(problems) > 1 else "")
+
+    async def _push_room(self, message: str) -> None:
+        service = (self.config.get(CONF_NOTIFY_SERVICE) or "").strip()
+        house = self._house()
+        if not service and house is not None:
+            service = (house._notify_service() or "").strip()
+        if not service:
+            return
+        domain, _, name = service.partition(".")
+        if not name:
+            domain, name = "notify", domain
+        await self._call(
+            domain, name, {"title": f"Heizung {self._room_name()}", "message": message}
+        )
+
+    def _selftest_checks(self, result: dict[str, Any]) -> list[dict[str, Any]]:
+        """One entry per check: name, ok (True, False, or None = info only), detail."""
+        checks: list[dict[str, Any]] = []
+
+        def add(name: str, ok: bool | None, detail: str) -> None:
+            checks.append({"name": name, "ok": ok, "detail": detail})
+
+        if not self.enabled:
+            add("Regelung", None, "ausgeschaltet – nichts geprüft")
+            return checks
+        add("Regelung", True, "eingeschaltet")
+        room = result.get("room_temperature")
+        if self._room_fallback or room is None:
+            add("Raumfühler", False, "liefert keine Werte")
+        else:
+            add("Raumfühler", True, f"{float(room):.1f} °C".replace(".", ","))
+        schedule_id = self.active_schedule
+        if not self._valid(self.hass.states.get(schedule_id) if schedule_id else None):
+            add("Zeitplan", False, f"{schedule_id or 'keiner'} nicht verfügbar")
+        else:
+            add("Zeitplan", True, str(schedule_id))
+        missing = [
+            self._friendly_name(entity_id)
+            for entity_id in self._thermostat_ids()
+            if not self._valid(self.hass.states.get(entity_id))
+        ]
+        add(
+            "Ventile",
+            not missing,
+            f"nicht erreichbar: {', '.join(missing)}" if missing
+            else f"{len(self._thermostat_ids())} erreichbar",
+        )
+        if self.config.get(CONF_EXTERNAL_TEMPERATURE) and room is not None:
+            wrong = []
+            fed = 0
+            for entity_id in self._thermostat_ids():
+                if entity_id in self.skipped_valves or entity_id in missing:
+                    continue
+                pair = self._external_temperature_entities(entity_id)
+                if pair is None:
+                    continue
+                fed += 1
+                select_state = self.hass.states.get(pair[0])
+                shown = self._thermostat_temperature(entity_id)
+                name = self._friendly_name(entity_id)
+                if select_state is None or select_state.state != "external":
+                    wrong.append(f"{name} misst intern")
+                elif shown is None or abs(shown - float(room)) > SELFTEST_VALVE_TOLERANCE:
+                    wrong.append(
+                        f"{name} zeigt {'?' if shown is None else f'{shown:.1f}'} °C"
+                    )
+            if fed:
+                add(
+                    "Raumtemperatur an den Ventilen",
+                    not wrong,
+                    "; ".join(wrong) if wrong else "kommt an",
+                )
+        contacts = [
+            entity_id
+            for _key, ids, _door, _open, _close in self._contact_groups()
+            for entity_id in ids
+        ]
+        dead = [
+            self._friendly_name(entity_id)
+            for entity_id in contacts
+            if not self._valid(self.hass.states.get(entity_id))
+        ]
+        if contacts:
+            add(
+                "Fensterkontakte",
+                not dead,
+                f"nicht erreichbar: {', '.join(dead)}" if dead
+                else f"{len(contacts)} erreichbar",
+            )
+        if self.config.get(CONF_OUTDOOR_TEMPERATURE_ENTITY) or self.config.get(
+            CONF_WEATHER_ENTITY
+        ):
+            outdoor = result.get("outdoor_temperature")
+            add(
+                "Außentemperatur",
+                outdoor is not None,
+                "fehlt" if outdoor is None else f"{float(outdoor):.1f} °C".replace(".", ","),
+            )
+        warnings = result.get("thermostat_warnings") or {}
+        add(
+            "Batterie und Funk",
+            not warnings,
+            "; ".join(
+                f"{self._friendly_name(entity_id)}: {', '.join(items)}"
+                for entity_id, items in warnings.items()
+            )
+            if warnings
+            else "keine Meldungen",
+        )
+        add(
+            "Raummodell",
+            None,
+            "bereit" if self.room_model.ready else
+            f"lernt noch ({self.room_model.samples} Stunden)",
+        )
+        return checks
+
+    async def async_warm_up(self) -> None:
+        """Kurz wärmer: the current target plus a little, for a while.
+
+        Pressed again while it runs, it adds once more (up to three steps)
+        and starts the time again; then the room returns to automatic.
+        """
+        step = float(self.config.get(CONF_WARM_UP_STEP) or DEFAULT_WARM_UP_STEP)
+        seconds = int(
+            self.config.get(CONF_WARM_UP_DURATION) or DEFAULT_WARM_UP_DURATION
+        )
+        data = self.data or {}
+        base = data.get("target_temperature")
+        if base is None:
+            base = self.config.get(CONF_COMFORT_TEMPERATURE, DEFAULT_COMFORT_TEMPERATURE)
+        if (
+            self._warm_up_base is not None
+            and self.quick_mode == QUICK_MANUAL
+            and self.quick_until is not None
+            and self.quick_until == self._warm_up_until
+        ):
+            steps = min(self._warm_up_steps + 1, 3)
+            base = self._warm_up_base
+        else:
+            steps = 1
+            self._warm_up_base = float(base)
+        self._warm_up_steps = steps
+        self._pending_source = "Kurz wärmer"
+        self.boost_until = None
+        self.quick_mode = QUICK_MANUAL
+        self.quick_temperature = round(float(base) + step * steps, 1)
+        self.quick_until = dt_util.utcnow() + timedelta(seconds=seconds)
+        self._warm_up_until = self.quick_until
+        await self.async_refresh()
 
     def _early_stop(
         self,
@@ -3561,6 +4148,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result.get("target_temperature"), result.get("room_temperature")
         )
         supply_learned = self._observe_radiators(result)
+        await self._update_plan(result)
+        await self._maybe_selftest(result)
         await self._send_notifications(result)
         result["external_temperature_thermostats"] = sorted(self._external_fed)
         result["quick_duration"] = self.quick_duration
@@ -3681,9 +4270,19 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         if result.get("heating_problem"):
             detail = result.get("heating_problem_detail")
-            if supply == SUPPLY_COLD:
-                # Expected when the central heating is usually off now.
-                if not result.get("supply_usually_off"):
+            if supply == SUPPLY_COLD and result.get("house_supply") == SUPPLY_WARM:
+                conditions["heating"] = (
+                    0,
+                    "Der Raum kommt nicht auf Temperatur"
+                    + (f" ({detail})" if detail else "")
+                    + ": die Heizkörper hier bleiben kalt, obwohl die "
+                    "Zentralheizung in anderen Räumen Wärme liefert. Ventile "
+                    "prüfen (klemmt der Stift?) oder Heizkörper entlüften.",
+                )
+            elif supply == SUPPLY_COLD:
+                # Expected when the central heating is usually off now; with a
+                # house entry the house tells it once for all rooms.
+                if not result.get("supply_usually_off") and self._house() is None:
                     conditions["heating"] = (
                         0,
                         "Der Raum kommt nicht auf Temperatur"

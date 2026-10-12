@@ -9,7 +9,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
+from . import const
 from .const import (
+    CONF_WARM_UP_DURATION,
+    CONF_WARM_UP_STEP,
+    DEFAULT_WARM_UP_DURATION,
+    DEFAULT_WARM_UP_STEP,
     CONF_EARLY_STOP,
     CONF_LEARN_USAGE,
     CONF_PREHEAT_WHEN_HOME,
@@ -191,6 +196,7 @@ _DURATION_OPTIONS = (
     CONF_ZONE_WINDOW_OPEN_DELAY,
     CONF_ZONE_WINDOW_CLOSE_DELAY,
     CONF_MAINTENANCE_DURATION,
+    CONF_WARM_UP_DURATION,
 )
 
 _WEEKDAYS = (
@@ -582,6 +588,25 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
 
+# Pages of the room editor; "save" stores the changes of all pages.
+OPTIONS_MENU = [
+    "basics",
+    "valves",
+    "modes",
+    "presence",
+    "geofencing",
+    "environment",
+    "intelligence",
+    "save",
+]
+# Every setting this version knows (the CONF_* values of const).
+_KNOWN_KEYS = frozenset(
+    value
+    for name, value in vars(const).items()
+    if name.startswith("CONF_") and isinstance(value, str)
+)
+
+
 class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
     """Editable, multi-step room editor with clear functional groups."""
 
@@ -644,7 +669,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         )
 
     def _basic_schema(self, current: dict) -> vol.Schema:
-        """Room identity and heating target settings."""
+        """The essentials: valves, room sensor, schedule and temperatures."""
         return vol.Schema({
             vol.Required(
                 CONF_CLIMATE_ENTITY, default=current[CONF_CLIMATE_ENTITY]
@@ -652,6 +677,35 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             vol.Optional(CONF_ADDITIONAL_CLIMATE_ENTITIES): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="climate", multiple=True)
             ),
+            vol.Required(
+                CONF_ROOM_TEMPERATURE_ENTITY,
+                default=current[CONF_ROOM_TEMPERATURE_ENTITY],
+            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Required(
+                CONF_SCHEDULE_ENTITY, default=current[CONF_SCHEDULE_ENTITY]
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["schedule", "calendar"])
+            ),
+            vol.Required(
+                CONF_COMFORT_TEMPERATURE,
+                default=float(current[CONF_COMFORT_TEMPERATURE]),
+            ): _temperature_selector(16, 25),
+            vol.Required(
+                CONF_ECO_TEMPERATURE,
+                default=float(current[CONF_ECO_TEMPERATURE]),
+            ): _temperature_selector(7, 21),
+            vol.Required(
+                CONF_MAX_PREHEAT_MINUTES,
+                default=int(current[CONF_MAX_PREHEAT_MINUTES]),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=15, max=240, step=5, mode="slider")
+            ),
+            vol.Optional(CONF_FROST_PROTECTION_TEMPERATURE): _temperature_selector(5, 15),
+        })
+
+    def _valves_schema(self, current: dict) -> vol.Schema:
+        """How the valves are driven: feed, calibration, maintenance, timing."""
+        return vol.Schema({
             vol.Optional(
                 CONF_CALIBRATION, default=bool(current.get(CONF_CALIBRATION, False))
             ): selector.BooleanSelector(),
@@ -704,15 +758,11 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                     current.get(CONF_AGGRESSIVE_OFFSET, DEFAULT_AGGRESSIVE_OFFSET)
                 ),
             ): _degrees_selector(5, 0.5),
-            vol.Required(
-                CONF_ROOM_TEMPERATURE_ENTITY,
-                default=current[CONF_ROOM_TEMPERATURE_ENTITY],
-            ): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
-            vol.Required(
-                CONF_SCHEDULE_ENTITY, default=current[CONF_SCHEDULE_ENTITY]
-            ): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=["schedule", "calendar"])
-            ),
+        })
+
+    def _modes_schema(self, current: dict) -> vol.Schema:
+        """More schedules, eco times, boost, quick modes and Kurz wärmer."""
+        return vol.Schema({
             vol.Optional(CONF_ADDITIONAL_SCHEDULE_ENTITIES): selector.EntitySelector(
                 selector.EntitySelectorConfig(
                     domain=["schedule", "calendar"], multiple=True
@@ -721,21 +771,6 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             vol.Optional(CONF_ECO_SCHEDULE_ENTITY): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=["schedule", "calendar"])
             ),
-            vol.Required(
-                CONF_COMFORT_TEMPERATURE,
-                default=float(current[CONF_COMFORT_TEMPERATURE]),
-            ): _temperature_selector(16, 25),
-            vol.Required(
-                CONF_ECO_TEMPERATURE,
-                default=float(current[CONF_ECO_TEMPERATURE]),
-            ): _temperature_selector(7, 21),
-            vol.Required(
-                CONF_MAX_PREHEAT_MINUTES,
-                default=int(current[CONF_MAX_PREHEAT_MINUTES]),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=15, max=240, step=5, mode="slider")
-            ),
-            vol.Optional(CONF_FROST_PROTECTION_TEMPERATURE): _temperature_selector(5, 15),
             vol.Optional(
                 CONF_BOOST_TEMPERATURE,
                 default=float(
@@ -754,6 +789,13 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                     (CONF_SLEEP_TEMPERATURE, DEFAULT_SLEEP_TEMPERATURE),
                 )
             },
+            vol.Optional(
+                CONF_WARM_UP_STEP,
+                default=float(current.get(CONF_WARM_UP_STEP, DEFAULT_WARM_UP_STEP)),
+            ): _degrees_selector(3, 0.5),
+            self._duration_field(
+                CONF_WARM_UP_DURATION, current, DEFAULT_WARM_UP_DURATION
+            )[0]: _duration_selector(),
         })
 
     def _presence_schema(self, current: dict) -> vol.Schema:
@@ -916,7 +958,12 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         )
 
     async def async_step_init(self, user_input=None):
-        """Step 1: room entities and desired temperatures."""
+        """Menu: the essentials first, everything else on its own page."""
+        self._values()
+        return self.async_show_menu(step_id="init", menu_options=OPTIONS_MENU)
+
+    async def async_step_basics(self, user_input=None):
+        """Valves, room sensor, schedule and the temperatures."""
         current = self._values()
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -954,45 +1001,78 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 )
                 current[CONF_ADDITIONAL_SCHEDULE_ENTITIES] = [
                     entity_id
-                    for entity_id in user_input.get(CONF_ADDITIONAL_SCHEDULE_ENTITIES) or []
+                    for entity_id in current.get(CONF_ADDITIONAL_SCHEDULE_ENTITIES) or []
                     if entity_id != user_input[CONF_SCHEDULE_ENTITY]
                 ]
-                current[CONF_ECO_SCHEDULE_ENTITY] = (
-                    user_input.get(CONF_ECO_SCHEDULE_ENTITY) or None
-                )
-                # An empty range turns aggressive mode off.
-                current[CONF_AGGRESSIVE_RANGE] = user_input.get(CONF_AGGRESSIVE_RANGE)
-                current[CONF_BOOST_DURATION] = _duration_to_seconds(
-                    user_input.get(
-                        CONF_BOOST_DURATION,
-                        current.get(CONF_BOOST_DURATION, DEFAULT_BOOST_DURATION),
-                    )
-                )
-                current[CONF_MAINTENANCE_DURATION] = _duration_to_seconds(
-                    user_input.get(
-                        CONF_MAINTENANCE_DURATION,
-                        current.get(
-                            CONF_MAINTENANCE_DURATION, VALVE_MAINTENANCE_PHASE_SECONDS
-                        ),
-                    )
-                ) or VALVE_MAINTENANCE_PHASE_SECONDS
-                if CONF_MAINTENANCE_HOUR in user_input:
-                    current[CONF_MAINTENANCE_HOUR] = int(user_input[CONF_MAINTENANCE_HOUR])
-                return await self.async_step_presence()
+                return await self.async_step_init()
 
         suggested = dict(current)
         suggested.update(user_input or {})
-        for key in (CONF_BOOST_DURATION, CONF_MAINTENANCE_DURATION):
-            if key in suggested and not isinstance(suggested[key], dict):
-                suggested[key] = _seconds_to_duration(suggested[key])
         # Keep the user's attempted values visible when validation fails.
         return self.async_show_form(
-            step_id="init",
+            step_id="basics",
             data_schema=self.add_suggested_values_to_schema(
                 self._basic_schema(current), suggested
             ),
             errors=errors,
         )
+
+    async def async_step_valves(self, user_input=None):
+        """External temperature, calibration, maintenance and timing."""
+        current = self._values()
+        if user_input is not None:
+            current.update(user_input)
+            # An empty range turns aggressive mode off.
+            current[CONF_AGGRESSIVE_RANGE] = user_input.get(CONF_AGGRESSIVE_RANGE)
+            current[CONF_MAINTENANCE_DURATION] = _duration_to_seconds(
+                user_input.get(
+                    CONF_MAINTENANCE_DURATION,
+                    current.get(
+                        CONF_MAINTENANCE_DURATION, VALVE_MAINTENANCE_PHASE_SECONDS
+                    ),
+                )
+            ) or VALVE_MAINTENANCE_PHASE_SECONDS
+            if CONF_MAINTENANCE_HOUR in user_input:
+                current[CONF_MAINTENANCE_HOUR] = int(user_input[CONF_MAINTENANCE_HOUR])
+            return await self.async_step_init()
+        return self._show_step("valves", self._valves_schema(current), current)
+
+    async def async_step_modes(self, user_input=None):
+        """More schedules, eco times, boost, quick modes and Kurz wärmer."""
+        current = self._values()
+        if user_input is not None:
+            current.update(user_input)
+            current[CONF_ADDITIONAL_SCHEDULE_ENTITIES] = [
+                entity_id
+                for entity_id in user_input.get(CONF_ADDITIONAL_SCHEDULE_ENTITIES) or []
+                if entity_id != current[CONF_SCHEDULE_ENTITY]
+            ]
+            current[CONF_ECO_SCHEDULE_ENTITY] = (
+                user_input.get(CONF_ECO_SCHEDULE_ENTITY) or None
+            )
+            for key, default in (
+                (CONF_BOOST_DURATION, DEFAULT_BOOST_DURATION),
+                (CONF_WARM_UP_DURATION, DEFAULT_WARM_UP_DURATION),
+            ):
+                current[key] = _duration_to_seconds(
+                    user_input.get(key, current.get(key, default))
+                ) or default
+            return await self.async_step_init()
+        return self._show_step("modes", self._modes_schema(current), current)
+
+    async def async_step_save(self, user_input=None):
+        """Store every page's changes at once."""
+        current = self._values()
+        climate_entity = current[CONF_CLIMATE_ENTITY]
+        # Keys no version reads any more (left over from old releases) go.
+        options = {key: value for key, value in current.items() if key in _KNOWN_KEYS}
+        if climate_entity != self.config_entry.unique_id:
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                unique_id=climate_entity,
+                title=f"Dynamische Heizung – {climate_entity}",
+            )
+        return self.async_create_entry(title="", data=options)
 
     async def async_step_presence(self, user_input=None):
         """Step 2: occupancy, people and guest mode."""
@@ -1025,7 +1105,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                         CONF_PRESENCE_ON_DURATION, CONF_PRESENCE_OFF_DURATION,
                         CONF_FROST_AFTER_ABSENCE):
                 current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
-            return await self.async_step_geofencing()
+            return await self.async_step_init()
 
         return self._show_step("presence", self._presence_schema(current), current)
 
@@ -1043,7 +1123,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             )
             for key in (CONF_PROXIMITY_DURATION, CONF_PROXIMITY_MAX_AGE):
                 current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
-            return await self.async_step_environment()
+            return await self.async_step_init()
 
         return self._show_step(
             "geofencing", self._proximity_schema(current), current
@@ -1099,7 +1179,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             )
             current[CONF_NOTIFY_SERVICE] = user_input.get(CONF_NOTIFY_SERVICE) or None
 
-            return await self.async_step_intelligence()
+            return await self.async_step_init()
 
         return self._show_step(
             "environment", self._environment_schema(current), current
@@ -1121,16 +1201,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
             for key in (CONF_SOLAR_RADIATION_ENTITY, CONF_WIND_SPEED_ENTITY):
                 current[key] = user_input.get(key) or None
-
-            climate_entity = current[CONF_CLIMATE_ENTITY]
-            options = dict(current)
-            if climate_entity != self.config_entry.unique_id:
-                self.hass.config_entries.async_update_entry(
-                    self.config_entry,
-                    unique_id=climate_entity,
-                    title=f"Dynamische Heizung – {climate_entity}",
-                )
-            return self.async_create_entry(title="", data=options)
+            return await self.async_step_init()
 
         return self._show_step(
             "intelligence", self._intelligence_schema(current), current
