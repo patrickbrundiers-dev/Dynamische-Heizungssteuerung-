@@ -148,11 +148,23 @@ CONF_EXTERNAL_TEMPERATURE: Final = "external_temperature"
 # A change of at least this much is sent at once (as Better Thermostat); a
 # smaller one only once it held for the plateau time, so a sensor flickering
 # between two readings does not wake the valves over Zigbee every cycle.
-EXTERNAL_TEMPERATURE_MIN_CHANGE: Final = 0.11
-EXTERNAL_TEMPERATURE_PLATEAU_CHANGE: Final = 0.05
-EXTERNAL_TEMPERATURE_PLATEAU_TOLERANCE: Final = 0.02
-EXTERNAL_TEMPERATURE_PLATEAU_SECONDS: Final = 120
-EXTERNAL_TEMPERATURE_RESEND_SECONDS: Final = 1800
+# The room sensor reports in 0.01 °C steps and wobbles by a few hundredths;
+# every value sent makes the valve recalculate and often move its motor, so
+# only real changes are sent, rounded to 0.1 °C.
+EXTERNAL_TEMPERATURE_MIN_CHANGE: Final = 0.2
+EXTERNAL_TEMPERATURE_PLATEAU_CHANGE: Final = 0.1
+EXTERNAL_TEMPERATURE_PLATEAU_TOLERANCE: Final = 0.05
+EXTERNAL_TEMPERATURE_PLATEAU_SECONDS: Final = 600
+# The valve keeps the value; the regular resend only covers a lost message,
+# the check below catches a valve that did not take it.
+EXTERNAL_TEMPERATURE_RESEND_SECONDS: Final = 7200
+# A valve that still shows another temperature this long after a send did not
+# take the value (e.g. it was sent while the valve was still switching to its
+# external input): send it again, at most once per retry interval.
+EXTERNAL_TEMPERATURE_VERIFY_SECONDS: Final = 120
+EXTERNAL_TEMPERATURE_VERIFY_TOLERANCE: Final = 0.3
+EXTERNAL_TEMPERATURE_RETRY_SECONDS: Final = 300
+EXTERNAL_TEMPERATURE_RETRIES: Final = 3
 
 # Boost: heat to a higher temperature for a limited time (Better Thermostat's
 # boost preset), started with the "Boost" switch.

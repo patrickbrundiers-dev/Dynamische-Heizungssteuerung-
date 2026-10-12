@@ -13,8 +13,9 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfLength, UnitOfTemperature
+from homeassistant.const import EntityCategory, UnitOfLength, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -82,11 +83,13 @@ SENSORS = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     HeatingSensorDescription(
         key="forecast_condition",
         name="Wetterprognose",
         icon="mdi:weather-partly-cloudy",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     HeatingSensorDescription(
         key="solar_adjustment_minutes",
@@ -94,95 +97,23 @@ SENSORS = (
         icon="mdi:weather-sunny",
         native_unit_of_measurement="min",
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     HeatingSensorDescription(
         key="heating_rate",
-        name="Gelernte Aufheizrate",
+        name="Aufheizrate",
         icon="mdi:chart-line",
         native_unit_of_measurement="°C/h",
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     HeatingSensorDescription(
         key="cooling_rate",
-        name="Gelernte Abkühlrate",
+        name="Abkühlrate",
         icon="mdi:chart-bell-curve",
         native_unit_of_measurement="°C/h",
         state_class=SensorStateClass.MEASUREMENT,
-    ),
-    HeatingSensorDescription(
-        key="heating_samples",
-        name="Akzeptierte Aufheizmessungen",
-        icon="mdi:counter",
-        state_class=SensorStateClass.TOTAL_INCREASING,
-    ),
-    HeatingSensorDescription(
-        key="cooling_samples",
-        name="Akzeptierte Abkühlmessungen",
-        icon="mdi:counter",
-        state_class=SensorStateClass.TOTAL_INCREASING,
-    ),
-    HeatingSensorDescription(
-        key="rejected_samples",
-        name="Verworfene Lernmessungen",
-        icon="mdi:filter-remove",
-        state_class=SensorStateClass.TOTAL_INCREASING,
-    ),
-    HeatingSensorDescription(
-        key="forecast_evaluations",
-        name="Ausgewertete Temperaturprognosen",
-        icon="mdi:chart-bell-curve-cumulative",
-        state_class=SensorStateClass.TOTAL_INCREASING,
-    ),
-    HeatingSensorDescription(
-        key="forecast_mae_c",
-        name="Mittlerer Prognosefehler",
-        icon="mdi:chart-line",
-        device_class=SensorDeviceClass.TEMPERATURE,
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
-    HeatingSensorDescription(
-        key="last_forecast_error_c",
-        name="Letzter Prognosefehler",
-        icon="mdi:thermometer-alert",
-        device_class=SensorDeviceClass.TEMPERATURE,
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
-    HeatingSensorDescription(
-        key="learning_status",
-        name="Lernmodell Status",
-        icon="mdi:brain",
-    ),
-    HeatingSensorDescription(
-        key="last_observed_heating_rate",
-        name="Letzte beobachtete Aufheizrate",
-        icon="mdi:chart-line",
-        native_unit_of_measurement="°C/h",
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
-    HeatingSensorDescription(
-        key="last_observed_cooling_rate",
-        name="Letzte beobachtete Abkühlrate",
-        icon="mdi:chart-bell-curve",
-        native_unit_of_measurement="°C/h",
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
-    HeatingSensorDescription(
-        key="last_forecast_predicted_temperature",
-        name="Letzte prognostizierte Temperatur",
-        icon="mdi:thermometer-chevron-up",
-        device_class=SensorDeviceClass.TEMPERATURE,
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
-    HeatingSensorDescription(
-        key="last_forecast_actual_temperature",
-        name="Letzte tatsächliche Komforttemperatur",
-        icon="mdi:thermometer-check",
-        device_class=SensorDeviceClass.TEMPERATURE,
-        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     HeatingSensorDescription(
         key="proximity_status",
@@ -203,12 +134,15 @@ SENSORS = (
         icon="mdi:clock-alert-outline",
         native_unit_of_measurement="s",
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     HeatingSensorDescription(
         key="proximity_updates_seen",
         name="Empfangene Standortupdates",
         icon="mdi:counter",
         state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
     ),
     HeatingSensorDescription(
         key="proximity_average_update_interval_s",
@@ -216,36 +150,48 @@ SENSORS = (
         icon="mdi:timer-sand",
         native_unit_of_measurement="s",
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
     ),
     HeatingSensorDescription(
         key="proximity_stale_events",
         name="Veraltete Standortereignisse",
         icon="mdi:map-marker-alert-outline",
         state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
     ),
     HeatingSensorDescription(
         key="proximity_invalid_events",
         name="Ungültige Standortereignisse",
         icon="mdi:alert-circle-outline",
         state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
     ),
     HeatingSensorDescription(
         key="proximity_out_of_range_events",
         name="Außerhalb der Anfahrtsentfernung",
         icon="mdi:map-marker-off-outline",
         state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
     ),
     HeatingSensorDescription(
         key="proximity_approach_attempts",
         name="Erkannte Anfahrten",
         icon="mdi:car-arrow-left",
         state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
     ),
     HeatingSensorDescription(
         key="proximity_confirmed_approaches",
         name="Bestätigte Anfahrten",
         icon="mdi:check-circle-outline",
         state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
     ),
     HeatingSensorDescription(
         key="preheat_minutes",
@@ -267,6 +213,7 @@ SENSORS = (
         icon="mdi:chart-bell-curve",
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     HeatingSensorDescription(
         key="heating_limit_basis",
@@ -274,6 +221,7 @@ SENSORS = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     HeatingSensorDescription(
         key="forecast_temperature",
@@ -281,6 +229,7 @@ SENSORS = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     HeatingSensorDescription(
         key="model_status",
@@ -300,6 +249,7 @@ SENSORS = (
         icon="mdi:radiator",
         native_unit_of_measurement="°C/h",
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     HeatingSensorDescription(
         key="heat_loss",
@@ -307,6 +257,7 @@ SENSORS = (
         icon="mdi:home-thermometer-outline",
         native_unit_of_measurement="°C/h",
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     HeatingSensorDescription(
         key="solar_gain",
@@ -314,7 +265,24 @@ SENSORS = (
         icon="mdi:white-balance-sunny",
         native_unit_of_measurement="°C/h",
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
+)
+
+# Sensors of the old sample learner and its forecast check, replaced by the
+# room model in 0.9.2; their values stay in the status sensor's attributes.
+REMOVED_SENSORS = (
+    "heating_samples",
+    "cooling_samples",
+    "rejected_samples",
+    "forecast_evaluations",
+    "forecast_mae_c",
+    "last_forecast_error_c",
+    "learning_status",
+    "last_observed_heating_rate",
+    "last_observed_cooling_rate",
+    "last_forecast_predicted_temperature",
+    "last_forecast_actual_temperature",
 )
 
 # Extra attributes of the room model sensor.
@@ -345,6 +313,12 @@ async def async_setup_entry(
         ])
         return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
+    registry = er.async_get(hass)
+    for key in REMOVED_SENSORS:
+        if entity_id := registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{entry.entry_id}_{key}"
+        ):
+            registry.async_remove(entity_id)
     async_add_entities(
         HeatingSensor(coordinator, entry, description) for description in SENSORS
     )
