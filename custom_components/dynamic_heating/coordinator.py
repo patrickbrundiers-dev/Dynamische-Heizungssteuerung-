@@ -575,6 +575,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.plan_points: list = []
         self.plan_info: dict[str, Any] = {}
         self._plan_at: datetime | None = None
+        self._plan_key: tuple | None = None
         self._schedule_week: list[Block] | None = None
         self._schedule_week_key: tuple[str | None, str] | None = None
         self._schedule_week_at: datetime | None = None
@@ -3683,8 +3684,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now = dt_util.utcnow()
         room = result.get("room_temperature")
         self._check_plan(result, now)
-        if self._plan_at is None or now - self._plan_at >= PLAN_INTERVAL:
+        # Also at once when control is switched on (after a restart it comes
+        # on a moment after the first cycle), the model gets ready or the
+        # schedule changes.
+        key = (self.enabled, self.room_model.ready, self.active_schedule)
+        if (
+            self._plan_at is None
+            or now - self._plan_at >= PLAN_INTERVAL
+            or key != self._plan_key
+        ):
             self._plan_at = now
+            self._plan_key = key
             self.plan_points, self.plan_info = await self._calculate_plan(result, now)
         result["day_plan"] = self.plan_info.get("text")
         result["plan_error"] = self.plan_error

@@ -315,7 +315,6 @@ async def test_room_publishes_its_day_plan_and_checks_it(
     coordinator.room_model = model
     now = dt_util.now()
     block = Block(now + timedelta(hours=2), now + timedelta(hours=4), None)
-    coordinator._plan_at = None
     with (
         _capture_climate_calls(hass),
         patch.object(coordinator, "_schedule_blocks", return_value=[block]),
