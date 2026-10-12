@@ -281,6 +281,21 @@ from .model import (
     solar_to_kw,
     wind_to_ms,
 )
+from .radiator import (
+    COLD,
+    SUPPLY_COLD,
+    SUPPLY_IDLE,
+    SUPPLY_PARTLY,
+    SUPPLY_WAITING,
+    SUPPLY_WARM,
+    RadiatorTracker,
+    SupplyProfile,
+    room_supply,
+)
+
+# Bumped when the room model must forget what it learned: 2 = 0.9.3, which
+# no longer learns from hours in which the radiators stayed cold.
+ROOM_MODEL_VERSION = 2
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -517,6 +532,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.room_model = RoomModel()
         self._model_collector = SampleCollector()
         self._model_seeded = False
+        # Whether heat reaches each radiator, and per hour of the day how
+        # often the central heating delivered (persisted).
+        self._radiators: dict[str, RadiatorTracker] = {}
+        self.supply = SupplyProfile()
+        self._supply_at: datetime | None = None
         # How often the room is used per weekday and hour (persisted).
         self.usage = UsageProfile()
         self._usage_at: datetime | None = None
@@ -594,6 +614,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "temperature_s": 0.0,
             "window_events": 0,
             "alerts": 0,
+            # Radiators cold although heat was asked for.
+            "no_heat_s": 0.0,
+            # Room minus outdoor temperature over time, actual and as if the
+            # room had been held at comfort: heat loss follows it.
+            "loss_actual": 0.0,
+            "loss_comfort": 0.0,
         }
 
     def _track_week(self, result: dict[str, Any]) -> None:
@@ -610,6 +636,20 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._week["temperature_s"] += seconds
         if self.enabled and (result.get("heat_demand") or 0) > 0:
             self._week["heating_s"] += seconds
+        if result.get("radiator_supply") == SUPPLY_COLD:
+            self._week["no_heat_s"] += seconds
+        outdoor = result.get("outdoor_temperature")
+        comfort = result.get("comfort_temperature")
+        if (
+            self.enabled
+            and result.get("heating_season", True)
+            and room is not None
+            and outdoor is not None
+            and comfort is not None
+            and float(comfort) > float(outdoor)
+        ):
+            self._week["loss_actual"] += max(0.0, float(room) - float(outdoor)) * seconds
+            self._week["loss_comfort"] += (float(comfort) - float(outdoor)) * seconds
         window = bool(result.get("window_open")) and result.get("heating_season", True)
         if window and not self._week_window:
             self._week["window_events"] += 1
@@ -623,14 +663,28 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if week["temperature_s"]:
             average = week["temperature_sum"] / week["temperature_s"]
             parts.append(f"Ø {average:.1f} °C".replace(".", ","))
+        if week["loss_comfort"] > 0:
+            saving = 1 - week["loss_actual"] / week["loss_comfort"]
+            if saving >= 0.01:
+                parts.append(f"ca. {saving:.0%} weniger Wärme als bei Dauer-Komfort")
+        if week["no_heat_s"] >= 1800:
+            parts.append(
+                f"{week['no_heat_s'] / 3600:.0f} h Heizkörper kalt trotz Heizbedarf"
+            )
         if week["window_events"]:
             parts.append(f"{week['window_events']}× Fenster offen beim Heizen")
         if week["alerts"]:
             parts.append(
                 f"{week['alerts']} Meldung" + ("en" if week["alerts"] > 1 else "")
             )
-        if self._heating_samples == 0:
-            parts.append("Lernmodell sammelt noch Aufheizmessungen")
+        model = self.room_model
+        if model.trusted and model.mean_error is not None:
+            parts.append(
+                f"Raummodell liegt im Schnitt {model.mean_error:.2f} °C/h daneben"
+                .replace(".", ",")
+            )
+        elif self.config.get(CONF_ROOM_MODEL, DEFAULT_ROOM_MODEL):
+            parts.append(f"Raummodell lernt noch ({model.samples} h)")
         return f"{self.room_name}: " + ", ".join(parts)
 
     def reset_week(self) -> None:
@@ -821,8 +875,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if overshoot is not None:
             self.overshoot = max(0.0, min(overshoot, MAX_OVERSHOOT))
         self._overshoot_samples = self._stored_count(stored.get("overshoot_samples"))
-        self.room_model = RoomModel.from_dict(stored.get("room_model"))
-        self._model_seeded = stored.get("room_model_seeded") is True
+        if stored.get("room_model_version") == ROOM_MODEL_VERSION:
+            self.room_model = RoomModel.from_dict(stored.get("room_model"))
+            self._model_seeded = stored.get("room_model_seeded") is True
+        else:
+            # Learned with an older rule: start over and learn again from
+            # the recorder.
+            self.room_model = RoomModel()
+            self._model_seeded = False
+        self.supply = SupplyProfile.from_list(stored.get("supply_profile"))
         self.usage = UsageProfile.from_list(stored.get("usage_profile"))
         raw_maintenance = self._stored_string(stored.get("valve_maintenance_last"))
         parsed_maintenance = (
@@ -1214,6 +1275,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "overshoot_samples": self._overshoot_samples,
                 "room_model": self.room_model.as_dict(),
                 "room_model_seeded": self._model_seeded,
+                "room_model_version": ROOM_MODEL_VERSION,
+                "supply_profile": self.supply.as_list(),
                 "usage_profile": self.usage.as_list(),
             }
         )
@@ -3130,6 +3193,106 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         local = dt_util.as_local(now)
         return self.usage.observe(local.weekday(), local.hour, present, seconds)
 
+    def _device_sensor(self, entity_id: str, suffix: str) -> str | None:
+        """A sensor of the thermostat's device whose id ends in ``suffix``."""
+        registry = er.async_get(self.hass)
+        entry = registry.async_get(entity_id)
+        if entry is None or not entry.device_id:
+            return None
+        for device_entry in er.async_entries_for_device(registry, entry.device_id):
+            if device_entry.domain == "sensor" and (
+                device_entry.entity_id.endswith(suffix)
+                or (device_entry.unique_id or "").endswith(suffix)
+            ):
+                return device_entry.entity_id
+        return None
+
+    def _radiator_sensors(self) -> dict[str, str]:
+        """Valve -> sensor with the valve's own (radiator-side) temperature."""
+        sensors = {}
+        for entity_id in self._thermostat_ids():
+            if entity_id in self.skipped_valves:
+                continue
+            sensor_id = self._device_sensor(entity_id, "device_temperature")
+            if sensor_id:
+                sensors[entity_id] = sensor_id
+        return sensors
+
+    def _observe_radiators(self, result: dict[str, Any]) -> bool:
+        """Judge whether heat reaches the radiators; True when an hour of the
+        central heating's times was learned."""
+        sensors = self._radiator_sensors() if self.enabled else {}
+        for entity_id in list(self._radiators):
+            if entity_id not in sensors:
+                self._radiators.pop(entity_id)
+        room = result.get("room_temperature")
+        demand = result.get("heat_demand")
+        if (
+            result.get("mode") in ("window", "maintenance", "season_off")
+            or result.get("window_open")
+        ):
+            demand = 0
+        at = dt_util.utcnow().timestamp()
+        states = {
+            entity_id: self._radiators.setdefault(
+                entity_id, RadiatorTracker()
+            ).observe(
+                at,
+                demand,
+                _as_float(self.hass.states.get(sensor_id)),
+                None if room is None else float(room),
+            )
+            for entity_id, sensor_id in sensors.items()
+        }
+        supply = room_supply(states)
+        now = dt_util.utcnow()
+        local = dt_util.as_local(now)
+        seconds = (
+            0.0 if self._supply_at is None else (now - self._supply_at).total_seconds()
+        )
+        self._supply_at = now
+        learned = self.supply.observe(local.hour, supply, seconds)
+        result["radiators"] = {
+            self._friendly_name(entity_id): state for entity_id, state in states.items()
+        }
+        result["radiator_supply"] = supply
+        result["supply_usually_off"] = self.supply.usually_off(local.hour)
+        result["supply_off_hours"] = self.supply.off_hours()
+        result["supply_today"] = self.supply.as_list()
+        result["radiator_status"] = self._radiator_text(states, supply, local.hour)
+        if supply == SUPPLY_COLD and result.get("status"):
+            result["status"] = f"{result['status']} – Heizkörper bleiben kalt"
+        return learned
+
+    def _radiator_text(
+        self, states: dict[str, str], supply: str | None, hour: int
+    ) -> str | None:
+        """What the radiators say, in a few words."""
+        if supply is None:
+            return None
+        if supply == SUPPLY_COLD:
+            text = "Kalt – die Zentralheizung liefert keine Wärme"
+            if self.supply.usually_off(hour):
+                next_hour = self.supply.next_on_hour(hour)
+                text += (
+                    f" (um diese Zeit üblich, meist wieder ab {next_hour}:00 Uhr)"
+                    if next_hour is not None
+                    else " (um diese Zeit üblich)"
+                )
+            return text
+        if supply == SUPPLY_PARTLY:
+            cold = ", ".join(
+                self._friendly_name(entity_id)
+                for entity_id, state in states.items()
+                if state == COLD
+            )
+            return f"{cold} bleibt kalt – entlüften oder Ventil prüfen"
+        return {
+            SUPPLY_WARM: "Warm",
+            SUPPLY_WAITING: "Werden warm",
+            SUPPLY_IDLE: "Kein Heizbedarf",
+        }.get(supply, supply)
+
     async def _observe_model(self, result: dict[str, Any]) -> bool:
         """Feed the hourly model sample; True when the model learned one."""
         room = result.get("room_temperature")
@@ -3157,6 +3320,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             float(outdoor),
             solar_kw,
             wind,
+            result.get("radiator_supply") == SUPPLY_COLD,
         )
         return sample is not None and self.room_model.add(*sample)
 
@@ -3188,9 +3352,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             if entity_id
         ]
+        radiators = list(self._radiator_sensors().values())
         end = dt_util.utcnow()
         start = end - timedelta(days=MODEL_HISTORY_DAYS)
-        ids = [room_id, outdoor_id, demand_id, *windows, *optional]
+        ids = [room_id, outdoor_id, demand_id, *windows, *optional, *radiators]
         try:
             states = await get_instance(self.hass).async_add_executor_job(
                 history.get_significant_states,
@@ -3234,6 +3399,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             units=units,
             start=start.timestamp(),
             end=end.timestamp(),
+            radiator_ids=radiators,
         )
         self._model_seeded = True
         _LOGGER.debug("Room model learned %s hours from the recorder", added)
@@ -3391,13 +3557,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result["thermostat_warnings"] = self._thermostat_warnings()
         result["heating_problem"] = self.heating_problem
         result["heating_problem_detail"] = self.heating_problem_detail
-        await self._send_notifications(result)
-        result["external_temperature_thermostats"] = sorted(self._external_fed)
-        result["quick_duration"] = self.quick_duration
         result["heat_demand"], result["heat_demand_source"] = self._heat_demand(
             result.get("target_temperature"), result.get("room_temperature")
         )
-        if await self._observe_model(result):
+        supply_learned = self._observe_radiators(result)
+        await self._send_notifications(result)
+        result["external_temperature_thermostats"] = sorted(self._external_fed)
+        result["quick_duration"] = self.quick_duration
+        if await self._observe_model(result) or supply_learned:
             await self._save_learning()
         self._fire_triggers(result)
         self._track_week(result)
@@ -3506,14 +3673,32 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 NOTIFY_PROBLEM_DELAY_SECONDS,
                 f"Thermostat-Problem – {details}",
             )
+        supply = result.get("radiator_supply")
+        if supply == SUPPLY_PARTLY:
+            conditions["radiator"] = (
+                NOTIFY_PROBLEM_DELAY_SECONDS,
+                f"Heizkörper: {result.get('radiator_status')}.",
+            )
         if result.get("heating_problem"):
             detail = result.get("heating_problem_detail")
-            conditions["heating"] = (
-                0,
-                "Der Raum kommt nicht auf Temperatur, obwohl geheizt werden soll"
-                + (f" ({detail})" if detail else "")
-                + ". Ventile und Heizung (Vorlauftemperatur) prüfen.",
-            )
+            if supply == SUPPLY_COLD:
+                # Expected when the central heating is usually off now.
+                if not result.get("supply_usually_off"):
+                    conditions["heating"] = (
+                        0,
+                        "Der Raum kommt nicht auf Temperatur"
+                        + (f" ({detail})" if detail else "")
+                        + ": die Ventile sind offen, aber die Heizkörper bleiben "
+                        "kalt. Die Zentralheizung liefert keine Wärme (aus oder "
+                        "in Absenkung).",
+                    )
+            else:
+                conditions["heating"] = (
+                    0,
+                    "Der Raum kommt nicht auf Temperatur, obwohl geheizt werden soll"
+                    + (f" ({detail})" if detail else "")
+                    + ". Ventile und Heizung (Vorlauftemperatur) prüfen.",
+                )
         if result.get("mode") == "waiting":
             conditions["blocked"] = (
                 NOTIFY_PROBLEM_DELAY_SECONDS,
@@ -3574,6 +3759,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         {"title": title, "message": "Wieder in Ordnung: " + {
                             "thermostat": "die Thermostate melden kein Problem mehr.",
                             "heating": "kein Heizproblem mehr.",
+                            "radiator": "alle Heizkörper werden wieder warm.",
                             "sensor": "der Raumfühler liefert wieder Werte.",
                             "blocked": "die Regelung arbeitet wieder.",
                             "frost": "keine Frostgefahr mehr.",

@@ -19,6 +19,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from .radiator import SUPPLY_COLD, RadiatorTracker, room_supply
+
 # Parameter order: heat output, loss, solar gain, wind loss.
 PRIOR = (0.5, 0.02, 0.0, 0.0)
 # A typical size of each feature, to weigh the prior like a few samples.
@@ -300,6 +302,8 @@ class SampleCollector:
     # Time-weighted sums of demand, room, outdoor, solar and wind.
     sums: list[float] = field(default_factory=lambda: [0.0] * 5)
     last_inputs: tuple[float, float, float, float, float] | None = None
+    # Heat was asked for but the radiators stayed cold during this hour.
+    no_heat: bool = False
 
     def reset(self) -> None:
         self.started_at = None
@@ -308,6 +312,7 @@ class SampleCollector:
         self.weight = 0.0
         self.sums = [0.0] * 5
         self.last_inputs = None
+        self.no_heat = False
 
     def _start(self, at: float, inputs: tuple[float, float, float, float, float]) -> None:
         self.reset()
@@ -324,20 +329,26 @@ class SampleCollector:
         outdoor: float,
         solar_kw: float,
         wind: float,
+        no_heat: bool = False,
     ) -> tuple[float, float, float, float, float, float] | None:
         """Feed one reading (``at`` in seconds); return a finished sample.
 
         A sample is (rate °C/h, demand, room, outdoor, solar kW/m², wind m/s),
-        with every input averaged over the hour.
+        with every input averaged over the hour. ``no_heat`` marks a reading
+        in which the radiators stayed cold although heat was asked for: such
+        an hour shows the central heating, not the room, and is dropped.
         """
         inputs = (demand, room, outdoor, solar_kw, wind)
         if self.started_at is None or self.last_at is None or self.last_inputs is None:
             self._start(at, inputs)
+            self.no_heat = no_heat
             return None
         gap = at - self.last_at
         if gap < 0 or gap > SAMPLE_MAX_GAP_SECONDS:
             self._start(at, inputs)
+            self.no_heat = no_heat
             return None
+        self.no_heat = self.no_heat or no_heat
         # The previous inputs held until now.
         for index, value in enumerate(self.last_inputs):
             self.sums[index] += value * gap
@@ -351,7 +362,11 @@ class SampleCollector:
         demand_mean, room_mean, outdoor_mean, solar_mean, wind_mean = (
             total / self.weight for total in self.sums
         )
+        dropped = self.no_heat and demand_mean > IDLE_SAMPLE_DEMAND
         self._start(at, inputs)
+        self.no_heat = no_heat
+        if dropped:
+            return None
         return (rate, demand_mean, room_mean, outdoor_mean, solar_mean, wind_mean)
 
 
@@ -394,12 +409,15 @@ def seed_room_model(
     units: dict[str, str],
     start: float,
     end: float,
+    radiator_ids: list[str] | None = None,
 ) -> int:
     """Learn hourly samples from recorded states; return how many.
 
     ``history`` maps entity ids to (timestamp, state) in time order. A state
     holds until the next one. Hours with an open window, an unknown reading
-    or without heat demand data (control off) are skipped.
+    or without heat demand data (control off) are skipped, and so are hours
+    in which the radiators (``radiator_ids``, the valves' own temperature)
+    stayed cold although heat was asked for.
     """
     series = {
         entity_id: sorted(items, key=lambda item: item[0])
@@ -420,6 +438,7 @@ def seed_room_model(
         return items[index][1]
 
     collector = SampleCollector()
+    trackers = {entity_id: RadiatorTracker() for entity_id in radiator_ids or []}
     added = 0
     at = start
     while at <= end:
@@ -432,6 +451,12 @@ def seed_room_model(
         else:
             solar = _number(value_at(solar_id, at)) if solar_id else None
             wind = _number(value_at(wind_id, at)) if wind_id else None
+            supply = room_supply({
+                entity_id: tracker.observe(
+                    at, demand, _number(value_at(entity_id, at)), room
+                )
+                for entity_id, tracker in trackers.items()
+            })
             sample = collector.observe(
                 at,
                 room,
@@ -441,6 +466,7 @@ def seed_room_model(
                 else min(solar_to_kw(solar, units.get(solar_id or "", "")), 1.5),
                 0.0 if wind is None or wind < 0
                 else min(wind_to_ms(wind, units.get(wind_id or "", "")), 40.0),
+                supply == SUPPLY_COLD,
             )
             if sample is not None and model.add(*sample):
                 added += 1

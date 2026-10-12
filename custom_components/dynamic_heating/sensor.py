@@ -237,6 +237,11 @@ SENSORS = (
         icon="mdi:home-analytics",
     ),
     HeatingSensorDescription(
+        key="radiator_status",
+        name="Heizkörper",
+        icon="mdi:radiator",
+    ),
+    HeatingSensorDescription(
         key="reachable_temperature",
         name="Erreichbare Temperatur",
         device_class=SensorDeviceClass.TEMPERATURE,
@@ -297,6 +302,15 @@ _MODEL_KEYS = (
     "setback_floor",
     "usage_now",
     "solar_pause",
+)
+
+# Extra attributes of the radiator sensor.
+_RADIATOR_KEYS = (
+    "radiators",
+    "radiator_supply",
+    "supply_usually_off",
+    "supply_off_hours",
+    "supply_today",
 )
 
 
@@ -366,6 +380,9 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
                     dt_util.now().weekday()
                 ]
             }
+        if self.entity_description.key == "radiator_status":
+            data = self.coordinator.data
+            return {key: data[key] for key in _RADIATOR_KEYS if key in data}
         if self.entity_description.key != "status":
             return None
 
@@ -446,6 +463,8 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "setback_floor",
             "model_status",
             "solar_pause",
+            "radiator_supply",
+            "aggressive_setpoint",
         )
         return {
             key: self.coordinator.data[key]
