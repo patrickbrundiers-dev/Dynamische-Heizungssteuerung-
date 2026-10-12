@@ -130,6 +130,10 @@ from .const import (
     CONF_HYSTERESIS,
     EXTERNAL_TEMPERATURE_MIN_CHANGE,
     EXTERNAL_TEMPERATURE_RESEND_SECONDS,
+    EXTERNAL_TEMPERATURE_RETRIES,
+    EXTERNAL_TEMPERATURE_RETRY_SECONDS,
+    EXTERNAL_TEMPERATURE_VERIFY_SECONDS,
+    EXTERNAL_TEMPERATURE_VERIFY_TOLERANCE,
     HEATING_WATCHDOG_GAP,
     HEATING_WATCHDOG_MIN_RISE,
     HEATING_WATCHDOG_SECONDS,
@@ -356,6 +360,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.boost_until: datetime | None = None
         self.heating_rate = DEFAULT_HEATING_RATE
         self.cooling_rate = DEFAULT_COOLING_RATE
+        # Heating and cooling right now as the room model sees them; once it is
+        # ready they replace the rates measured by the old sample learner.
+        self._model_rates: tuple[float, float] | None = None
         self._store = Store(hass, 1, f"{DOMAIN}_{entry_id}_learning")
         self._heating_sample = TrendSample()
         self._cooling_sample = TrendSample()
@@ -379,6 +386,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # them, and the last value sent to each external-temperature input.
         self._external_fed: set[str] = set()
         self._external_sent: dict[str, tuple[float, datetime]] = {}
+        # Value sent again because the valve did not show it: how often, when.
+        self._external_retried: dict[str, tuple[float, int, datetime]] = {}
         # Valve maintenance: last start (persisted) and the running one.
         self._maintenance_last: datetime | None = None
         self._maintenance_started: datetime | None = None
@@ -1235,6 +1244,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._track_overshoot(
             room_temperature, is_heating, window_open=window_open, now=now
         )
+        if self._model_rates is not None:
+            # The room model learns from every hour; single samples add nothing.
+            self._heating_sample.reset()
+            self._cooling_sample.reset()
+            self._last_learning_status = "Raummodell übernimmt"
+            return
 
         # Absence only lowers the target; the room still heats and cools
         # normally, and the night setback is the main cooling phase to learn.
@@ -1719,8 +1734,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._record_proximity_category("stale")
             return (
                 None,
-                f"Standortdaten veraltet ({round(max(age, 0) / 60)} min) – "
-                "Proximity wird nicht für Anfahrt verwendet",
+                # No age in the text: a status that changes every minute
+                # fills the history; the age has its own sensor.
+                "Standortdaten veraltet – Proximity wird nicht für Anfahrt "
+                "verwendet",
             )
 
         legacy_direction = distance_state.attributes.get("dir_of_travel")
@@ -2140,6 +2157,16 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False
         return written.confirmed
 
+    @property
+    def effective_heating_rate(self) -> float:
+        """°C per hour of full heating: the room model's, else the measured one."""
+        return self.heating_rate if self._model_rates is None else self._model_rates[0]
+
+    @property
+    def effective_cooling_rate(self) -> float:
+        """°C per hour without heating: the room model's, else the measured one."""
+        return self.cooling_rate if self._model_rates is None else self._model_rates[1]
+
     async def _write_setpoint(
         self, entity_id: str, state: State, target: float, now: datetime
     ) -> bool:
@@ -2189,8 +2216,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now: datetime,
     ) -> float:
         """Shift ``target`` by the valve's measurement error, if enabled."""
-        if not self.config.get(CONF_CALIBRATION) or entity_id in self._external_fed:
-            # A thermostat fed with the room temperature needs no offset.
+        if (
+            not self.config.get(CONF_CALIBRATION)
+            or entity_id in self._external_fed
+            or (
+                self.config.get(CONF_EXTERNAL_TEMPERATURE)
+                and self._external_temperature_entities(entity_id) is not None
+            )
+        ):
+            # A thermostat fed with the room temperature needs no offset, also
+            # in the moments after a restart before it is fed again: an offset
+            # from its own sensor would be written and taken back right away.
             return target
         cached = self._calibration.get(entity_id)
         if self._room_fallback:
@@ -2995,7 +3031,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             lead = calculate_lead_minutes(
                 room_temperature,
                 comfort_temperature,
-                self.heating_rate,
+                self.effective_heating_rate,
                 outdoor_temperature,
                 int(self.config.get(CONF_MAX_PREHEAT_MINUTES, DEFAULT_MAX_PREHEAT_MINUTES)),
             )
@@ -3701,6 +3737,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         room_temperature = self._room_temperature()
         feed = self.enabled and room_temperature is not None and not release
+        if room_temperature is not None:
+            room_temperature = round(room_temperature, 1)
         now = dt_util.utcnow()
         fed: set[str] = set()
         for entity_id in self._thermostat_ids():
@@ -3723,8 +3761,16 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ):
                         continue
                     switched = True
+                    self._external_sent.pop(number_id, None)
+                    select_state = self.hass.states.get(select_id)
+                    if select_state is None or select_state.state != "external":
+                        # Zigbee confirms the switch a few seconds later; the
+                        # value goes out once the valve reports it.
+                        fed.add(entity_id)
+                        continue
+                last = self._external_sent.get(number_id)
                 due, pending = external_temperature_due(
-                    None if switched else self._external_sent.get(number_id),
+                    last,
                     self._external_pending.get(number_id),
                     room_temperature,
                     now,
@@ -3738,7 +3784,21 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._external_pending.pop(number_id, None)
                 else:
                     self._external_pending[number_id] = pending
-                if due:
+                retry = (
+                    not due
+                    and last is not None
+                    and self._external_not_taken(entity_id, number_id, last, now)
+                )
+                if retry:
+                    _value, count, _at = self._external_retried.get(
+                        number_id, (room_temperature, 0, now)
+                    )
+                    self._external_retried[number_id] = (
+                        room_temperature, count + 1, now
+                    )
+                elif due:
+                    self._external_retried.pop(number_id, None)
+                if due or retry:
                     if not await self._call(
                         "number",
                         "set_value",
@@ -3759,6 +3819,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 self._external_sent.pop(number_id, None)
                 self._external_pending.pop(number_id, None)
+                self._external_retried.pop(number_id, None)
                 if select_state.state != "internal":
                     await self._call(
                         "select",
@@ -3769,6 +3830,31 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Offsets measured against the valve's own sensor no longer apply.
             self._calibration.clear()
         self._external_fed = fed
+
+    def _external_not_taken(
+        self,
+        entity_id: str,
+        number_id: str,
+        last: tuple[float, datetime],
+        now: datetime,
+    ) -> bool:
+        """Whether a valve still shows another temperature than the one sent."""
+        if (now - last[1]).total_seconds() < EXTERNAL_TEMPERATURE_VERIFY_SECONDS:
+            return False
+        retried = self._external_retried.get(number_id)
+        if retried is not None and (
+            (now - retried[2]).total_seconds() < EXTERNAL_TEMPERATURE_RETRY_SECONDS
+            # A valve that never shows the value it gets (another model) is
+            # not chased forever: three tries per value.
+            or retried[1] >= EXTERNAL_TEMPERATURE_RETRIES
+        ):
+            return False
+        state = self.hass.states.get(entity_id)
+        shown = _as_number(state.attributes.get("current_temperature")) if state else None
+        return (
+            shown is not None
+            and abs(shown - last[0]) > EXTERNAL_TEMPERATURE_VERIFY_TOLERANCE
+        )
 
     async def _async_control_cycle(self) -> dict[str, Any]:
         """Read Home Assistant states, calculate a target and optionally apply it."""
@@ -3873,6 +3959,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Preheat timing uses the model once it is ready; what changes the
         # setback or stops heating waits until it has proven itself.
         trusted = view if self.room_model.trusted else None
+        self._model_rates = (
+            None
+            if view is None
+            else (
+                round(max(view.rate(room_temperature, 1.0), 0.0), 3),
+                round(max(-view.rate(room_temperature, 0.0), 0.0), 3),
+            )
+        )
         if self.boost_until is not None and dt_util.utcnow() >= self.boost_until:
             self.boost_until = None
         boost_temperature = (
@@ -4054,8 +4148,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             outdoor_temperature=outdoor_temperature,
             comfort_temperature=comfort_temperature,
             eco_temperature=eco_temperature,
-            heating_rate_c_per_hour=self.heating_rate,
-            cooling_rate_c_per_hour=self.cooling_rate,
+            heating_rate_c_per_hour=self.effective_heating_rate,
+            cooling_rate_c_per_hour=self.effective_cooling_rate,
             forecast_condition=forecast_condition,
             forecast_temperature=forecast_temperature,
             max_preheat_minutes=int(
@@ -4179,8 +4273,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "thermostats" if self._room_fallback else "sensor"
             ),
             "outdoor_temperature": outdoor_temperature,
-            "heating_rate": self.heating_rate,
-            "cooling_rate": self.cooling_rate,
+            "heating_rate": self.effective_heating_rate,
+            "cooling_rate": self.effective_cooling_rate,
             "preheat_minutes": decision.preheat_minutes,
             "projected_temperature": decision.projected_temperature,
             "forecast_condition": forecast_condition,

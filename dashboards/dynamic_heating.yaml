@@ -200,102 +200,58 @@ views:
           neue Anfahrt aus. Der Entfernungs- und Richtungssensor müssen zur
           selben Proximity-Zone gehören.
 
-  - title: Lernmodell
+  - title: Raummodell
     path: learning-model
-    icon: mdi:chart-bell-curve-cumulative
+    icon: mdi:home-analytics
     cards:
       - type: markdown
-        title: Lernqualität verstehen
+        title: Raummodell verstehen
         content: >-
-          Die Integration lernt aus plausiblen Aufheiz- und Abkühlphasen.
-          Messungen mit Ausreißern werden verworfen. Der mittlere absolute
-          Prognosefehler (MAE) zeigt in °C, wie weit die prognostizierte
-          Raumtemperatur beim Komfortbeginn im Durchschnitt von der Messung
-          abwich. Einzelne Ereignisse sind wenig aussagekräftig; bewerte den
-          Verlauf erst nach mehreren Wochen und mehreren Komfortwechseln.
+          Das Raummodell lernt aus jeder Stunde, wie stark die Heizkörper den
+          Raum erwärmen, wie viel Wärme nach außen verloren geht und was Sonne
+          und Wind ausmachen. Daraus kommen Vorheizzeit, Absenkungsgrenze und
+          die erreichbare Temperatur. Der Status nennt, wie viele Stunden es
+          gelernt hat und wie genau es liegt.
       - type: entities
-        title: Lernstatus und Qualität
+        title: Was der Raum gelernt hat
         show_header_toggle: false
         entities:
-          - entity: sensor.dynamische_heizungssteuerung_lernmodell_status
-            name: Aktueller Lernstatus
-          - entity: sensor.dynamische_heizungssteuerung_gelernte_aufheizrate
-            name: Gelernte Aufheizrate
-          - entity: sensor.dynamische_heizungssteuerung_letzte_beobachtete_aufheizrate
-            name: Letzte beobachtete Aufheizrate
-          - entity: sensor.dynamische_heizungssteuerung_gelernte_abkuhlrate
-            name: Gelernte Abkühlrate
-          - entity: sensor.dynamische_heizungssteuerung_letzte_beobachtete_abkuhlrate
-            name: Letzte beobachtete Abkühlrate
-          - entity: sensor.dynamische_heizungssteuerung_akzeptierte_aufheizmessungen
-            name: Akzeptierte Aufheizmessungen
-          - entity: sensor.dynamische_heizungssteuerung_akzeptierte_abkuhlmessungen
-            name: Akzeptierte Abkühlmessungen
-          - entity: sensor.dynamische_heizungssteuerung_verworfene_lernmessungen
-            name: Verworfene Lernmessungen
-          - entity: sensor.dynamische_heizungssteuerung_ausgewertete_temperaturprognosen
-            name: Ausgewertete Komfortprognosen
-          - entity: sensor.dynamische_heizungssteuerung_mittlerer_prognosefehler
-            name: Mittlerer absoluter Prognosefehler (MAE)
-          - entity: sensor.dynamische_heizungssteuerung_letzter_prognosefehler
-            name: Letzter Prognosefehler (Ist minus Prognose)
-          - entity: sensor.dynamische_heizungssteuerung_letzte_prognostizierte_temperatur
-            name: Prognostizierte Temperatur beim letzten Komfortbeginn
-          - entity: sensor.dynamische_heizungssteuerung_letzte_tatsachliche_komforttemperatur
-            name: Tatsächliche Temperatur beim letzten Komfortbeginn
+          - entity: sensor.dynamische_heizungssteuerung_raummodell
+            name: Raummodell
+          - entity: sensor.dynamische_heizungssteuerung_erreichbare_temperatur
+            name: Heute erreichbar
+          - entity: sensor.dynamische_heizungssteuerung_aufheizrate
+            name: Aufheizen gerade (°C/h)
+          - entity: sensor.dynamische_heizungssteuerung_abkuhlrate
+            name: Abkühlen gerade (°C/h)
+          - entity: sensor.dynamische_heizungssteuerung_heizleistung
+            name: Heizleistung
+          - entity: sensor.dynamische_heizungssteuerung_warmeverlust_je_10_degc_unterschied
+            name: Wärmeverlust je 10 °C Unterschied
+          - entity: sensor.dynamische_heizungssteuerung_sonnengewinn_je_kw_m2
+            name: Sonnengewinn je kW/m²
+          - entity: sensor.dynamische_heizungssteuerung_gelerntes_uberschwingen
+            name: Gelerntes Überschwingen
       - type: history-graph
-        title: Lernraten im Verlauf (7 Tage)
+        title: Raum, Ziel und Erreichbares (7 Tage)
         hours_to_show: 168
         refresh_interval: 300
         entities:
-          - entity: sensor.dynamische_heizungssteuerung_gelernte_aufheizrate
-            name: Aufheizrate (°C/h)
-          - entity: sensor.dynamische_heizungssteuerung_gelernte_abkuhlrate
-            name: Abkühlrate (°C/h)
-      - type: history-graph
-        title: Prognosequalität (7 Tage)
-        hours_to_show: 168
-        refresh_interval: 300
-        entities:
-          - entity: sensor.dynamische_heizungssteuerung_mittlerer_prognosefehler
-            name: MAE (°C)
-          - entity: sensor.dynamische_heizungssteuerung_letzter_prognosefehler
-            name: Letzter Fehler (°C)
-          - entity: sensor.dynamische_heizungssteuerung_letzte_prognostizierte_temperatur
-            name: Prognose
-          - entity: sensor.dynamische_heizungssteuerung_letzte_tatsachliche_komforttemperatur
-            name: Tatsächlich
+          - entity: sensor.dynamische_heizungssteuerung_raumtemperatur
+            name: Raum
+          - entity: sensor.dynamische_heizungssteuerung_berechnete_solltemperatur
+            name: Ziel
+          - entity: sensor.dynamische_heizungssteuerung_erreichbare_temperatur
+            name: Erreichbar
       - type: statistics-graph
-        title: Lernraten im Verlauf (30 Tage)
+        title: Heizleistung und Wärmeverlust (30 Tage)
         chart_type: line
         period: day
         days_to_show: 30
         stat_types:
           - mean
         entities:
-          - entity: sensor.dynamische_heizungssteuerung_gelernte_aufheizrate
-            name: Aufheizrate (°C/h)
-          - entity: sensor.dynamische_heizungssteuerung_gelernte_abkuhlrate
-            name: Abkühlrate (°C/h)
-      - type: statistics-graph
-        title: Prognosequalität im Verlauf (30 Tage)
-        chart_type: line
-        period: day
-        days_to_show: 30
-        stat_types:
-          - mean
-        entities:
-          - entity: sensor.dynamische_heizungssteuerung_mittlerer_prognosefehler
-            name: MAE (°C)
-          - entity: sensor.dynamische_heizungssteuerung_letzter_prognosefehler
-            name: Letzter Fehler (°C)
-      - type: markdown
-        title: Wann die Lernqualität bewerten?
-        content: >-
-          Warte auf mehrere geplante Komfortwechsel mit geschlossenem Fenster,
-          stabiler Anwesenheit und zuverlässig verfügbaren Sensoren. Der MAE
-          wird nur dann aktualisiert, wenn ein geplanter Komfortbeginn unter
-          gültigen Bedingungen ausgewertet werden konnte. Ein hoher Wert sollte
-          zunächst zu einer Prüfung von Sensorposition, Schedule und
-          Thermostatverhalten führen, nicht zu einer automatischen aggressiven
-          Änderung der Heizungsregelung.
+          - entity: sensor.dynamische_heizungssteuerung_heizleistung
+            name: Heizleistung (°C/h)
+          - entity: sensor.dynamische_heizungssteuerung_warmeverlust_je_10_degc_unterschied
+            name: Wärmeverlust (°C/h)

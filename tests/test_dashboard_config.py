@@ -27,7 +27,7 @@ def test_dashboard_has_geofence_calibration_and_multiweek_learning_views():
     assert any(
         card.get("days_to_show") == 30
         and any(
-            entity.get("entity") == "sensor.dynamische_heizungssteuerung_mittlerer_prognosefehler"
+            entity.get("entity") == "sensor.dynamische_heizungssteuerung_heizleistung"
             for entity in card.get("entities", [])
         )
         for card in statistics
