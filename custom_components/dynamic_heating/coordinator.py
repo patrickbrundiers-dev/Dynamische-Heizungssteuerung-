@@ -268,6 +268,7 @@ from .logic import (
     valve_maintenance_phase,
 )
 from .model import (
+    TRUSTED_SAMPLES,
     ModelView,
     RoomModel,
     SampleCollector,
@@ -3040,13 +3041,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self.room_model.view(outdoor, solar_kw, wind)
 
     @staticmethod
-    def _recovery_floor(view: ModelView, comfort: float, seconds: float) -> float:
+    def _recovery_floor(
+        view: ModelView, comfort: float, room: float, seconds: float
+    ) -> float:
         """Lowest setback from which full heating gets back in ``seconds``.
 
         When comfort is out of reach today, the room has to get back to what
         it can reach instead.
         """
-        reach = min(comfort, view.equilibrium(1.0) - RECOVERY_REACH_MARGIN)
+        reach = min(
+            comfort, view.reachable(min(room, comfort)) - RECOVERY_REACH_MARGIN
+        )
         return round(view.lowest_start(reach, seconds / 3600), 1)
 
     def _hold_comfort(self, now: datetime) -> str | None:
@@ -3305,6 +3310,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         elif view is None:
             status = "Bereit – Außentemperatur fehlt"
+        elif not model.trusted:
+            error = (
+                "–" if model.mean_error is None
+                else f"{model.mean_error:.2f}".replace(".", ",")
+            )
+            status = (
+                f"Aktiv fürs Vorheizen – Absenkung und Sonne ab {TRUSTED_SAMPLES} "
+                f"Stunden und Fehler unter 0,12 °C/h (jetzt {model.samples} h, {error})"
+            )
         else:
             status = "Aktiv"
         ready = model.ready
@@ -3312,6 +3326,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return {
             "model_status": status,
             "model_ready": ready,
+            "model_trusted": model.trusted,
             "model_samples": model.samples,
             "model_heating_samples": model.heating_samples,
             "model_idle_samples": model.idle_samples,
@@ -3855,6 +3870,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._schedule_was_active = schedule_active
         solar_kw, wind = self._weather_inputs()
         view = self._model_view(outdoor_temperature, solar_kw, wind)
+        # Preheat timing uses the model once it is ready; what changes the
+        # setback or stops heating waits until it has proven itself.
+        trusted = view if self.room_model.trusted else None
         if self.boost_until is not None and dt_util.utcnow() >= self.boost_until:
             self.boost_until = None
         boost_temperature = (
@@ -3915,14 +3933,16 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if self._absence == "room_empty"
                 else f"Niemand zuhause – Komfort minus {value} °C"
             )
-            if self._absence == "room_empty" and view is not None and self.config.get(
+            if self._absence == "room_empty" and trusted is not None and self.config.get(
                 CONF_RECOVERY_LIMIT, DEFAULT_RECOVERY_LIMIT
             ):
                 seconds = int(
                     self.config.get(CONF_ROOM_EMPTY_RECOVERY)
                     or DEFAULT_ROOM_EMPTY_RECOVERY
                 )
-                floor = self._recovery_floor(view, comfort_temperature, seconds)
+                floor = self._recovery_floor(
+                    trusted, comfort_temperature, room_temperature, seconds
+                )
                 if floor > reduced:
                     reduced = min(floor, comfort_temperature)
                     status = (
@@ -4018,12 +4038,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         setback_floor: float | None = None
         if (
             event_view is not None
+            and trusted is not None
             and self.config.get(CONF_RECOVERY_LIMIT, DEFAULT_RECOVERY_LIMIT)
             and self._absence != "house_empty"
             and not self._heating_limit_reached
         ):
             setback_floor = self._recovery_floor(
-                event_view, comfort_temperature, max_preheat * 60
+                event_view, comfort_temperature, room_temperature, max_preheat * 60
             )
         decision = decide_heating_target(
             now=dt_util.now(),
@@ -4102,10 +4123,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             eco_temperature=eco_temperature,
             next_event=next_event,
             schedule_active=schedule_active,
-            view=view,
+            view=trusted,
         )
-        decision = self._sun_pause(decision, room_temperature, eco_temperature, view)
-        reachable = None if view is None else round(view.equilibrium(1.0), 1)
+        decision = self._sun_pause(
+            decision, room_temperature, eco_temperature, trusted
+        )
+        reachable = (
+            None if trusted is None else round(trusted.reachable(room_temperature), 1)
+        )
         if (
             reachable is not None
             and decision.target_temperature is not None

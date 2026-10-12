@@ -36,6 +36,12 @@ MIN_HEATING_SAMPLES = 3
 MIN_IDLE_SAMPLES = 3
 HEATING_SAMPLE_DEMAND = 0.5
 IDLE_SAMPLE_DEMAND = 0.1
+# Setback limits, reachability and the sun pause need a model that has
+# proven itself: enough hours and a small prediction error.
+TRUSTED_SAMPLES = 48
+TRUSTED_ERROR = 0.12
+# Reachable means within this many hours of full heating, not in theory.
+REACH_HOURS = 6.0
 # A room changing faster than this within an hour is not normal operation.
 MAX_SAMPLE_RATE = 4.0
 
@@ -106,6 +112,14 @@ class ModelView:
         return self.outdoor + (
             self.heat_output * demand + self.solar_gain * self.solar_kw
         ) / self.effective_loss
+
+    def reachable(self, room: float, hours: float = REACH_HOURS) -> float:
+        """Warmest room within ``hours`` of full heating.
+
+        The settling temperature alone extrapolates far beyond anything the
+        room has shown; a few hours ahead the model is reliable.
+        """
+        return max(room, self.temperature_after(room, hours, 1.0))
 
     def rate(self, room: float, demand: float) -> float:
         """Temperature change in °C per hour right now."""
@@ -208,6 +222,15 @@ class RoomModel:
             self.samples >= MIN_SAMPLES
             and self.heating_samples >= MIN_HEATING_SAMPLES
             and self.idle_samples >= MIN_IDLE_SAMPLES
+        )
+
+    @property
+    def trusted(self) -> bool:
+        return (
+            self.ready
+            and self.samples >= TRUSTED_SAMPLES
+            and self.mean_error is not None
+            and self.mean_error <= TRUSTED_ERROR
         )
 
     def view(

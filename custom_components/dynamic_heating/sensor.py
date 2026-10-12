@@ -320,6 +320,7 @@ SENSORS = (
 # Extra attributes of the room model sensor.
 _MODEL_KEYS = (
     "model_ready",
+    "model_trusted",
     "model_samples",
     "model_heating_samples",
     "model_idle_samples",
