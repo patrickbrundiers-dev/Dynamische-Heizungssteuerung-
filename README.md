@@ -368,6 +368,10 @@ Ein frisch gelerntes Raummodell steuert nur das Vorheizen. Absenkungsgrenzen, �
 - **Raummodell lernt nur aus Stunden mit Wärme**: Stunden, in denen geheizt werden sollte, die Heizkörper aber kalt blieben, zählen nicht mehr. Bisher lernte das Modell daraus eine viel zu kleine Heizleistung und plante beim Vorheizen immer die volle Zeit. Ein mit 0.9.2 oder älter gelerntes Modell wird einmal verworfen und neu aus dem Recorder angelernt (dann mit den Gehäusetemperaturen).
 - **Wochenbericht**: nennt zusätzlich die geschätzte Ersparnis gegenüber Dauer-Komfort (aus der Temperaturdifferenz zu draußen, nach der sich der Wärmeverlust richtet), die Stunden mit kalten Heizkörpern trotz Heizbedarf und wie gut das Raummodell liegt.
 
+## Version 0.9.5: Tagesplan nach dem Neustart
+
+- Der Tagesplan wird sofort neu gerechnet, wenn die Regelung eingeschaltet wird, das Raummodell fertig wird oder der Zeitplan wechselt. Bisher blieb er nach einem Neustart bis zu 15 Minuten bei „Regelung aus – kein Tagesplan“, weil die Regelung erst kurz nach dem ersten Durchlauf einschaltet.
+
 ## Version 0.9.4: Neue Räume, eine Therme, Tagesplan, Selbsttest
 
 - **Neuer Raum lernt sofort**: Fehlt der Verlauf des Sensors *Wärmebedarf* (ein gerade angelegter Raum), schätzt das Raummodell den Wärmebedarf der letzten 7 Tage aus den Sollwerten der Ventile und dem Raumfühler, wie die Live-Schätzung. Ein Raum, der bisher nichts aus dem Verlauf lernen konnte, versucht es nach dem Update einmal neu.
