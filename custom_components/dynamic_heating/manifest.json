@@ -3,7 +3,8 @@
   "name": "Dynamische Heizungssteuerung",
   "after_dependencies": [
     "frontend",
-    "http"
+    "http",
+    "recorder"
   ],
   "codeowners": [
     "@patrickbrundiers-dev"
