@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from .radiator import SUPPLY_COLD, RadiatorTracker, room_supply
+from .radiator import SUPPLY_COLD, SUPPLY_WARM, RadiatorTracker, room_supply
 
 # Parameter order: heat output, loss, solar gain, wind loss.
 PRIOR = (0.5, 0.02, 0.0, 0.0)
@@ -37,6 +37,8 @@ MIN_SAMPLES = 12
 MIN_HEATING_SAMPLES = 3
 MIN_IDLE_SAMPLES = 3
 HEATING_SAMPLE_DEMAND = 0.5
+# With radiators shown warm, less demand already counts as a heating hour.
+WARM_SAMPLE_DEMAND = 0.25
 IDLE_SAMPLE_DEMAND = 0.1
 # Setback limits, reachability and the sun pause need a model that has
 # proven itself: enough hours and a small prediction error.
@@ -175,8 +177,12 @@ class RoomModel:
         outdoor: float,
         solar_kw: float = 0.0,
         wind: float = 0.0,
+        warm: bool = False,
     ) -> bool:
-        """Learn one hourly sample; False when it is not plausible."""
+        """Learn one hourly sample; False when it is not plausible.
+
+        ``warm``: the radiators were seen warm during the hour.
+        """
         values = (rate, demand, room, outdoor, solar_kw, wind)
         if not all(math.isfinite(value) for value in values):
             return False
@@ -198,7 +204,7 @@ class RoomModel:
                     DECAY * self.matrix[row][column] + features[row] * features[column]
                 )
         self.samples += 1
-        if demand >= HEATING_SAMPLE_DEMAND:
+        if demand >= HEATING_SAMPLE_DEMAND or (warm and demand >= WARM_SAMPLE_DEMAND):
             self.heating_samples += 1
         elif demand <= IDLE_SAMPLE_DEMAND:
             self.idle_samples += 1
@@ -304,6 +310,10 @@ class SampleCollector:
     last_inputs: tuple[float, float, float, float, float] | None = None
     # Heat was asked for but the radiators stayed cold during this hour.
     no_heat: bool = False
+    # The radiators were seen warm during this hour.
+    warm: bool = False
+    # ``warm`` of the hour that made the last finished sample.
+    last_warm: bool = False
 
     def reset(self) -> None:
         self.started_at = None
@@ -313,6 +323,7 @@ class SampleCollector:
         self.sums = [0.0] * 5
         self.last_inputs = None
         self.no_heat = False
+        self.warm = False
 
     def _start(self, at: float, inputs: tuple[float, float, float, float, float]) -> None:
         self.reset()
@@ -330,6 +341,7 @@ class SampleCollector:
         solar_kw: float,
         wind: float,
         no_heat: bool = False,
+        warm: bool = False,
     ) -> tuple[float, float, float, float, float, float] | None:
         """Feed one reading (``at`` in seconds); return a finished sample.
 
@@ -342,13 +354,16 @@ class SampleCollector:
         if self.started_at is None or self.last_at is None or self.last_inputs is None:
             self._start(at, inputs)
             self.no_heat = no_heat
+            self.warm = warm
             return None
         gap = at - self.last_at
         if gap < 0 or gap > SAMPLE_MAX_GAP_SECONDS:
             self._start(at, inputs)
             self.no_heat = no_heat
+            self.warm = warm
             return None
         self.no_heat = self.no_heat or no_heat
+        self.warm = self.warm or warm
         # The previous inputs held until now.
         for index, value in enumerate(self.last_inputs):
             self.sums[index] += value * gap
@@ -363,8 +378,10 @@ class SampleCollector:
             total / self.weight for total in self.sums
         )
         dropped = self.no_heat and demand_mean > IDLE_SAMPLE_DEMAND
+        self.last_warm = self.warm
         self._start(at, inputs)
         self.no_heat = no_heat
+        self.warm = warm
         if dropped:
             return None
         return (rate, demand_mean, room_mean, outdoor_mean, solar_mean, wind_mean)
@@ -479,8 +496,9 @@ def seed_room_model(
                 0.0 if wind is None or wind < 0
                 else min(wind_to_ms(wind, units.get(wind_id or "", "")), 40.0),
                 supply == SUPPLY_COLD,
+                supply == SUPPLY_WARM,
             )
-            if sample is not None and model.add(*sample):
+            if sample is not None and model.add(*sample, warm=collector.last_warm):
                 added += 1
         at += HISTORY_STEP_SECONDS
     return added

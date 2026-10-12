@@ -175,7 +175,8 @@
           "sync_manual_change": "Turning a valve applies to the room",
           "lock_valves": "Lock valves",
           "aggressive_range": "Aggressive mode: range (°C, optional)",
-          "aggressive_offset": "Aggressive mode: offset"
+          "aggressive_offset": "Aggressive mode: offset",
+          "valve_fallback": "Fallback schedule in the valve on shutdown"
         },
         "data_description": {
           "calibration": "The thermostat measures right at the radiator. When enabled, its setpoint is shifted by the difference between thermostat and room temperature (like Better Thermostat's target-temperature calibration) so it regulates on the room sensor. The difference is recomputed at most every 10 minutes. Do not enable when the selected thermostat already is a Better Thermostat.",
@@ -189,7 +190,8 @@
           "sync_manual_change": "A setpoint turned at a thermostat goes to every thermostat of the room and holds as quick mode Manuell for the chosen duration. Off: control only pauses until the next mode change.",
           "lock_valves": "A setpoint turned at a thermostat is set back to the room's target at once (like Better Thermostat's child lock or Climate Group Helper's lock sync mode). Wins over 'Turning a valve applies to the room'.",
           "aggressive_range": "When the room is more than this below or above the target, target plus or minus the offset is sent so sluggish valves open or close decisively. Leave empty to turn off.",
-          "aggressive_offset": "How far the sent setpoint is raised or lowered outside the range."
+          "aggressive_offset": "How far the sent setpoint is raised or lowered outside the range.",
+          "valve_fallback": "When Home Assistant shuts down, valves with their own schedule (e.g. Aqara E1) get today's comfort and eco times and use their own sensor. After the start this is switched off again. Does not help on power loss or a crash."
         }
       },
       "modes": {
@@ -297,7 +299,8 @@
           "zone_window_close_delay": "Shared contacts: delay after closing",
           "window_change": "Changes while a window is open",
           "heating_limit_average": "Heating limit by average",
-          "heating_limit_fallback_off": "No heating without outdoor temperature"
+          "heating_limit_fallback_off": "No heating without outdoor temperature",
+          "notify_away": "Push when nobody is detected at home"
         },
         "data_description": {
           "window_entity": "When ON, setback is enforced. If configured but unavailable, the controller avoids writing a new target.",
@@ -321,7 +324,8 @@
           "zone_window_close_delay": "After closing the setback stays this long.",
           "window_change": "A setpoint changed at a valve or the room thermostat while a window is open never heats right away. It is kept and applied once the window is closed, or discarded.",
           "heating_limit_average": "Uses the mean weather forecast of the next two days, without a forecast the mean of the outdoor sensor over the last two days, so one warm afternoon does not stop heating. Off = current outdoor temperature.",
-          "heating_limit_fallback_off": "Without any outdoor temperature the heating limit counts as reached. Off = keep heating as before."
+          "heating_limit_fallback_off": "Without any outdoor temperature the heating limit counts as reached. Off = keep heating as before.",
+          "notify_away": "With a button \"Not true, I'm here\". One room sends it for the whole house."
         }
       },
       "house_settings": {
@@ -363,12 +367,16 @@
           "room_empty_grace": "Comfort start: wait this long for somebody in the room",
           "early_stop": "Stop heating before comfort ends (0 = off)",
           "solar_radiation_entity": "Solar radiation (W/m², optional)",
-          "wind_speed_entity": "Wind speed (optional)"
+          "wind_speed_entity": "Wind speed (optional)",
+          "punctuality": "Warm on time: learn preheating from late mornings",
+          "preheat_extension": "Preheating may take this much longer (0 = never)"
         },
         "data_description": {
           "recovery_limit": "Outside comfort time the room must get warm again within the maximum preheat time.",
           "learn_usage": "At times the room is usually used, comfort is kept even without motion.",
-          "early_stop": "Only if the room loses at most 0.5 °C until the end."
+          "early_stop": "Only if the room loses at most 0.5 °C until the end.",
+          "punctuality": "Every morning checks whether the room was warm when comfort began and learns how much earlier or later to preheat.",
+          "preheat_extension": "On top of the maximum preheat time, only when the central heating is not usually off then."
         }
       }
     },

@@ -175,7 +175,8 @@
           "sync_manual_change": "Drehen am Ventil gilt für den Raum",
           "lock_valves": "Ventile sperren",
           "aggressive_range": "Aggressiv-Modus: Bereich (°C, optional)",
-          "aggressive_offset": "Aggressiv-Modus: Versatz"
+          "aggressive_offset": "Aggressiv-Modus: Versatz",
+          "valve_fallback": "Notprogramm im Ventil beim Herunterfahren"
         },
         "data_description": {
           "calibration": "Das Thermostat misst direkt am Heizkörper. Ist dies aktiv, wird sein Sollwert um die Differenz zwischen Thermostat- und Raumtemperatur verschoben (wie die zieltemperaturbasierte Kalibrierung von Better Thermostat), damit es nach dem Raumfühler regelt. Die Abweichung wird höchstens alle 10 Minuten neu berechnet. Nicht einschalten, wenn das gewählte Thermostat bereits ein Better-Thermostat ist.",
@@ -189,7 +190,8 @@
           "sync_manual_change": "Wird an einem Thermostat gedreht, bekommen alle Thermostate des Raums diesen Wert und er gilt als Betriebsart „Manuell“ für die eingestellte Betriebsart-Dauer. Aus: die Regelung pausiert nur bis zum nächsten Moduswechsel.",
           "lock_valves": "Wird an einem Thermostat gedreht, stellt die Regelung den Sollwert des Raums sofort wieder her (wie die Kindersicherung von Better Thermostat oder der Sperr-Modus von Climate Group Helper). Hat Vorrang vor „Drehen am Ventil gilt für den Raum“.",
           "aggressive_range": "Liegt der Raum um mehr als diesen Wert unter oder über dem Soll, wird Soll plus bzw. minus Versatz gesendet, damit träge Ventile deutlich öffnen oder schließen. Leer lassen zum Abschalten.",
-          "aggressive_offset": "Um so viel wird der gesendete Sollwert außerhalb des Bereichs angehoben oder abgesenkt."
+          "aggressive_offset": "Um so viel wird der gesendete Sollwert außerhalb des Bereichs angehoben oder abgesenkt.",
+          "valve_fallback": "Beim Herunterfahren von Home Assistant bekommen Ventile mit eigenem Zeitplan (z. B. Aqara E1) die Komfort- und Eco-Zeiten von heute und regeln auf ihren eigenen Fühler. Nach dem Start schaltet die Integration das wieder aus. Bei Stromausfall oder Absturz greift es nicht."
         }
       },
       "modes": {
@@ -297,7 +299,8 @@
           "zone_window_close_delay": "Mehrere Räume: Wartezeit nach dem Schließen",
           "window_change": "Änderungen bei offenem Fenster",
           "heating_limit_average": "Heizgrenze nach dem Durchschnitt",
-          "heating_limit_fallback_off": "Ohne Außentemperatur nicht heizen"
+          "heating_limit_fallback_off": "Ohne Außentemperatur nicht heizen",
+          "notify_away": "Push, wenn niemand zuhause erkannt wird"
         },
         "data_description": {
           "window_entity": "EIN erzwingt Absenkung. Ist ein ausgewählter Fensterkontakt nicht verfügbar, wird kein neuer Sollwert geschrieben.",
@@ -321,7 +324,8 @@
           "zone_window_close_delay": "Nach dem Schließen bleibt die Absenkung so lange bestehen.",
           "window_change": "Wird bei offenem Fenster am Ventil oder am Raum-Thermostat etwas eingestellt, wird nie sofort geheizt. Der Wert wird gemerkt und gilt nach dem Schließen, oder er wird verworfen.",
           "heating_limit_average": "Entscheidend ist der Durchschnitt der Wettervorhersage für die nächsten zwei Tage, ohne Vorhersage der Durchschnitt des Außenfühlers der letzten zwei Tage. Ein warmer Nachmittag stellt die Heizung so nicht ab. Aus = aktuelle Außentemperatur.",
-          "heating_limit_fallback_off": "Gibt es gar keine Außentemperatur, gilt die Heizgrenze als erreicht. Aus = wie bisher weiterheizen."
+          "heating_limit_fallback_off": "Gibt es gar keine Außentemperatur, gilt die Heizgrenze als erreicht. Aus = wie bisher weiterheizen.",
+          "notify_away": "Mit Knopf „Stimmt nicht, ich bin da“. Nur ein Raum meldet das für das ganze Haus."
         }
       },
       "house_settings": {
@@ -363,12 +367,16 @@
           "room_empty_grace": "Komfortbeginn: so lange auf jemanden im Raum warten",
           "early_stop": "Vor Komfortende früher abschalten (0 = aus)",
           "solar_radiation_entity": "Sonneneinstrahlung (W/m², optional)",
-          "wind_speed_entity": "Windgeschwindigkeit (optional)"
+          "wind_speed_entity": "Windgeschwindigkeit (optional)",
+          "punctuality": "Pünktlich warm: Vorheizen aus verspäteten Morgen lernen",
+          "preheat_extension": "Vorheizen darf so viel länger dauern (0 = nie)"
         },
         "data_description": {
           "recovery_limit": "Außerhalb der Komfortzeit muss der Raum innerhalb der maximalen Vorheizzeit wieder warm werden.",
           "learn_usage": "Zu Uhrzeiten, in denen der Raum meist genutzt wird, bleibt Komfort auch ohne Bewegung.",
-          "early_stop": "Nur wenn der Raum bis zum Ende höchstens 0,5 °C verliert."
+          "early_stop": "Nur wenn der Raum bis zum Ende höchstens 0,5 °C verliert.",
+          "punctuality": "Jeden Morgen wird geprüft, ob der Raum zum Komfortbeginn warm war. Daraus lernt die Regelung, wie viel früher oder später sie vorheizen muss.",
+          "preheat_extension": "Zusätzlich zur maximalen Vorheizzeit, nur wenn die Zentralheizung in dieser Zeit nicht üblicherweise aus ist."
         }
       }
     },

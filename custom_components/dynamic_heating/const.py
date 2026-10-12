@@ -4,7 +4,8 @@ from typing import Final
 
 DOMAIN: Final = "dynamic_heating"
 PLATFORMS: Final = [
-    "binary_sensor", "button", "climate", "number", "select", "sensor", "switch"
+    "binary_sensor", "button", "climate", "datetime", "number", "select", "sensor",
+    "switch",
 ]
 
 CONF_CLIMATE_ENTITY: Final = "climate_entity"
@@ -580,3 +581,29 @@ CONF_WARM_UP_STEP: Final = "warm_up_step"
 CONF_WARM_UP_DURATION: Final = "warm_up_duration"
 DEFAULT_WARM_UP_STEP: Final = 1.0
 DEFAULT_WARM_UP_DURATION: Final = 3600
+
+# Calibration run (0.9.7): full heat for this long so a new room model learns
+# heat output in one go; the valves get the room temperature plus this.
+LEARN_RUN_DURATION_SECONDS: Final = 7200
+LEARN_RUN_RISE: Final = 4.0
+# Warm on time (0.9.7): learn a preheat correction from late or early
+# mornings, and allow preheating this much longer than the maximum when the
+# central heating is not known to be off then.
+CONF_PUNCTUALITY: Final = "punctuality"
+DEFAULT_PUNCTUALITY: Final = True
+CONF_PREHEAT_EXTENSION: Final = "preheat_extension"
+DEFAULT_PREHEAT_EXTENSION: Final = 3600
+# Push "nobody home" (with "Stimmt nicht, ich bin da") after this long.
+CONF_NOTIFY_AWAY: Final = "notify_away"
+DEFAULT_NOTIFY_AWAY: Final = True
+NOTIFY_AWAY_SECONDS: Final = 900
+# "In 15 Minuten erinnern" on the window push.
+NOTIFY_SNOOZE_SECONDS: Final = 900
+# Prefix of the actions on mobile app notifications.
+NOTIFY_ACTION_PREFIX: Final = "DYNHEAT"
+# Fallback schedule in the valves (0.9.7): written and switched on when Home
+# Assistant shuts down, switched off again after the start.
+CONF_VALVE_FALLBACK: Final = "valve_fallback"
+DEFAULT_VALVE_FALLBACK: Final = False
+# Device name of a room without area.
+DEFAULT_DEVICE_NAME: Final = "Dynamische Heizungssteuerung"
