@@ -498,12 +498,14 @@ class TrendSample:
         if change > max_delta:
             self._restart(temperature, now, anchored=False)
             return "implausible", None
-        if change <= -min_delta:
+        # Readings like 19.3 - 19.1 come out a hair below 0.2 in floating point.
+        epsilon = 1e-6
+        if change <= -min_delta + epsilon:
             # Moving the wrong way (e.g. thermal lag right after a valve opened):
             # start a fresh window at this sensor step instead of rejecting.
             self._restart(temperature, now, anchored=True)
             return "collecting", None
-        if elapsed < min_seconds or change < min_delta:
+        if elapsed < min_seconds or change < min_delta - epsilon:
             return "collecting", None
 
         self._restart(temperature, now, anchored=False)

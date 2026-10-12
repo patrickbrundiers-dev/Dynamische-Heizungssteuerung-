@@ -176,11 +176,13 @@ IGNORED_PROBLEM_ENTITY_SUFFIXES: Final = ("_valve_alarm",)
 # room falls back to the thermostats' readings instead of a frozen value.
 ROOM_SENSOR_STALE_SECONDS: Final = 21600
 
-# Heating watchdog: the room stays at least this far below its target for this
-# long without warming by the given amount (valve stuck, boiler off, ...).
+# Heating watchdog: the room stays at least this far below its target and warms
+# by less than the given amount in this time (valve stuck, boiler off, flow
+# temperature too low, ...). 0.5 °C in two hours is 0.25 °C/h, barely above
+# the slowest heating rate the preheat model knows.
 HEATING_WATCHDOG_GAP: Final = 1.0
 HEATING_WATCHDOG_SECONDS: Final = 7200
-HEATING_WATCHDOG_MIN_RISE: Final = 0.3
+HEATING_WATCHDOG_MIN_RISE: Final = 0.5
 
 # Quick selection ("Betriebsart"): a mode picked by hand holds until the next
 # switch of the comfort schedule, then the room returns to automatic control.
