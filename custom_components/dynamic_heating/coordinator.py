@@ -3685,9 +3685,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         room = result.get("room_temperature")
         self._check_plan(result, now)
         # Also at once when control is switched on (after a restart it comes
-        # on a moment after the first cycle), the model gets ready or the
-        # schedule changes.
-        key = (self.enabled, self.room_model.ready, self.active_schedule)
+        # on a moment after the first cycle), room and outdoor temperature
+        # arrive, the model gets ready or the schedule changes.
+        key = (
+            self.enabled,
+            room is not None and result.get("outdoor_temperature") is not None,
+            self.room_model.ready,
+            self.active_schedule,
+        )
         if (
             self._plan_at is None
             or now - self._plan_at >= PLAN_INTERVAL
