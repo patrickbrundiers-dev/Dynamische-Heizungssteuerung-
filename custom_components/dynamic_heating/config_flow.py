@@ -10,6 +10,22 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_EARLY_STOP,
+    CONF_LEARN_USAGE,
+    CONF_PREHEAT_WHEN_HOME,
+    CONF_RECOVERY_LIMIT,
+    CONF_ROOM_EMPTY_GRACE,
+    CONF_ROOM_EMPTY_RECOVERY,
+    CONF_ROOM_MODEL,
+    CONF_SOLAR_RADIATION_ENTITY,
+    CONF_WIND_SPEED_ENTITY,
+    DEFAULT_EARLY_STOP,
+    DEFAULT_LEARN_USAGE,
+    DEFAULT_PREHEAT_WHEN_HOME,
+    DEFAULT_RECOVERY_LIMIT,
+    DEFAULT_ROOM_EMPTY_GRACE,
+    DEFAULT_ROOM_EMPTY_RECOVERY,
+    DEFAULT_ROOM_MODEL,
     CONF_COMMAND_DELAY,
     CONF_DOOR_CLOSE_DELAY,
     CONF_DOOR_ENTITIES,
@@ -157,6 +173,9 @@ def _seconds_to_duration(value: object) -> dict[str, int]:
 
 
 _DURATION_OPTIONS = (
+    CONF_ROOM_EMPTY_RECOVERY,
+    CONF_ROOM_EMPTY_GRACE,
+    CONF_EARLY_STOP,
     CONF_ENTER_HOME_DURATION,
     CONF_LEAVING_HOME_DURATION,
     CONF_PROXIMITY_DURATION,
@@ -847,6 +866,36 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         schema[vol.Optional(CONF_NOTIFY_SERVICE)] = _notify_selector(self.hass)
         return vol.Schema(schema)
 
+    def _intelligence_schema(self, current: dict) -> vol.Schema:
+        """Room model, setback limit, presence learning and optimum stop."""
+        schema = {}
+        for key, default in (
+            (CONF_ROOM_MODEL, DEFAULT_ROOM_MODEL),
+            (CONF_RECOVERY_LIMIT, DEFAULT_RECOVERY_LIMIT),
+        ):
+            schema[vol.Optional(key, default=bool(current.get(key, default)))] = (
+                selector.BooleanSelector()
+            )
+        item = self._duration_field(
+            CONF_ROOM_EMPTY_RECOVERY, current, DEFAULT_ROOM_EMPTY_RECOVERY
+        )
+        schema[item[0]] = item[1]
+        for key, default in (
+            (CONF_PREHEAT_WHEN_HOME, DEFAULT_PREHEAT_WHEN_HOME),
+            (CONF_LEARN_USAGE, DEFAULT_LEARN_USAGE),
+        ):
+            schema[vol.Optional(key, default=bool(current.get(key, default)))] = (
+                selector.BooleanSelector()
+            )
+        for item in (
+            self._duration_field(CONF_ROOM_EMPTY_GRACE, current, DEFAULT_ROOM_EMPTY_GRACE),
+            self._duration_field(CONF_EARLY_STOP, current, DEFAULT_EARLY_STOP),
+            self._entity_field(CONF_SOLAR_RADIATION_ENTITY, "sensor", current),
+            self._entity_field(CONF_WIND_SPEED_ENTITY, "sensor", current),
+        ):
+            schema[item[0]] = item[1]
+        return vol.Schema(schema)
+
     def _show_step(
         self,
         step_id: str,
@@ -1050,6 +1099,29 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             )
             current[CONF_NOTIFY_SERVICE] = user_input.get(CONF_NOTIFY_SERVICE) or None
 
+            return await self.async_step_intelligence()
+
+        return self._show_step(
+            "environment", self._environment_schema(current), current
+        )
+
+    async def async_step_intelligence(self, user_input=None):
+        """Step 5: room model, setback limit, presence learning, sun and wind."""
+        current = self._values()
+        if user_input is not None:
+            current.update(user_input)
+            for key, default in (
+                (CONF_ROOM_MODEL, DEFAULT_ROOM_MODEL),
+                (CONF_RECOVERY_LIMIT, DEFAULT_RECOVERY_LIMIT),
+                (CONF_PREHEAT_WHEN_HOME, DEFAULT_PREHEAT_WHEN_HOME),
+                (CONF_LEARN_USAGE, DEFAULT_LEARN_USAGE),
+            ):
+                current[key] = bool(user_input.get(key, default))
+            for key in (CONF_ROOM_EMPTY_RECOVERY, CONF_ROOM_EMPTY_GRACE, CONF_EARLY_STOP):
+                current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
+            for key in (CONF_SOLAR_RADIATION_ENTITY, CONF_WIND_SPEED_ENTITY):
+                current[key] = user_input.get(key) or None
+
             climate_entity = current[CONF_CLIMATE_ENTITY]
             options = dict(current)
             if climate_entity != self.config_entry.unique_id:
@@ -1061,7 +1133,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             return self.async_create_entry(title="", data=options)
 
         return self._show_step(
-            "environment", self._environment_schema(current), current
+            "intelligence", self._intelligence_schema(current), current
         )
 
 

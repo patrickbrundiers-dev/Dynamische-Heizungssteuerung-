@@ -59,6 +59,7 @@ async def _finish_editor_flow(
     presence=None,
     geofencing=None,
     environment=None,
+    intelligence=None,
 ):
     """Submit all editor pages, using current settings unless overridden."""
     values = dict(entry.data)
@@ -148,8 +149,23 @@ async def _finish_editor_flow(
             env_input.pop(key, None)
         else:
             env_input[key] = value
-    return await hass.config_entries.options.async_configure(
+    result = await hass.config_entries.options.async_configure(
         result["flow_id"], user_input=env_input
+    )
+    if result.get("step_id") != "intelligence":
+        return result
+    smart_input = {
+        key: values[key]
+        for key in ("solar_radiation_entity", "wind_speed_entity")
+        if values.get(key)
+    }
+    for key, value in (intelligence or {}).items():
+        if value is None:
+            smart_input.pop(key, None)
+        else:
+            smart_input[key] = value
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input=smart_input
     )
 
 

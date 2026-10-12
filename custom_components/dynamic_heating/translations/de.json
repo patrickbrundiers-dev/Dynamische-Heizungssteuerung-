@@ -316,6 +316,26 @@
           "targets": "Auf Räume",
           "groups": "Einstellungen"
         }
+      },
+      "intelligence": {
+        "title": "5. Intelligente Regelung",
+        "description": "Das Raummodell lernt aus jeder Stunde, wie stark die Heizkörper heizen, wie schnell der Raum auskühlt und wie viel Sonne und Wind ausmachen. Damit wird das Vorheizen berechnet, die Absenkung so begrenzt, dass der Raum rechtzeitig wieder warm wird, und am Ende eines Komfortblocks früher abgeschaltet. Es arbeitet erst, wenn es genug Daten hat (Sensor „Raummodell“).",
+        "data": {
+          "room_model": "Raummodell nutzen",
+          "recovery_limit": "Absenkung nur so tief, wie der Raum sie aufholt",
+          "room_empty_recovery": "Raum leer: in dieser Zeit wieder warm",
+          "preheat_when_home": "Vorheizen, wenn jemand zuhause ist (auch bei leerem Raum)",
+          "learn_usage": "Lernen, wann der Raum genutzt wird",
+          "room_empty_grace": "Komfortbeginn: so lange auf jemanden im Raum warten",
+          "early_stop": "Vor Komfortende früher abschalten (0 = aus)",
+          "solar_radiation_entity": "Sonneneinstrahlung (W/m², optional)",
+          "wind_speed_entity": "Windgeschwindigkeit (optional)"
+        },
+        "data_description": {
+          "recovery_limit": "Außerhalb der Komfortzeit muss der Raum innerhalb der maximalen Vorheizzeit wieder warm werden.",
+          "learn_usage": "Zu Uhrzeiten, in denen der Raum meist genutzt wird, bleibt Komfort auch ohne Bewegung.",
+          "early_stop": "Nur wenn der Raum bis zum Ende höchstens 0,5 °C verliert."
+        }
       }
     },
     "error": {
