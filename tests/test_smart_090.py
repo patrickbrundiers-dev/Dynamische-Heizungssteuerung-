@@ -390,3 +390,28 @@ async def test_room_model_learns_from_control_cycles(hass, enable_custom_integra
     assert coordinator.room_model.samples == 2
     assert coordinator.room_model.heating_samples == 2
     assert coordinator.data["model_status"].startswith("Lernt noch")
+
+
+def test_reachable_stays_within_a_few_hours_of_heating():
+    view = _trained_model().view(18.0)
+    # Settling far above anything real, but six hours ahead stays modest.
+    assert view.equilibrium(1.0) > 30
+    assert view.reachable(20.0) < 22.5
+    assert view.reachable(20.0) >= 20.0
+
+
+@pytest.mark.asyncio
+async def test_a_young_model_only_times_preheating(hass, enable_custom_integrations):
+    """Ready but not proven: no setback limit, no reachability, no sun pause."""
+    _set_up_test_entities(hass, room_temperature="19.0")
+    _, coordinator = await _setup_integration(hass)
+    coordinator.room_model = _trained_model(hours=30)
+    assert coordinator.room_model.ready
+    assert not coordinator.room_model.trusted
+    with _capture_climate_calls(hass):
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+    data = coordinator.data
+    assert data["setback_floor"] is None
+    assert data["reachable_temperature"] is None
+    assert data["model_status"].startswith("Aktiv fürs Vorheizen")

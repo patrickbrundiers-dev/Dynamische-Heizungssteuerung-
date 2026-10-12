@@ -347,3 +347,7 @@ Neue Editor-Seite 5 *Intelligente Regelung*. Alles ist standardmäßig an, wirkt
 - **Erreichbare Temperatur**: Liegt das Ziel über dem, was die Heizkörper heute schaffen, steht das im Status („heute erreichbar ca. 20,4 °C“). *Heizproblem* meldet nur noch, wenn der Raum deutlich unter dem Erreichbaren bleibt.
 - **Früher abschalten**: Bis zu *Vor Komfortende früher abschalten* (Standard 30 Minuten) vor dem Ende eines Komfortblocks geht die Heizung auf Eco, wenn der Raum am Ziel ist und bis zum Ende höchstens 0,5 °C verliert.
 - **Sonne und Wind**: Mit einem Sensor für Sonneneinstrahlung (W/m² oder lx) lernt das Modell den Sonnengewinn; hält die Sonne allein den Raum warm, pausiert die Heizung („Sonne wärmt den Raum“). Ein Windsensor (m/s, km/h, mph, kn) erhöht den gelernten Wärmeverlust bei Wind.
+
+## Version 0.9.1: Raummodell erst bewähren lassen
+
+Ein frisch gelerntes Raummodell steuert nur das Vorheizen. Absenkungsgrenzen, „heute erreichbar“, die Heizproblem-Bewertung und die Sonnenpause greifen erst ab 48 Stunden Daten und einem mittleren Vorhersagefehler unter 0,12 °C/h (Attribut `model_trusted` am Sensor *Raummodell*). „Erreichbar“ heißt jetzt: in sechs Stunden voller Heizung, nicht der rechnerische Endwert, der bei mildem Wetter weit über allem lag, was der Raum je geschafft hat.
