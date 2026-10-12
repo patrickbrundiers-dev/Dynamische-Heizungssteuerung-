@@ -410,6 +410,8 @@ def seed_room_model(
     start: float,
     end: float,
     radiator_ids: list[str] | None = None,
+    setpoint_ids: list[str] | None = None,
+    full_gap: float = 2.0,
 ) -> int:
     """Learn hourly samples from recorded states; return how many.
 
@@ -418,6 +420,10 @@ def seed_room_model(
     or without heat demand data (control off) are skipped, and so are hours
     in which the radiators (``radiator_ids``, the valves' own temperature)
     stayed cold although heat was asked for.
+
+    Without a recorded heat demand (a room set up only now) the demand is
+    estimated from the valves' setpoints (``setpoint_ids``: a number, or
+    ``off``) like the live estimate: the gap to the room over ``full_gap``.
     """
     series = {
         entity_id: sorted(items, key=lambda item: item[0])
@@ -445,6 +451,12 @@ def seed_room_model(
         room = _number(value_at(room_id, at))
         outdoor = _number(value_at(outdoor_id, at))
         demand = _number(value_at(demand_id, at))
+        if demand is None and room is not None and setpoint_ids:
+            demand = estimate_demand(
+                [value_at(entity_id, at) for entity_id in setpoint_ids],
+                room,
+                full_gap,
+            )
         window_open = any(value_at(entity_id, at) == "on" for entity_id in window_ids)
         if room is None or outdoor is None or demand is None or window_open:
             collector.reset()
@@ -472,6 +484,24 @@ def seed_room_model(
                 added += 1
         at += HISTORY_STEP_SECONDS
     return added
+
+
+def estimate_demand(
+    setpoints: list[str | None], room: float, full_gap: float
+) -> float | None:
+    """Heat demand in % estimated from valve setpoints; None without data."""
+    shares = []
+    for raw in setpoints:
+        if raw == "off":
+            shares.append(0.0)
+            continue
+        setpoint = _number(raw)
+        if setpoint is None:
+            continue
+        shares.append(max(0.0, min(1.0, (setpoint - room) / full_gap)))
+    if not shares:
+        return None
+    return 100 * sum(shares) / len(shares)
 
 
 USAGE_ALPHA = 0.3

@@ -66,6 +66,8 @@ async def _finish_editor_flow(
     values.update(dict(entry.options))
     values.update(basic or {})
     result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.MENU
+    flow_id = result["flow_id"]
 
     first = {
         key: values[key]
@@ -78,26 +80,27 @@ async def _finish_editor_flow(
             "max_preheat_minutes",
         )
     }
-    if "calibration" in values:
-        first["calibration"] = values["calibration"]
     if values.get("additional_climate_entities"):
         first["additional_climate_entities"] = values["additional_climate_entities"]
     if values.get("frost_protection_temperature") is not None:
         first["frost_protection_temperature"] = values["frost_protection_temperature"]
-    for key in ("boost_temperature", "boost_duration", "hysteresis"):
-        if key in values:
-            first[key] = values[key]
-    if isinstance(first.get("boost_duration"), int):
-        seconds = first["boost_duration"]
-        first["boost_duration"] = {
-            "hours": seconds // 3600,
-            "minutes": seconds % 3600 // 60,
-            "seconds": seconds % 60,
-        }
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], user_input=first
-    )
-    assert result["step_id"] == "presence"
+    result = await _submit_page(hass, flow_id, "basics", first)
+    if result["type"] is not FlowResultType.MENU:
+        return result
+
+    valves = {
+        key: values[key] for key in ("calibration", "hysteresis") if key in values
+    }
+    result = await _submit_page(hass, flow_id, "valves", valves)
+    assert result["type"] is FlowResultType.MENU
+
+    modes = {key: values[key] for key in ("boost_temperature",) if key in values}
+    if isinstance(values.get("boost_duration"), int):
+        modes["boost_duration"] = _duration(values["boost_duration"])
+    elif isinstance(values.get("boost_duration"), dict):
+        modes["boost_duration"] = values["boost_duration"]
+    result = await _submit_page(hass, flow_id, "modes", modes)
+    assert result["type"] is FlowResultType.MENU
 
     presence_keys = (
         "person_entities", "guest_entity", "presence_entity",
@@ -117,10 +120,9 @@ async def _finish_editor_flow(
             presence_input.pop(key, None)
         else:
             presence_input[key] = value
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], user_input=presence_input
-    )
-    assert result["step_id"] == "geofencing"
+    result = await _submit_page(hass, flow_id, "presence", presence_input)
+    if result["type"] is not FlowResultType.MENU:
+        return result
 
     geo_keys = ("proximity_zone",)
     geo_input = {key: values[key] for key in geo_keys if values.get(key)}
@@ -134,10 +136,8 @@ async def _finish_editor_flow(
             geo_input.pop(key, None)
         else:
             geo_input[key] = value
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], user_input=geo_input
-    )
-    assert result["step_id"] == "environment"
+    result = await _submit_page(hass, flow_id, "geofencing", geo_input)
+    assert result["type"] is FlowResultType.MENU
 
     env_keys = (
         "window_entity", "outdoor_temperature_entity", "weather_entity",
@@ -149,10 +149,8 @@ async def _finish_editor_flow(
             env_input.pop(key, None)
         else:
             env_input[key] = value
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], user_input=env_input
-    )
-    if result.get("step_id") != "intelligence":
+    result = await _submit_page(hass, flow_id, "environment", env_input)
+    if result["type"] is not FlowResultType.MENU:
         return result
     smart_input = {
         key: values[key]
@@ -164,8 +162,21 @@ async def _finish_editor_flow(
             smart_input.pop(key, None)
         else:
             smart_input[key] = value
+    result = await _submit_page(hass, flow_id, "intelligence", smart_input)
+    assert result["type"] is FlowResultType.MENU
     return await hass.config_entries.options.async_configure(
-        result["flow_id"], user_input=smart_input
+        flow_id, {"next_step_id": "save"}
+    )
+
+
+async def _submit_page(hass, flow_id, page, user_input):
+    """Open one page from the editor menu and submit it."""
+    result = await hass.config_entries.options.async_configure(
+        flow_id, {"next_step_id": page}
+    )
+    assert result["step_id"] == page
+    return await hass.config_entries.options.async_configure(
+        flow_id, user_input=user_input
     )
 
 
@@ -234,8 +245,10 @@ async def test_editor_opens_for_an_existing_room(hass, enable_custom_integration
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
 
-    assert result["type"] is FlowResultType.FORM
+    assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
+    assert result["menu_options"][0] == "basics"
+    assert result["menu_options"][-1] == "save"
     assert result["flow_id"]
 
 
@@ -276,9 +289,7 @@ async def test_editor_rejects_invalid_comfort_and_eco_values(
         "eco_temperature": 20.0,
     }
 
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], user_input=edited
-    )
+    result = await _submit_page(hass, result["flow_id"], "basics", edited)
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "eco_must_be_below_comfort"}
@@ -317,9 +328,7 @@ async def test_editor_rejects_thermostat_already_used_by_another_room(
 
     result = await hass.config_entries.options.async_init(second.entry_id)
     edited = {**_valid_input(), "climate_entity": "climate.living_room"}
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], user_input=edited
-    )
+    result = await _submit_page(hass, result["flow_id"], "basics", edited)
 
     assert result["type"] is FlowResultType.ABORT
     assert second.unique_id == "climate.kitchen"
@@ -414,11 +423,9 @@ async def test_editor_saves_rejects_and_clears_away_temperature(
             "max_preheat_minutes",
         )
     }
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], user_input=first
-    )
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], user_input={"away_temperature": 21.0}
+    result = await _submit_page(hass, result["flow_id"], "basics", first)
+    result = await _submit_page(
+        hass, result["flow_id"], "presence", {"away_temperature": 21.0}
     )
     assert result["step_id"] == "presence"
     assert result["errors"] == {"base": "away_must_be_below_comfort"}

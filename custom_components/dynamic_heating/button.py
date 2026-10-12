@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -33,6 +34,8 @@ async def async_setup_entry(
         QuickModeButton(entry.runtime_data, entry, mode) for mode in QUICK_MODES
     ]
     entities.append(ValveMaintenanceButton(entry.runtime_data, entry))
+    entities.append(WarmUpButton(entry.runtime_data, entry))
+    entities.append(SelfTestButton(entry.runtime_data, entry))
     async_add_entities(entities)
 
 
@@ -77,6 +80,46 @@ class ValveMaintenanceButton(CoordinatorEntity[DynamicHeatingCoordinator], Butto
 
     async def async_press(self) -> None:
         await self.coordinator.async_start_valve_maintenance()
+
+
+class WarmUpButton(CoordinatorEntity[DynamicHeatingCoordinator], ButtonEntity):
+    """Kurz wärmer: a little warmer for a while, then back to automatic.
+
+    Made for voice assistants ("Alexa, Wohnzimmer kurz wärmer einschalten").
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Kurz wärmer"
+    _attr_icon = "mdi:thermometer-plus"
+
+    def __init__(
+        self, coordinator: DynamicHeatingCoordinator, entry: ConfigEntry
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_warm_up_button"
+        self._attr_device_info = device_info(entry)
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_warm_up()
+
+
+class SelfTestButton(CoordinatorEntity[DynamicHeatingCoordinator], ButtonEntity):
+    """Runs the self-test now."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Selbsttest starten"
+    _attr_icon = "mdi:clipboard-play-outline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self, coordinator: DynamicHeatingCoordinator, entry: ConfigEntry
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_selftest_button"
+        self._attr_device_info = device_info(entry)
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_run_selftest()
 
 
 class SendReportButton(HouseEntity, ButtonEntity):

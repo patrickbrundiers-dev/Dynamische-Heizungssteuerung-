@@ -242,6 +242,17 @@ SENSORS = (
         icon="mdi:radiator",
     ),
     HeatingSensorDescription(
+        key="radiator_balance",
+        name="Heizkörper-Abgleich",
+        icon="mdi:scale-balance",
+    ),
+    HeatingSensorDescription(
+        key="selftest",
+        name="Selbsttest",
+        icon="mdi:clipboard-check-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    HeatingSensorDescription(
         key="reachable_temperature",
         name="Erreichbare Temperatur",
         device_class=SensorDeviceClass.TEMPERATURE,
@@ -311,7 +322,12 @@ _RADIATOR_KEYS = (
     "supply_usually_off",
     "supply_off_hours",
     "supply_today",
+    "supply_source",
+    "house_supply",
 )
+
+# Extra attributes of the radiator balance sensor.
+_BALANCE_KEYS = ("radiator_stats", "radiator_balance_weak")
 
 
 async def async_setup_entry(
@@ -324,6 +340,7 @@ async def async_setup_entry(
         async_add_entities([
             HouseOverviewSensor(entry.runtime_data, entry, "overview"),
             HouseHeatDemandSensor(entry.runtime_data, entry, "heat_demand"),
+            HouseSupplySensor(entry.runtime_data, entry, "central_heating"),
         ])
         return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
@@ -333,9 +350,11 @@ async def async_setup_entry(
             "sensor", DOMAIN, f"{entry.entry_id}_{key}"
         ):
             registry.async_remove(entity_id)
-    async_add_entities(
+    entities: list[SensorEntity] = [
         HeatingSensor(coordinator, entry, description) for description in SENSORS
-    )
+    ]
+    entities.append(DayPlanSensor(coordinator, entry, DAY_PLAN))
+    async_add_entities(entities)
 
 
 class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
@@ -383,6 +402,25 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
         if self.entity_description.key == "radiator_status":
             data = self.coordinator.data
             return {key: data[key] for key in _RADIATOR_KEYS if key in data}
+        if self.entity_description.key == "radiator_balance":
+            data = self.coordinator.data
+            return {key: data[key] for key in _BALANCE_KEYS if key in data}
+        if self.entity_description.key == "selftest":
+            selftest = self.coordinator.selftest
+            if selftest is None:
+                return None
+            return {
+                "last_run": selftest["at"],
+                "problems": selftest["problems"],
+                "checks": {
+                    check["name"]: (
+                        "ok" if check["ok"] else
+                        "info" if check["ok"] is None else "Problem"
+                    )
+                    + f" – {check['detail']}"
+                    for check in selftest["checks"]
+                },
+            }
         if self.entity_description.key != "status":
             return None
 
@@ -470,6 +508,50 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             key: self.coordinator.data[key]
             for key in diagnostic_keys
             if key in self.coordinator.data
+        }
+
+
+DAY_PLAN = HeatingSensorDescription(
+    key="day_plan",
+    name="Tagesplan",
+    icon="mdi:calendar-clock",
+)
+
+
+class DayPlanSensor(HeatingSensor):
+    """What the room will do in the next 24 hours; the curve in the attributes."""
+
+    # The curve changes every 15 minutes and is only useful live.
+    _unrecorded_attributes = frozenset({"forecast", "calculated_at"})
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        if not self.coordinator.data:
+            return None
+        return self.coordinator.plan_attributes()
+
+
+class HouseSupplySensor(HouseEntity, SensorEntity):
+    """Does the central heating deliver? Judged by the radiators of all rooms."""
+
+    _attr_name = "Zentralheizung"
+    _attr_icon = "mdi:water-boiler"
+    _attr_should_poll = True
+
+    @property
+    def native_value(self) -> str:
+        return self.house.supply_text()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "delivers": self.house.supply_state,
+            "off_hours": self.house.supply.off_hours(),
+            "profile": self.house.supply.as_list(),
+            "rooms": {
+                room.room_name: (room.data or {}).get("radiator_supply")
+                for room in self.house.rooms()
+            },
         }
 
 

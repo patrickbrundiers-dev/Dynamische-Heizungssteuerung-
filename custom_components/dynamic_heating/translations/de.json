@@ -123,69 +123,103 @@
   "options": {
     "step": {
       "init": {
-        "title": "1. Raum und Heizverhalten",
-        "description": "Lege Thermostat, Raumtemperatursensor, Komfortzeitplan und Solltemperaturen fest. Die Komforttemperatur muss über der Absenktemperatur liegen.",
+        "title": "Raum bearbeiten",
+        "description": "Wähle eine Seite. Änderungen werden erst mit „Speichern“ übernommen.",
+        "menu_options": {
+          "basics": "Grundlagen: Ventile, Fühler, Zeitplan, Temperaturen",
+          "valves": "Ventile im Detail: Raumtemperatur senden, Kalibrierung, Wartung",
+          "modes": "Betriebsarten: weitere Zeitpläne, Boost, Kurz wärmer",
+          "presence": "Personen und Anwesenheit",
+          "geofencing": "Geo-Fencing",
+          "environment": "Fenster, Außentemperatur, Wetter, Benachrichtigung",
+          "intelligence": "Intelligente Regelung",
+          "save": "Speichern"
+        }
+      },
+      "basics": {
+        "title": "Grundlagen",
+        "description": "Das Wichtigste für den Raum. Die Komforttemperatur muss über der Absenktemperatur liegen.",
         "data": {
           "climate_entity": "Zu steuerndes Thermostat",
+          "additional_climate_entities": "Weitere Thermostate im Raum (optional)",
           "room_temperature_entity": "Raumtemperatursensor",
           "schedule_entity": "Komfortzeitplan",
           "comfort_temperature": "Komforttemperatur (°C)",
           "eco_temperature": "Absenktemperatur (°C)",
           "max_preheat_minutes": "Maximale Vorheizzeit (Minuten)",
-          "frost_protection_temperature": "Frostschutztemperatur (°C, optional)",
-          "additional_climate_entities": "Weitere Thermostate im Raum (optional)",
-          "calibration": "Sollwert mit Raumfühler kalibrieren",
-          "external_temperature": "Raumtemperatur an die Thermostate senden",
-          "valve_maintenance": "Wöchentliche Ventilwartung",
-          "hysteresis": "Hysterese der Kalibrierung",
-          "boost_temperature": "Boost-Temperatur",
-          "boost_duration": "Boost-Dauer",
-          "home_temperature": "Temperatur „Zuhause“",
-          "activity_temperature": "Temperatur „Aktivität“",
-          "sleep_temperature": "Temperatur „Schlafen“",
-          "additional_schedule_entities": "Weitere Zeitpläne (optional)",
-          "eco_schedule_entity": "Eco-Zeitplan (optional)",
-          "sync_manual_change": "Drehen am Ventil gilt für den Raum",
-          "aggressive_range": "Aggressiv-Modus: Bereich (°C, optional)",
-          "aggressive_offset": "Aggressiv-Modus: Versatz",
-          "lock_valves": "Ventile sperren",
-          "maintenance_weekday": "Ventilwartung: Wochentag",
-          "maintenance_hour": "Ventilwartung: Uhrzeit (Stunde)",
-          "maintenance_duration": "Ventilwartung: Dauer je Phase",
-          "command_delay": "Pause zwischen Ventilbefehlen"
+          "frost_protection_temperature": "Frostschutztemperatur (°C, optional)"
         },
         "data_description": {
           "climate_entity": "Wähle die Climate-Entität, deren Sollwert dieser Raumregler verändern darf. Vermeide weitere Automationen, die gleichzeitig dasselbe Thermostat steuern.",
+          "additional_climate_entities": "Weitere Heizkörperthermostate desselben Raums. Sie erhalten denselben Sollwert wie das Hauptthermostat, so wie eine Climate-Gruppe. Ein nicht verfügbares weiteres Thermostat wird übersprungen; eine manuelle Änderung an einem davon pausiert die Regelung für den Raum.",
           "room_temperature_entity": "Verwende einen Raumtemperatursensor in °C. Seine Werte dienen zum Lernen der Aufheiz- und Abkühlrate.",
           "schedule_entity": "Eine Home-Assistant-Schedule-Entität: EIN bedeutet Komfortzeit. Das Attribut next_event wird für das Vorheizen genutzt.",
           "comfort_temperature": "Gewünschte Raumtemperatur während aktiver Komfortzeiten.",
           "eco_temperature": "Absenktemperatur außerhalb der Komfortzeit, bei Abwesenheit oder offenem Fenster. Sie muss unter der Komforttemperatur liegen.",
           "max_preheat_minutes": "Harte Obergrenze, wie früh die Vorheizung starten darf.",
-          "frost_protection_temperature": "Kein Sollwert geht unter diesen Wert, auch nicht bei offenem Fenster oder Abwesenheit, z. B. 12 °C. Leer lassen zum Abschalten. Muss unter der Komforttemperatur liegen.",
-          "additional_climate_entities": "Weitere Heizkörperthermostate desselben Raums. Sie erhalten denselben Sollwert wie das Hauptthermostat, so wie eine Climate-Gruppe. Ein nicht verfügbares weiteres Thermostat wird übersprungen; eine manuelle Änderung an einem davon pausiert die Regelung für den Raum.",
+          "frost_protection_temperature": "Kein Sollwert geht unter diesen Wert, auch nicht bei offenem Fenster oder Abwesenheit, z. B. 12 °C. Leer lassen zum Abschalten. Muss unter der Komforttemperatur liegen."
+        }
+      },
+      "valves": {
+        "title": "Ventile im Detail",
+        "description": "Wie die Ventile angesteuert werden. Für die meisten Räume reichen die Voreinstellungen.",
+        "data": {
+          "calibration": "Sollwert mit Raumfühler kalibrieren",
+          "external_temperature": "Raumtemperatur an die Thermostate senden",
+          "valve_maintenance": "Wöchentliche Ventilwartung",
+          "maintenance_weekday": "Ventilwartung: Wochentag",
+          "maintenance_hour": "Ventilwartung: Uhrzeit (Stunde)",
+          "maintenance_duration": "Ventilwartung: Dauer je Phase",
+          "hysteresis": "Hysterese der Kalibrierung",
+          "command_delay": "Pause zwischen Ventilbefehlen",
+          "sync_manual_change": "Drehen am Ventil gilt für den Raum",
+          "lock_valves": "Ventile sperren",
+          "aggressive_range": "Aggressiv-Modus: Bereich (°C, optional)",
+          "aggressive_offset": "Aggressiv-Modus: Versatz"
+        },
+        "data_description": {
           "calibration": "Das Thermostat misst direkt am Heizkörper. Ist dies aktiv, wird sein Sollwert um die Differenz zwischen Thermostat- und Raumtemperatur verschoben (wie die zieltemperaturbasierte Kalibrierung von Better Thermostat), damit es nach dem Raumfühler regelt. Die Abweichung wird höchstens alle 10 Minuten neu berechnet. Nicht einschalten, wenn das gewählte Thermostat bereits ein Better-Thermostat ist.",
           "external_temperature": "Für Thermostate mit Eingang für eine externe Temperatur (z. B. Aqara E1 über Zigbee2MQTT): Die Integration schaltet sie auf den externen Sensor und schickt ihnen die Temperatur des Raumfühlers, wie Better Thermostat. Das Ventil regelt dann selbst nach der Raumtemperatur, eine Kalibrierung ist für diese Thermostate nicht nötig. Ist die Regelung aus oder der Raumfühler nicht verfügbar, werden sie wieder auf ihren eigenen Sensor geschaltet.",
           "valve_maintenance": "Gegen Verkalkung werden die Ventile einmal pro Woche gegen 11 Uhr für 5 Minuten ganz geöffnet und danach 5 Minuten ganz geschlossen (Maximal- bzw. Minimaltemperatur des Thermostats), wie bei Better Thermostat. Bei offenem Fenster oder manueller Übersteuerung wird sie verschoben. Nur bei aktiver Regelung.",
+          "maintenance_weekday": "An welchem Tag die Ventile bewegt werden. „Alle 7 Tage“ heißt sieben Tage nach der letzten Wartung.",
+          "maintenance_hour": "Stunde, in der die Ventilwartung startet (0–23).",
+          "maintenance_duration": "So lange bleiben die Ventile erst voll offen und dann geschlossen.",
           "hysteresis": "Eine neu berechnete Kalibrierung wird nur übernommen, wenn sie sich um mindestens diesen Wert geändert hat. So werden die Thermostate nicht bei jeder kleinen Temperaturschwankung nachgestellt. 0 schaltet die Hysterese ab.",
+          "command_delay": "Wartezeit zwischen zwei Befehlen an Ventile, auch über Räume hinweg, damit Zigbee bei vielen gleichzeitigen Befehlen keine verschluckt. 0 = keine Pause.",
+          "sync_manual_change": "Wird an einem Thermostat gedreht, bekommen alle Thermostate des Raums diesen Wert und er gilt als Betriebsart „Manuell“ für die eingestellte Betriebsart-Dauer. Aus: die Regelung pausiert nur bis zum nächsten Moduswechsel.",
+          "lock_valves": "Wird an einem Thermostat gedreht, stellt die Regelung den Sollwert des Raums sofort wieder her (wie die Kindersicherung von Better Thermostat oder der Sperr-Modus von Climate Group Helper). Hat Vorrang vor „Drehen am Ventil gilt für den Raum“.",
+          "aggressive_range": "Liegt der Raum um mehr als diesen Wert unter oder über dem Soll, wird Soll plus bzw. minus Versatz gesendet, damit träge Ventile deutlich öffnen oder schließen. Leer lassen zum Abschalten.",
+          "aggressive_offset": "Um so viel wird der gesendete Sollwert außerhalb des Bereichs angehoben oder abgesenkt."
+        }
+      },
+      "modes": {
+        "title": "Betriebsarten",
+        "description": "Weitere Zeitpläne, Boost, die Temperaturen der Schnellwahl und „Kurz wärmer“.",
+        "data": {
+          "additional_schedule_entities": "Weitere Zeitpläne (optional)",
+          "eco_schedule_entity": "Eco-Zeitplan (optional)",
+          "boost_temperature": "Boost-Temperatur",
+          "boost_duration": "Boost-Dauer",
+          "home_temperature": "Temperatur „Zuhause“",
+          "activity_temperature": "Temperatur „Aktivität“",
+          "sleep_temperature": "Temperatur „Schlafen“",
+          "warm_up_step": "Kurz wärmer: um so viel anheben",
+          "warm_up_duration": "Kurz wärmer: so lange"
+        },
+        "data_description": {
+          "additional_schedule_entities": "Zusätzliche Komfort-Zeitpläne, z. B. Ferien oder Homeoffice. Welcher gilt, wählst du mit der Entität „Zeitplan“ des Raums; ohne Auswahl gilt der erste Zeitplan.",
+          "eco_schedule_entity": "Zeitplan-Helfer, dessen Blöcke in den Zusatzdaten eine Temperatur tragen (z. B. temperature: 17). Solange ein Block aktiv ist, ersetzt sie die Absenktemperatur, höchstens bis zur Komforttemperatur.",
           "boost_temperature": "Solltemperatur, solange der Schalter „Boost“ an ist. Der Boost hat Vorrang vor Zeitplan, Anwesenheit und Heizgrenze, nicht aber vor einem offenen Fenster oder ausgeschalteter Heizperiode.",
           "boost_duration": "Nach dieser Zeit schaltet sich der Boost von selbst aus.",
           "home_temperature": "Solltemperatur der Taste bzw. Betriebsart „Zuhause“ (wie das Preset „Home“ von Better Thermostat).",
           "activity_temperature": "Solltemperatur der Taste bzw. Betriebsart „Aktivität“ (wie das Preset „Activity“ von Better Thermostat).",
           "sleep_temperature": "Solltemperatur der Taste bzw. Betriebsart „Schlafen“ (wie das Preset „Sleep“ von Better Thermostat). „Abwesend“ nutzt die Abwesenheitstemperatur, ohne sie die Eco-Temperatur.",
-          "additional_schedule_entities": "Zusätzliche Komfort-Zeitpläne, z. B. Ferien oder Homeoffice. Welcher gilt, wählst du mit der Entität „Zeitplan“ des Raums; ohne Auswahl gilt der erste Zeitplan.",
-          "eco_schedule_entity": "Zeitplan-Helfer, dessen Blöcke in den Zusatzdaten eine Temperatur tragen (z. B. temperature: 17). Solange ein Block aktiv ist, ersetzt sie die Absenktemperatur, höchstens bis zur Komforttemperatur.",
-          "sync_manual_change": "Wird an einem Thermostat gedreht, bekommen alle Thermostate des Raums diesen Wert und er gilt als Betriebsart „Manuell“ für die eingestellte Betriebsart-Dauer. Aus: die Regelung pausiert nur bis zum nächsten Moduswechsel.",
-          "aggressive_range": "Liegt der Raum um mehr als diesen Wert unter oder über dem Soll, wird Soll plus bzw. minus Versatz gesendet, damit träge Ventile deutlich öffnen oder schließen. Leer lassen zum Abschalten.",
-          "aggressive_offset": "Um so viel wird der gesendete Sollwert außerhalb des Bereichs angehoben oder abgesenkt.",
-          "lock_valves": "Wird an einem Thermostat gedreht, stellt die Regelung den Sollwert des Raums sofort wieder her (wie die Kindersicherung von Better Thermostat oder der Sperr-Modus von Climate Group Helper). Hat Vorrang vor „Drehen am Ventil gilt für den Raum“.",
-          "maintenance_weekday": "An welchem Tag die Ventile bewegt werden. „Alle 7 Tage“ heißt sieben Tage nach der letzten Wartung.",
-          "maintenance_hour": "Stunde, in der die Ventilwartung startet (0–23).",
-          "maintenance_duration": "So lange bleiben die Ventile erst voll offen und dann geschlossen.",
-          "command_delay": "Wartezeit zwischen zwei Befehlen an Ventile, auch über Räume hinweg, damit Zigbee bei vielen gleichzeitigen Befehlen keine verschluckt. 0 = keine Pause."
+          "warm_up_step": "Die Taste „Kurz wärmer“ (auch per Alexa) hebt das aktuelle Ziel um diesen Wert an. Nochmals drücken legt einen weiteren Schritt drauf (höchstens drei).",
+          "warm_up_duration": "Danach geht der Raum von selbst zurück in Automatik."
         }
       },
       "presence": {
-        "title": "2. Personen und Anwesenheit",
+        "title": "Personen und Anwesenheit",
         "description": "Hier stellst du ein, wer zu Hause sein muss und wie die optionale Innenraum-Präsenzerkennung arbeitet. Der Gastmodus zählt als Anwesenheit; Reaktionszeiten vermeiden kurze Fehlauslösungen.",
         "data": {
           "person_entities": "Personen / Geräte-Tracker (optional)",
@@ -223,7 +257,7 @@
         }
       },
       "geofencing": {
-        "title": "3. Geo-Fencing und Standortqualität",
+        "title": "Geo-Fencing und Standortqualität",
         "description": "Wähle Entfernungs- und Richtungssensor derselben Proximity-Zone. Entfernungen werden in Meter umgerechnet. Zu alte Standortupdates werden ignoriert.",
         "data": {
           "proximity_zone": "Proximity-Zone (optional)",
@@ -239,7 +273,7 @@
         }
       },
       "environment": {
-        "title": "4. Fenster, Außentemperatur und Wetter",
+        "title": "Fenster, Außentemperatur und Wetter",
         "description": "Diese optionalen Sensoren verbessern Absenkung und Vorheizschätzung. Ist ein konfigurierter Fensterkontakt nicht verfügbar, wird kein neuer Thermostat-Sollwert geschrieben.",
         "data": {
           "window_entity": "Fensterkontakt (optional)",
@@ -318,7 +352,7 @@
         }
       },
       "intelligence": {
-        "title": "5. Intelligente Regelung",
+        "title": "Intelligente Regelung",
         "description": "Das Raummodell lernt aus jeder Stunde, wie stark die Heizkörper heizen, wie schnell der Raum auskühlt und wie viel Sonne und Wind ausmachen. Damit wird das Vorheizen berechnet, die Absenkung so begrenzt, dass der Raum rechtzeitig wieder warm wird, und am Ende eines Komfortblocks früher abgeschaltet. Es arbeitet erst, wenn es genug Daten hat (Sensor „Raummodell“).",
         "data": {
           "room_model": "Raummodell nutzen",
@@ -364,6 +398,10 @@
     "implausible_room_temperature": {
       "title": "Unplausible Raumtemperatur in {room}",
       "description": "Der Raumfühler {entity} meldet {value} °C. Der Wert wird ignoriert und der Raum mit den Messwerten der Thermostate geregelt. Häufige Ursache ist eine leere Batterie. Die Meldung verschwindet, sobald wieder plausible Werte kommen."
+    },
+    "selftest_failed": {
+      "title": "Selbsttest in {room} hat Probleme gefunden",
+      "description": "Beim Selbsttest nach dem Start ist aufgefallen: {problems}. Der Test wiederholt sich stündlich; die Meldung verschwindet, sobald alles in Ordnung ist. Über die Taste „Selbsttest starten“ lässt er sich sofort wiederholen."
     }
   },
   "device_automation": {
