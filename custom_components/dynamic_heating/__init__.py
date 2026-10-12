@@ -62,7 +62,14 @@ def _rename_default_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
     "Schlafzimmer Heizung") they become ``*.schlafzimmer_heizung_*``. An id
     already taken is left alone.
     """
-    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    device = next(
+        (
+            device
+            for device in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+            if (DOMAIN, entry.entry_id) in device.identifiers
+        ),
+        None,
+    )
     if device is None:
         return
     default = slugify(DEFAULT_DEVICE_NAME)
