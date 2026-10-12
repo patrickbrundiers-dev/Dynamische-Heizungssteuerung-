@@ -340,6 +340,33 @@ async def test_room_publishes_its_day_plan_and_checks_it(
     assert coordinator.plan_checked == 1
 
 
+@pytest.mark.asyncio
+async def test_day_plan_follows_as_soon_as_the_temperatures_arrive(
+    hass, enable_custom_integrations
+):
+    _set_up_test_entities(hass, room_temperature="19.0")
+    hass.states.async_set("sensor.outdoor_temperature", "unavailable")
+    _, coordinator = await _setup_integration(hass)
+    model = RoomModel()
+    for hour in range(40):
+        model.add(0.5 if hour % 2 else -0.3, 1.0 if hour % 2 else 0.0, 19.0, 5.0)
+    coordinator.room_model = model
+    now = dt_util.now()
+    block = Block(now + timedelta(hours=2), now + timedelta(hours=4), None)
+    with (
+        _capture_climate_calls(hass),
+        patch.object(coordinator, "_schedule_blocks", return_value=[block]),
+    ):
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+        assert coordinator.data["day_plan"] == (
+            "Raum- oder Außentemperatur fehlt – kein Tagesplan"
+        )
+        hass.states.async_set("sensor.outdoor_temperature", "3.0")
+        await coordinator.async_refresh()
+    assert "Uhr" in coordinator.data["day_plan"]
+
+
 # 4 – self-test
 
 

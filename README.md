@@ -368,6 +368,10 @@ Ein frisch gelerntes Raummodell steuert nur das Vorheizen. Absenkungsgrenzen, �
 - **Raummodell lernt nur aus Stunden mit Wärme**: Stunden, in denen geheizt werden sollte, die Heizkörper aber kalt blieben, zählen nicht mehr. Bisher lernte das Modell daraus eine viel zu kleine Heizleistung und plante beim Vorheizen immer die volle Zeit. Ein mit 0.9.2 oder älter gelerntes Modell wird einmal verworfen und neu aus dem Recorder angelernt (dann mit den Gehäusetemperaturen).
 - **Wochenbericht**: nennt zusätzlich die geschätzte Ersparnis gegenüber Dauer-Komfort (aus der Temperaturdifferenz zu draußen, nach der sich der Wärmeverlust richtet), die Stunden mit kalten Heizkörpern trotz Heizbedarf und wie gut das Raummodell liegt.
 
+## Version 0.9.6: Tagesplan sobald die Temperaturen da sind
+
+- Der Tagesplan wird auch sofort neu gerechnet, sobald Raum- und Außentemperatur nach einem Neustart ankommen. Bisher stand er danach bis zu 15 Minuten auf „Raum- oder Außentemperatur fehlt“.
+
 ## Version 0.9.5: Tagesplan nach dem Neustart
 
 - Der Tagesplan wird sofort neu gerechnet, wenn die Regelung eingeschaltet wird, das Raummodell fertig wird oder der Zeitplan wechselt. Bisher blieb er nach einem Neustart bis zu 15 Minuten bei „Regelung aus – kein Tagesplan“, weil die Regelung erst kurz nach dem ersten Durchlauf einschaltet.
