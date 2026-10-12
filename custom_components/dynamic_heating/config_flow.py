@@ -80,6 +80,14 @@ from .const import (
     CONF_AWAY_TEMPERATURE,
     CONF_BOOST_DURATION,
     CONF_NOTIFY_SERVICE,
+    CONF_NOTIFY_AWAY,
+    CONF_PREHEAT_EXTENSION,
+    CONF_PUNCTUALITY,
+    CONF_VALVE_FALLBACK,
+    DEFAULT_NOTIFY_AWAY,
+    DEFAULT_PREHEAT_EXTENSION,
+    DEFAULT_PUNCTUALITY,
+    DEFAULT_VALVE_FALLBACK,
     CONF_BOOST_TEMPERATURE,
     CONF_CALIBRATION,
     CONF_ENTRY_TYPE,
@@ -197,6 +205,7 @@ _DURATION_OPTIONS = (
     CONF_ZONE_WINDOW_CLOSE_DELAY,
     CONF_MAINTENANCE_DURATION,
     CONF_WARM_UP_DURATION,
+    CONF_PREHEAT_EXTENSION,
 )
 
 _WEEKDAYS = (
@@ -758,6 +767,10 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                     current.get(CONF_AGGRESSIVE_OFFSET, DEFAULT_AGGRESSIVE_OFFSET)
                 ),
             ): _degrees_selector(5, 0.5),
+            vol.Optional(
+                CONF_VALVE_FALLBACK,
+                default=bool(current.get(CONF_VALVE_FALLBACK, DEFAULT_VALVE_FALLBACK)),
+            ): selector.BooleanSelector(),
         })
 
     def _modes_schema(self, current: dict) -> vol.Schema:
@@ -906,6 +919,12 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             default=bool(current.get(CONF_HEATING_LIMIT_FALLBACK_OFF, False)),
         )] = selector.BooleanSelector()
         schema[vol.Optional(CONF_NOTIFY_SERVICE)] = _notify_selector(self.hass)
+        schema[
+            vol.Optional(
+                CONF_NOTIFY_AWAY,
+                default=bool(current.get(CONF_NOTIFY_AWAY, DEFAULT_NOTIFY_AWAY)),
+            )
+        ] = selector.BooleanSelector()
         return vol.Schema(schema)
 
     def _intelligence_schema(self, current: dict) -> vol.Schema:
@@ -936,6 +955,16 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             self._entity_field(CONF_WIND_SPEED_ENTITY, "sensor", current),
         ):
             schema[item[0]] = item[1]
+        schema[
+            vol.Optional(
+                CONF_PUNCTUALITY,
+                default=bool(current.get(CONF_PUNCTUALITY, DEFAULT_PUNCTUALITY)),
+            )
+        ] = selector.BooleanSelector()
+        item = self._duration_field(
+            CONF_PREHEAT_EXTENSION, current, DEFAULT_PREHEAT_EXTENSION
+        )
+        schema[item[0]] = item[1]
         return vol.Schema(schema)
 
     def _show_step(
@@ -1034,6 +1063,9 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             ) or VALVE_MAINTENANCE_PHASE_SECONDS
             if CONF_MAINTENANCE_HOUR in user_input:
                 current[CONF_MAINTENANCE_HOUR] = int(user_input[CONF_MAINTENANCE_HOUR])
+            current[CONF_VALVE_FALLBACK] = bool(
+                user_input.get(CONF_VALVE_FALLBACK, DEFAULT_VALVE_FALLBACK)
+            )
             return await self.async_step_init()
         return self._show_step("valves", self._valves_schema(current), current)
 
@@ -1178,6 +1210,9 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 CONF_HEATING_LIMIT_TEMPERATURE
             )
             current[CONF_NOTIFY_SERVICE] = user_input.get(CONF_NOTIFY_SERVICE) or None
+            current[CONF_NOTIFY_AWAY] = bool(
+                user_input.get(CONF_NOTIFY_AWAY, DEFAULT_NOTIFY_AWAY)
+            )
 
             return await self.async_step_init()
 
@@ -1195,9 +1230,11 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 (CONF_RECOVERY_LIMIT, DEFAULT_RECOVERY_LIMIT),
                 (CONF_PREHEAT_WHEN_HOME, DEFAULT_PREHEAT_WHEN_HOME),
                 (CONF_LEARN_USAGE, DEFAULT_LEARN_USAGE),
+                (CONF_PUNCTUALITY, DEFAULT_PUNCTUALITY),
             ):
                 current[key] = bool(user_input.get(key, default))
-            for key in (CONF_ROOM_EMPTY_RECOVERY, CONF_ROOM_EMPTY_GRACE, CONF_EARLY_STOP):
+            for key in (CONF_ROOM_EMPTY_RECOVERY, CONF_ROOM_EMPTY_GRACE, CONF_EARLY_STOP,
+                        CONF_PREHEAT_EXTENSION):
                 current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
             for key in (CONF_SOLAR_RADIATION_ENTITY, CONF_WIND_SPEED_ENTITY):
                 current[key] = user_input.get(key) or None

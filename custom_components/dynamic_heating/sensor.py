@@ -13,15 +13,20 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfLength, UnitOfTemperature
+from homeassistant.const import (
+    EntityCategory,
+    UnitOfLength,
+    UnitOfTemperature,
+    UnitOfTime,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import CONF_ENTRY_TYPE, DOMAIN, ENTRY_TYPE_HOUSE
+from .select import device_info
 from .coordinator import DynamicHeatingCoordinator
 from .house_entities import HouseEntity
 
@@ -276,6 +281,40 @@ SENSORS = (
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     HeatingSensorDescription(
+        key="punctuality",
+        name="Pünktlichkeit",
+        icon="mdi:clock-check-outline",
+    ),
+    HeatingSensorDescription(
+        key="schedule_suggestion",
+        name="Zeitplan-Vorschlag",
+        icon="mdi:calendar-edit",
+    ),
+    HeatingSensorDescription(
+        key="heating_hours_total",
+        name="Heizstunden",
+        icon="mdi:radiator",
+        native_unit_of_measurement=UnitOfTime.HOURS,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=1,
+    ),
+    HeatingSensorDescription(
+        key="degree_days_total",
+        name="Heizgradtage",
+        icon="mdi:thermometer-low",
+        native_unit_of_measurement="Kd",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=1,
+    ),
+    HeatingSensorDescription(
+        key="hours_per_degree_day",
+        name="Heizstunden je Gradtag",
+        icon="mdi:chart-line",
+        native_unit_of_measurement="h/Kd",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+    ),
+    HeatingSensorDescription(
         key="solar_gain",
         name="Sonnengewinn je kW/m²",
         icon="mdi:white-balance-sunny",
@@ -372,12 +411,7 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
         self._attr_has_entity_name = True
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="Dynamische Heizungssteuerung",
-            manufacturer="Community",
-            model="Adaptive Heating Controller",
-        )
+        self._attr_device_info = device_info(entry)
 
     @property
     def native_value(self) -> str | float | int | None:
@@ -405,6 +439,14 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
         if self.entity_description.key == "radiator_balance":
             data = self.coordinator.data
             return {key: data[key] for key in _BALANCE_KEYS if key in data}
+        if self.entity_description.key == "punctuality":
+            data = self.coordinator.data
+            return {
+                "preheat_correction_minutes": data.get("punctuality_bias"),
+                "mornings": data.get("punctuality_results"),
+            }
+        if self.entity_description.key == "schedule_suggestion":
+            return {"suggestions": self.coordinator.data.get("schedule_suggestions")}
         if self.entity_description.key == "selftest":
             selftest = self.coordinator.selftest
             if selftest is None:

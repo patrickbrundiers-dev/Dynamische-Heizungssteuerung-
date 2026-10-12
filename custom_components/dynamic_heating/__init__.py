@@ -5,12 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.util import slugify
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     CONF_ENTRY_TYPE,
+    DEFAULT_DEVICE_NAME,
     DOMAIN,
     ENTRY_TYPE_HOUSE,
     HOUSE_DATA_KEY,
@@ -49,6 +54,31 @@ async def _manifest_version(hass: HomeAssistant) -> str:
     return str((await async_get_integration(hass, DOMAIN)).version or "0")
 
 
+def _rename_default_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Give a room's entities the ids of its device name.
+
+    Entities created while the device still had the default name are called
+    ``*.dynamische_heizungssteuerung_*``; once the device is named (e.g.
+    "Schlafzimmer Heizung") they become ``*.schlafzimmer_heizung_*``. An id
+    already taken is left alone.
+    """
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    if device is None:
+        return
+    default = slugify(DEFAULT_DEVICE_NAME)
+    prefix = slugify(device.name_by_user or device.name or "")
+    if not prefix or prefix == default:
+        return
+    registry = er.async_get(hass)
+    for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
+        domain, object_id = entity.entity_id.split(".", 1)
+        if object_id != default and not object_id.startswith(f"{default}_"):
+            continue
+        new_id = f"{domain}.{prefix}{object_id[len(default):]}"
+        if registry.async_get(new_id) is None and hass.states.get(new_id) is None:
+            registry.async_update_entity(entity.entity_id, new_entity_id=new_id)
+
+
 def _is_house(entry: ConfigEntry) -> bool:
     return entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HOUSE
 
@@ -74,7 +104,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry.runtime_data = coordinator
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    _rename_default_entity_ids(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    coordinator.async_listen_notify_actions()
+    entry.async_on_unload(coordinator.async_stop_notify_actions)
+
+    stopped = False
+
+    async def _on_stop(_event: Event) -> None:
+        nonlocal stopped
+        stopped = True
+        await coordinator.async_arm_valve_fallback()
+
+    remove_stop = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _on_stop)
+
+    def _remove_stop() -> None:
+        if not stopped:
+            remove_stop()
+
+    entry.async_on_unload(_remove_stop)
     # The room model learns from the recorder once, without delaying setup.
     entry.async_create_background_task(
         hass, coordinator.async_seed_model(), "dynamic_heating_seed_model"

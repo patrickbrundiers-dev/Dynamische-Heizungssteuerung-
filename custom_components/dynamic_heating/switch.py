@@ -5,12 +5,11 @@ from __future__ import annotations
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .select import device_info
 from .coordinator import DynamicHeatingCoordinator
 
 
@@ -51,12 +50,7 @@ class DynamicHeatingSwitch(
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_enabled"
         self._attr_has_entity_name = True
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="Dynamische Heizungssteuerung",
-            manufacturer="Community",
-            model="Adaptive Heating Controller",
-        )
+        self._attr_device_info = device_info(entry)
 
     async def async_added_to_hass(self) -> None:
         """Restore the last switch state before the first controlled refresh."""
@@ -96,12 +90,7 @@ class BoostSwitch(CoordinatorEntity[DynamicHeatingCoordinator], SwitchEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_boost"
         self._attr_has_entity_name = True
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="Dynamische Heizungssteuerung",
-            manufacturer="Community",
-            model="Adaptive Heating Controller",
-        )
+        self._attr_device_info = device_info(entry)
 
     @property
     def is_on(self) -> bool:
@@ -137,12 +126,7 @@ class ChildLockSwitch(CoordinatorEntity[DynamicHeatingCoordinator], SwitchEntity
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_child_lock"
         self._attr_has_entity_name = True
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="Dynamische Heizungssteuerung",
-            manufacturer="Community",
-            model="Adaptive Heating Controller",
-        )
+        self._attr_device_info = device_info(entry)
 
     @property
     def is_on(self) -> bool:
@@ -185,12 +169,7 @@ class SkipValveSwitch(CoordinatorEntity[DynamicHeatingCoordinator], SwitchEntity
         super().__init__(coordinator)
         self._thermostat_id = thermostat_id
         self._attr_unique_id = f"{entry.entry_id}_skip_{thermostat_id}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="Dynamische Heizungssteuerung",
-            manufacturer="Community",
-            model="Adaptive Heating Controller",
-        )
+        self._attr_device_info = device_info(entry)
 
     @property
     def name(self) -> str:

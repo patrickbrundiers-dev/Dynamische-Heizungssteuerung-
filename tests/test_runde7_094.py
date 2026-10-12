@@ -16,6 +16,7 @@ from test_home_assistant_sandbox import (
 )
 from test_radiator_093 import _add_valve, _history_with_cold_central_heating
 
+from custom_components.dynamic_heating.coordinator import SEED_VERSION
 from custom_components.dynamic_heating.const import DOMAIN
 from custom_components.dynamic_heating.model import (
     ModelView,
@@ -103,9 +104,9 @@ async def test_room_learned_with_nothing_seeds_again(hass, enable_custom_integra
             {"climate.living_room": []}
         )
         await coordinator.async_seed_model()
-    assert coordinator._seed_version == 1
+    assert coordinator._seed_version == SEED_VERSION
     stored = await coordinator._store.async_load()
-    assert stored["seed_version"] == 1
+    assert stored["seed_version"] == SEED_VERSION
 
 
 def _executor(result):

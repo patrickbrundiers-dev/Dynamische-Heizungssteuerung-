@@ -10,6 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    DEFAULT_DEVICE_NAME,
     CONF_ENTRY_TYPE,
     DOMAIN,
     ENTRY_TYPE_HOUSE,
@@ -43,9 +44,14 @@ _DURATIONS = {label: key for key, label in _DURATION_LABELS.items()}
 
 
 def device_info(entry: ConfigEntry) -> DeviceInfo:
+    """The room's device; named after its area once that is known."""
+    coordinator = getattr(entry, "runtime_data", None)
+    name = getattr(coordinator, "device_name", None)
+    if not isinstance(name, str) or not name:
+        name = DEFAULT_DEVICE_NAME
     return DeviceInfo(
         identifiers={(DOMAIN, entry.entry_id)},
-        name="Dynamische Heizungssteuerung",
+        name=name,
         manufacturer="Community",
         model="Adaptive Heating Controller",
     )

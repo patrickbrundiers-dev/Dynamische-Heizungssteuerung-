@@ -139,6 +139,7 @@ def simulate(
     supply_off: Callable[[datetime], bool],
     max_preheat_minutes: int,
     hours: int = PLAN_HOURS,
+    lead_bias_minutes: int = 0,
 ) -> list[PlanPoint]:
     """Step through the next ``hours`` and return one point per step."""
     step = timedelta(minutes=STEP_MINUTES)
@@ -161,6 +162,9 @@ def simulate(
             if upcoming is not None:
                 goal = comfort if upcoming.temperature is None else upcoming.temperature
                 needed = weather.hours_to_reach(temperature, goal)
+                if needed is not None and needed > 0:
+                    # The learned correction from late or early mornings.
+                    needed = max(0.0, needed + lead_bias_minutes / 60)
                 lead = (
                     max_preheat_minutes / 60
                     if needed is None

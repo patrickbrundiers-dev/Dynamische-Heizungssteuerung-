@@ -102,6 +102,7 @@ def decide_heating_target(
     room_model: ModelView | None = None,
     setback_floor: float | None = None,
     household_present: bool = False,
+    lead_bias_minutes: int = 0,
 ) -> HeatingDecision:
     """Return the target and reason for the current conditions.
 
@@ -126,7 +127,8 @@ def decide_heating_target(
     ``setback_floor`` raises the setback outside comfort time so the room can
     still reach comfort in time. With ``household_present`` somebody is home
     although the room is empty: outside comfort time it is then preheated
-    like an occupied room.
+    like an occupied room. ``lead_bias_minutes`` is the learned correction
+    from mornings the room was warm too late (positive) or too early.
     """
     if maintenance_temperature is not None:
         return HeatingDecision(
@@ -170,6 +172,7 @@ def decide_heating_target(
             room_model=room_model,
             setback_floor=setback_floor,
             household_present=household_present,
+            lead_bias_minutes=lead_bias_minutes,
         )
     if (
         frost_protection_temperature is not None
@@ -210,6 +213,7 @@ def _decide(
     room_model: ModelView | None = None,
     setback_floor: float | None = None,
     household_present: bool = False,
+    lead_bias_minutes: int = 0,
 ) -> HeatingDecision:
     """Decide without the frost-protection floor.
 
@@ -312,6 +316,8 @@ def _decide(
             else outdoor_temperature,
             max_preheat_minutes,
         )
+    if lead > 0 and lead_bias_minutes:
+        lead = max(0, min(lead + int(lead_bias_minutes), max_preheat_minutes))
 
     solar_adjustment = 0
     if (
