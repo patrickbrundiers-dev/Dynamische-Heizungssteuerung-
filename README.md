@@ -247,7 +247,7 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 ### Selbstüberwachung (Version 0.4.7)
 
 - **Thermostat-Problem** meldet schwache Batterien, nicht erreichbare Thermostate und Gerätefehler. Den `valve_alarm` der Aqara E1 ignoriert er, weil die Ventilerkennung ihn auch bei einwandfrei arbeitenden Ventilen tagelang setzt.
-- **Heizproblem** schaltet ein, wenn der Raum mindestens 1 °C unter dem Ziel liegt und sich zwei Stunden lang um weniger als 0,3 °C erwärmt (Ventil hängt, Heizung aus). Bei offenem Fenster und manueller Übersteuerung wird nicht überwacht.
+- **Heizproblem** schaltet ein, wenn der Raum mindestens 1 °C unter dem Ziel liegt und sich in zwei Stunden um weniger als 0,5 °C erwärmt (Ventil hängt, Heizung aus, Vorlauftemperatur zu niedrig). Geprüft wird in festen Zwei-Stunden-Abschnitten, damit auch ein Raum auffällt, der nur in kleinen Schritten hochkriecht; ein Neustart setzt die Zeit nicht zurück. Das Attribut `detail` sagt, was der Raum stattdessen erreicht. Bei offenem Fenster und manueller Übersteuerung wird nicht überwacht.
 - Kommt ein Thermostat nach einem Funk- oder Neustart-Ausfall mit einem anderen Sollwert zurück, wird das Ziel erneut gesendet und nicht als manuelle Änderung gewertet.
 - Meldet der Raumfühler sechs Stunden lang keinen Wert, gilt er als ausgefallen: Die Regelung nutzt dann die Thermostat-Messwerte, und Thermostate mit externem Fühler werden auf ihren eigenen Sensor zurückgestellt.
 - Abwesenheit pausiert das Lernen nicht mehr; nur ein offenes Fenster tut das. So wird nachts im Absenkbetrieb die Abkühlrate gelernt.

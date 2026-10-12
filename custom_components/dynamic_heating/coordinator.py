@@ -367,6 +367,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._shortfall_since: datetime | None = None
         self._shortfall_temperature: float | None = None
         self.heating_problem = False
+        self.heating_problem_detail: str | None = None
         # Quick selection: the mode picked by hand and when it ends (UTC);
         # a boost is tracked by boost_until instead.
         self.quick_mode = QUICK_AUTO
@@ -497,6 +498,16 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "outdoor_history": [
                 [at.isoformat(), value] for at, value in self._outdoor_history
             ],
+            "shortfall": (
+                [
+                    self._shortfall_since.isoformat(),
+                    self._shortfall_temperature,
+                    self.heating_problem,
+                ]
+                if self._shortfall_since is not None
+                and self._shortfall_temperature is not None
+                else None
+            ),
         }
 
     def _save_runtime_state(self) -> None:
@@ -635,6 +646,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     value = _as_number(item[1])
                     if at is not None and value is not None and at >= cutoff:
                         self._outdoor_history.append((at, value))
+        shortfall = stored.get("shortfall")
+        if isinstance(shortfall, list) and len(shortfall) == 3:
+            since = moment(shortfall[0])
+            temperature = _as_number(shortfall[1])
+            if since is not None and temperature is not None:
+                self._shortfall_since = since
+                self._shortfall_temperature = temperature
+                self.heating_problem = shortfall[2] is True
         week = stored.get("week")
         if isinstance(week, dict):
             for key, default in self._empty_week().items():
@@ -1147,6 +1166,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Learn from plausible temperature trends and reject outlier samples."""
         attributes = climate_state.attributes if climate_state else {}
         setpoint_value = self._stored_float(attributes.get("temperature"))
+        last = self.data or {}
+        if (
+            self.enabled
+            and last.get("target_temperature") is not None
+            and not last.get("manual_override")
+        ):
+            # Under control the valve setpoint carries calibration and valve
+            # offsets; the room target is what the room really heats towards.
+            setpoint_value = float(last["target_temperature"])
         is_heating = self._is_heating(climate_state, room_temperature, setpoint_value)
         now = dt_util.utcnow()
         await self._track_overshoot(
@@ -1196,7 +1224,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return
 
             self._last_observed_heating_rate = round(observed_rate, 3)
-            if not MIN_LEARNED_HEATING_RATE <= observed_rate <= MAX_LEARNED_HEATING_RATE:
+            # A room heating slower than the model's floor is real and
+            # important to know (preheating has to start early): learn the
+            # floor instead of throwing the measurement away.
+            observed_rate = max(observed_rate, MIN_LEARNED_HEATING_RATE)
+            if observed_rate > MAX_LEARNED_HEATING_RATE:
                 self._rejected_samples += 1
                 self._last_learning_status = "Aufheizmessung verworfen: Rate außerhalb plausibler Grenzen"
                 await self._save_learning()
@@ -2066,6 +2098,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return True
         current = self._climate_setpoint(state)
         if current is not None and abs(current - target) < 0.2:
+            # Already there (e.g. after a restart): remember it as confirmed,
+            # otherwise a later turn of the knob would not count as manual
+            # and the next cycle would silently set the valve back.
+            if written is None or written.target != target:
+                self._written[entity_id] = _WrittenSetpoint(target, now, confirmed=True)
             return True
         await self._pace()
         try:
@@ -2355,6 +2392,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         manual,
                     )
                     self._written.clear()
+                    # The knob may still be turning: its value counts as
+                    # confirmed, so the next click is taken over as well
+                    # instead of being set back to this intermediate value.
+                    turned = self._climate_setpoint(state)
+                    if turned is not None:
+                        self._written[entity_id] = _WrittenSetpoint(
+                            round(turned, 1), now, confirmed=True
+                        )
                     decision_mode, target = "quick_manual", manual
                     value = f"{manual:g}".replace(".", ",")
                     result["mode"] = decision_mode
@@ -2479,7 +2524,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _update_heating_watchdog(
         self, target: float | None, room_temperature: float, *, watch: bool
     ) -> None:
-        """Flag a room that stays well below its target without warming up."""
+        """Flag a room that stays well below its target without warming up.
+
+        The room is judged every two hours: it has to warm up by the minimum
+        rise in that time. Rising in small steps does not start the clock
+        again, so a room creeping up 0.1 °C an hour is caught too.
+        """
         now = dt_util.utcnow()
         if (
             not watch
@@ -2489,27 +2539,35 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._shortfall_since = None
             self._shortfall_temperature = None
             self.heating_problem = False
+            self.heating_problem_detail = None
             return
-        if (
-            self._shortfall_since is None
-            or self._shortfall_temperature is None
-            or room_temperature - self._shortfall_temperature
-            >= HEATING_WATCHDOG_MIN_RISE
-        ):
-            # Warming up as it should: watch from here on.
+        if self._shortfall_since is None or self._shortfall_temperature is None:
+            self._shortfall_since = now
+            self._shortfall_temperature = room_temperature
+            return
+        rise = room_temperature - self._shortfall_temperature
+        if rise >= HEATING_WATCHDOG_MIN_RISE:
+            # Warming up as it should: judge the next two hours from here.
             self._shortfall_since = now
             self._shortfall_temperature = room_temperature
             self.heating_problem = False
+            self.heating_problem_detail = None
             return
-        if (now - self._shortfall_since).total_seconds() >= HEATING_WATCHDOG_SECONDS:
-            if not self.heating_problem:
-                _LOGGER.warning(
-                    "Room stays at %.1f °C, well below its target of %.1f °C, "
-                    "without warming up",
-                    room_temperature,
-                    target,
-                )
-            self.heating_problem = True
+        if (now - self._shortfall_since).total_seconds() < HEATING_WATCHDOG_SECONDS:
+            return
+        if not self.heating_problem:
+            _LOGGER.warning(
+                "Room stays at %.1f °C, well below its target of %.1f °C, "
+                "without warming up",
+                room_temperature,
+                target,
+            )
+        self.heating_problem = True
+        hours = (now - self._shortfall_since).total_seconds() / 3600
+        self.heating_problem_detail = (
+            f"{room_temperature:.1f} statt {target:.1f} °C, in {hours:.0f} h "
+            f"nur {max(rise, 0.0):.1f} °C wärmer"
+        ).replace(".", ",")
 
     async def async_start_boost(self) -> None:
         """Heat to the boost temperature for the configured duration."""
@@ -2912,6 +2970,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         result["thermostat_warnings"] = self._thermostat_warnings()
         result["heating_problem"] = self.heating_problem
+        result["heating_problem_detail"] = self.heating_problem_detail
         await self._send_notifications(result)
         result["external_temperature_thermostats"] = sorted(self._external_fed)
         result["quick_duration"] = self.quick_duration
@@ -3026,10 +3085,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"Thermostat-Problem – {details}",
             )
         if result.get("heating_problem"):
+            detail = result.get("heating_problem_detail")
             conditions["heating"] = (
                 0,
-                "Der Raum wird seit zwei Stunden nicht wärmer, obwohl geheizt "
-                "werden soll. Ventil oder Heizung prüfen.",
+                "Der Raum kommt nicht auf Temperatur, obwohl geheizt werden soll"
+                + (f" ({detail})" if detail else "")
+                + ". Ventile und Heizung (Vorlauftemperatur) prüfen.",
             )
         if result.get("mode") == "waiting":
             conditions["blocked"] = (
@@ -3090,7 +3151,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         name,
                         {"title": title, "message": "Wieder in Ordnung: " + {
                             "thermostat": "die Thermostate melden kein Problem mehr.",
-                            "heating": "der Raum wird wieder warm.",
+                            "heating": "kein Heizproblem mehr.",
                             "sensor": "der Raumfühler liefert wieder Werte.",
                             "blocked": "die Regelung arbeitet wieder.",
                             "frost": "keine Frostgefahr mehr.",
@@ -3161,10 +3222,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _device_id(self) -> str | None:
         """The room's device in the device registry."""
-        device = dr.async_get(self.hass).async_get_device(
-            identifiers={(DOMAIN, self.entry_id)}
-        )
-        return device.id if device is not None else None
+        # Looked up through the config entry: async_get_device by identifiers
+        # is deprecated and stops working in Home Assistant 2027.8.
+        registry = dr.async_get(self.hass)
+        for device in dr.async_entries_for_config_entry(registry, self.entry_id):
+            if (DOMAIN, self.entry_id) in device.identifiers:
+                return device.id
+        return None
 
     def _fire_triggers(self, result: dict[str, Any]) -> None:
         """Fire device-trigger events when a watched condition changes."""

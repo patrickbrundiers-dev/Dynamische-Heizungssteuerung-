@@ -98,3 +98,9 @@ class HeatingProblemSensor(
         if not self.coordinator.data:
             return None
         return bool(self.coordinator.data.get("heating_problem"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str] | None:
+        """What the room reaches instead of its target."""
+        detail = (self.coordinator.data or {}).get("heating_problem_detail")
+        return {"detail": detail} if detail else None
