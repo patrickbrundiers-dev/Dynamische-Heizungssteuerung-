@@ -9,6 +9,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal
 
+from .model import ModelView
+
 TrendResult = Literal["started", "collecting", "too_long", "implausible", "complete"]
 
 
@@ -52,6 +54,22 @@ def calculate_lead_minutes(
     return max(0, min(round(minutes), max_preheat_minutes))
 
 
+def model_lead_minutes(
+    room_model: ModelView,
+    start_temperature: float,
+    target_temperature: float,
+    max_preheat_minutes: int,
+    margin_minutes: int = 10,
+) -> int:
+    """Preheat time from the room equation; the maximum if never reached."""
+    if start_temperature >= target_temperature - 0.1:
+        return 0
+    hours = room_model.hours_to_reach(start_temperature, target_temperature)
+    if hours is None:
+        return max_preheat_minutes
+    return max(0, min(round(hours * 60) + margin_minutes, max_preheat_minutes))
+
+
 def decide_heating_target(
     *,
     now: datetime,
@@ -81,6 +99,9 @@ def decide_heating_target(
     reduced_comfort: tuple[str, float] | None = None,
     long_absence_temperature: float | None = None,
     overshoot: float = 0.0,
+    room_model: ModelView | None = None,
+    setback_floor: float | None = None,
+    household_present: bool = False,
 ) -> HeatingDecision:
     """Return the target and reason for the current conditions.
 
@@ -100,6 +121,12 @@ def decide_heating_target(
     replaces it after a long absence. Both apply only without presence.
     ``overshoot`` is how far the room keeps warming after heating stops;
     preheating aims that much lower so it ends earlier.
+    ``room_model`` (the learned room equation with the weather at the next
+    comfort start) times preheating physically instead of with a fixed rate.
+    ``setback_floor`` raises the setback outside comfort time so the room can
+    still reach comfort in time. With ``household_present`` somebody is home
+    although the room is empty: outside comfort time it is then preheated
+    like an occupied room.
     """
     if maintenance_temperature is not None:
         return HeatingDecision(
@@ -140,6 +167,9 @@ def decide_heating_target(
             reduced_comfort=reduced_comfort,
             long_absence_temperature=long_absence_temperature,
             overshoot=overshoot,
+            room_model=room_model,
+            setback_floor=setback_floor,
+            household_present=household_present,
         )
     if (
         frost_protection_temperature is not None
@@ -177,6 +207,9 @@ def _decide(
     reduced_comfort: tuple[str, float] | None = None,
     long_absence_temperature: float | None = None,
     overshoot: float = 0.0,
+    room_model: ModelView | None = None,
+    setback_floor: float | None = None,
+    household_present: bool = False,
 ) -> HeatingDecision:
     """Decide without the frost-protection floor.
 
@@ -206,7 +239,10 @@ def _decide(
             0,
         )
 
-    if not present:
+    # Somebody is home, only this room is empty: outside comfort time the
+    # room is set back and preheated as if it were occupied.
+    room_only_empty = not present and household_present and not schedule_active
+    if not present and not room_only_empty:
         if long_absence_temperature is not None:
             return HeatingDecision(
                 "Lange niemand zuhause – Frostschutz",
@@ -235,33 +271,47 @@ def _decide(
             "Komfortbetrieb", "comfort", comfort_temperature, 0
         )
 
+    setback = eco_temperature
+    if setback_floor is not None and setback_floor > eco_temperature:
+        setback = min(setback_floor, comfort_temperature)
+
     minutes_until_event: float | None = None
     projected_temperature: float | None = None
     if next_event is not None and next_event > now:
         minutes_until_event = (next_event - now).total_seconds() / 60
-        bounded_cooling_rate = max(0.0, min(float(cooling_rate_c_per_hour), 2.0))
-        expected_cooling = bounded_cooling_rate * minutes_until_event / 60
-
         # Do not project the room below its current value if it is already
         # colder than setback, and do not project normal setback operation
-        # below the eco target. This keeps the forecast conservative.
-        lower_bound = min(room_temperature, eco_temperature)
-        projected_temperature = max(
-            lower_bound, room_temperature - expected_cooling
-        )
+        # below the setback target. This keeps the forecast conservative.
+        lower_bound = min(room_temperature, setback)
+        if room_model is not None:
+            cooled = room_model.temperature_after(
+                room_temperature, minutes_until_event / 60, 0.0
+            )
+        else:
+            bounded_cooling_rate = max(0.0, min(float(cooling_rate_c_per_hour), 2.0))
+            cooled = room_temperature - bounded_cooling_rate * minutes_until_event / 60
+        projected_temperature = max(lower_bound, min(room_temperature, cooled))
 
     temperature_for_lead = (
         projected_temperature
         if projected_temperature is not None
         else room_temperature
     )
-    lead = calculate_lead_minutes(
-        temperature_for_lead,
-        comfort_temperature - max(0.0, overshoot),
-        heating_rate_c_per_hour,
-        forecast_temperature if forecast_temperature is not None else outdoor_temperature,
-        max_preheat_minutes,
-    )
+    lead_target = comfort_temperature - max(0.0, overshoot)
+    if room_model is not None:
+        lead = model_lead_minutes(
+            room_model, temperature_for_lead, lead_target, max_preheat_minutes
+        )
+    else:
+        lead = calculate_lead_minutes(
+            temperature_for_lead,
+            lead_target,
+            heating_rate_c_per_hour,
+            forecast_temperature
+            if forecast_temperature is not None
+            else outdoor_temperature,
+            max_preheat_minutes,
+        )
 
     solar_adjustment = 0
     if (
@@ -292,6 +342,18 @@ def _decide(
                 solar_adjustment,
             )
 
+    if setback > eco_temperature:
+        value = f"{setback:.1f}".replace(".", ",")
+        return HeatingDecision(
+            f"Energiesparbetrieb – nur bis {value} °C abgesenkt, sonst wird es "
+            "zum Komfortbeginn nicht warm",
+            "eco",
+            setback,
+            lead,
+            projected_temperature,
+            forecast_condition,
+            solar_adjustment,
+        )
     return HeatingDecision(
         "Energiesparbetrieb",
         "eco",

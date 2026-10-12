@@ -316,6 +316,26 @@
           "targets": "To rooms",
           "groups": "Settings"
         }
+      },
+      "intelligence": {
+        "title": "5. Smart control",
+        "description": "The room model learns from every hour how strongly the radiators heat, how fast the room cools and how much sun and wind matter. It times preheating, limits the setback so the room is warm again in time and stops heating early at the end of a comfort block. It only acts once it has enough data (sensor \"Raummodell\").",
+        "data": {
+          "room_model": "Use the room model",
+          "recovery_limit": "Set back only as far as the room can recover",
+          "room_empty_recovery": "Empty room: warm again within",
+          "preheat_when_home": "Preheat while somebody is home (even if the room is empty)",
+          "learn_usage": "Learn when the room is used",
+          "room_empty_grace": "Comfort start: wait this long for somebody in the room",
+          "early_stop": "Stop heating before comfort ends (0 = off)",
+          "solar_radiation_entity": "Solar radiation (W/m², optional)",
+          "wind_speed_entity": "Wind speed (optional)"
+        },
+        "data_description": {
+          "recovery_limit": "Outside comfort time the room must get warm again within the maximum preheat time.",
+          "learn_usage": "At times the room is usually used, comfort is kept even without motion.",
+          "early_stop": "Only if the room loses at most 0.5 °C until the end."
+        }
       }
     },
     "error": {

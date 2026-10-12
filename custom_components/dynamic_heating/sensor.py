@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import CONF_ENTRY_TYPE, DOMAIN, ENTRY_TYPE_HOUSE
 from .coordinator import DynamicHeatingCoordinator
@@ -281,6 +282,52 @@ SENSORS = (
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
     ),
+    HeatingSensorDescription(
+        key="model_status",
+        name="Raummodell",
+        icon="mdi:home-analytics",
+    ),
+    HeatingSensorDescription(
+        key="reachable_temperature",
+        name="Erreichbare Temperatur",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="heat_output",
+        name="Heizleistung",
+        icon="mdi:radiator",
+        native_unit_of_measurement="°C/h",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="heat_loss",
+        name="Wärmeverlust je 10 °C Unterschied",
+        icon="mdi:home-thermometer-outline",
+        native_unit_of_measurement="°C/h",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    HeatingSensorDescription(
+        key="solar_gain",
+        name="Sonnengewinn je kW/m²",
+        icon="mdi:white-balance-sunny",
+        native_unit_of_measurement="°C/h",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+)
+
+# Extra attributes of the room model sensor.
+_MODEL_KEYS = (
+    "model_ready",
+    "model_samples",
+    "model_heating_samples",
+    "model_idle_samples",
+    "model_error",
+    "wind_loss",
+    "setback_floor",
+    "usage_now",
+    "solar_pause",
 )
 
 
@@ -334,7 +381,17 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Expose decision context on the status sensor for easier troubleshooting."""
-        if self.entity_description.key != "status" or not self.coordinator.data:
+        if not self.coordinator.data:
+            return None
+        if self.entity_description.key == "model_status":
+            data = self.coordinator.data
+            # Today's learned room use per hour (0 = never, 1 = always).
+            return {key: data[key] for key in _MODEL_KEYS if key in data} | {
+                "usage_today": self.coordinator.usage.as_list()[
+                    dt_util.now().weekday()
+                ]
+            }
+        if self.entity_description.key != "status":
             return None
 
         diagnostic_keys = (
@@ -410,6 +467,10 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "proximity_approach_attempts",
             "proximity_confirmed_approaches",
             "proximity_last_update_at",
+            "reachable_temperature",
+            "setback_floor",
+            "model_status",
+            "solar_pause",
         )
         return {
             key: self.coordinator.data[key]

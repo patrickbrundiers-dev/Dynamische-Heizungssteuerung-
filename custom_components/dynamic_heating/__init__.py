@@ -75,6 +75,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.runtime_data = coordinator
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # The room model learns from the recorder once, without delaying setup.
+    entry.async_create_background_task(
+        hass, coordinator.async_seed_model(), "dynamic_heating_seed_model"
+    )
     return True
 
 

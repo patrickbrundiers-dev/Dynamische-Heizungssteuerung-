@@ -21,6 +21,26 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_EARLY_STOP,
+    CONF_LEARN_USAGE,
+    CONF_PREHEAT_WHEN_HOME,
+    CONF_RECOVERY_LIMIT,
+    CONF_ROOM_EMPTY_GRACE,
+    CONF_ROOM_EMPTY_RECOVERY,
+    CONF_ROOM_MODEL,
+    CONF_SOLAR_RADIATION_ENTITY,
+    CONF_WIND_SPEED_ENTITY,
+    DEFAULT_EARLY_STOP,
+    DEFAULT_LEARN_USAGE,
+    DEFAULT_PREHEAT_WHEN_HOME,
+    DEFAULT_RECOVERY_LIMIT,
+    DEFAULT_ROOM_EMPTY_GRACE,
+    DEFAULT_ROOM_EMPTY_RECOVERY,
+    DEFAULT_ROOM_MODEL,
+    EARLY_STOP_DROP,
+    MODEL_HISTORY_DAYS,
+    RECOVERY_REACH_MARGIN,
+    SOLAR_PAUSE_MIN_GAIN,
     BLOCK_PRESENCE_KEYS,
     BLOCK_WINDOW_KEYS,
     CONF_COMMAND_DELAY,
@@ -220,6 +240,7 @@ from .const import (
     MIN_SAMPLE_SECONDS,
 )
 from .logic import (
+    HeatingDecision,
     TrendSample,
     external_temperature_due,
     match_schedule,
@@ -246,6 +267,15 @@ from .logic import (
     valve_maintenance_due,
     valve_maintenance_phase,
 )
+from .model import (
+    ModelView,
+    RoomModel,
+    SampleCollector,
+    UsageProfile,
+    seed_room_model,
+    solar_to_kw,
+    wind_to_ms,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -261,6 +291,8 @@ class _WrittenSetpoint:
     confirmed: bool = False
 _INVALID_STATES = {"unknown", "unavailable", None}
 # Targets that the room offset leaves alone: protection and fixed setpoints.
+# Modes that aim for comfort; the status tells when comfort is out of reach.
+_REACH_MODES = frozenset({"comfort", "preheat", "boost", "away_reduced"})
 _NO_OFFSET_MODES = frozenset(
     {
         "season_off",
@@ -470,6 +502,22 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._maintenance_woken: set[str] = set()
         # House calendar in effect for this room (shown in the status).
         self._house_calendar: str | None = None
+        # Learned room equation, its running hourly sample and where it
+        # learned last (persisted with the learning data).
+        self.room_model = RoomModel()
+        self._model_collector = SampleCollector()
+        self._model_seeded = False
+        # How often the room is used per weekday and hour (persisted).
+        self.usage = UsageProfile()
+        self._usage_at: datetime | None = None
+        # Somebody of the household is home (from the presence evaluation).
+        self._household_present = False
+        # Start of the running comfort block, for the empty-room grace time.
+        self._schedule_was_active: bool | None = None
+        self._comfort_started_at: datetime | None = None
+        # Comfort block that already ended heating early, and the sun pause.
+        self._early_stop_event: datetime | None = None
+        self._solar_pause = False
 
     def _runtime_state(self) -> dict[str, Any]:
         """What has to survive a restart of Home Assistant."""
@@ -763,6 +811,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if overshoot is not None:
             self.overshoot = max(0.0, min(overshoot, MAX_OVERSHOOT))
         self._overshoot_samples = self._stored_count(stored.get("overshoot_samples"))
+        self.room_model = RoomModel.from_dict(stored.get("room_model"))
+        self._model_seeded = stored.get("room_model_seeded") is True
+        self.usage = UsageProfile.from_list(stored.get("usage_profile"))
         raw_maintenance = self._stored_string(stored.get("valve_maintenance_last"))
         parsed_maintenance = (
             dt_util.parse_datetime(raw_maintenance) if raw_maintenance else None
@@ -1151,6 +1202,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ),
                 "overshoot": self.overshoot,
                 "overshoot_samples": self._overshoot_samples,
+                "room_model": self.room_model.as_dict(),
+                "room_model_seeded": self._model_seeded,
+                "usage_profile": self.usage.as_list(),
             }
         )
 
@@ -1890,6 +1944,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
 
         household_present = household_home or proximity_home
+        self._household_present = household_present and has_household_source
         if invalid_people and not household_present:
             return None, "Personen-/Geräte-Tracker nicht verfügbar – keine Sollwertänderung"
 
@@ -2956,6 +3011,320 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         target = float(frost_value) if frost_value is not None else setback
         return "house_vacation", status, target
 
+    def _weather_inputs(self) -> tuple[float, float]:
+        """Solar radiation in kW/m² and wind speed in m/s (0 when unknown)."""
+        solar = 0.0
+        solar_state = self._state(CONF_SOLAR_RADIATION_ENTITY)
+        value = _as_float(solar_state)
+        if value is not None and value > 0:
+            unit = str(solar_state.attributes.get("unit_of_measurement") or "")
+            solar = solar_to_kw(value, unit.lower())
+        wind = 0.0
+        wind_state = self._state(CONF_WIND_SPEED_ENTITY)
+        value = _as_float(wind_state)
+        if value is not None and value > 0:
+            unit = str(wind_state.attributes.get("unit_of_measurement") or "")
+            wind = wind_to_ms(value, unit.lower())
+        return min(solar, 1.5), min(wind, 40.0)
+
+    def _model_view(
+        self, outdoor: float | None, solar_kw: float, wind: float
+    ) -> ModelView | None:
+        """The learned room equation with today's weather, once it is trusted."""
+        if (
+            outdoor is None
+            or not self.config.get(CONF_ROOM_MODEL, DEFAULT_ROOM_MODEL)
+            or not self.room_model.ready
+        ):
+            return None
+        return self.room_model.view(outdoor, solar_kw, wind)
+
+    @staticmethod
+    def _recovery_floor(view: ModelView, comfort: float, seconds: float) -> float:
+        """Lowest setback from which full heating gets back in ``seconds``.
+
+        When comfort is out of reach today, the room has to get back to what
+        it can reach instead.
+        """
+        reach = min(comfort, view.equilibrium(1.0) - RECOVERY_REACH_MARGIN)
+        return round(view.lowest_start(reach, seconds / 3600), 1)
+
+    def _hold_comfort(self, now: datetime) -> str | None:
+        """Why an empty room keeps comfort for now, or None."""
+        if not self.config.get(CONF_PRESENCE_ENTITY):
+            return None
+        grace = int(
+            self.config.get(CONF_ROOM_EMPTY_GRACE, DEFAULT_ROOM_EMPTY_GRACE) or 0
+        )
+        if (
+            grace > 0
+            and self._comfort_started_at is not None
+            and (now - self._comfort_started_at).total_seconds() < grace
+        ):
+            end = dt_util.as_local(
+                self._comfort_started_at + timedelta(seconds=grace)
+            ).strftime("%H:%M")
+            return f"Komfortbeginn – Raum noch leer, Komfort bis {end} Uhr gehalten"
+        if self.config.get(CONF_LEARN_USAGE, DEFAULT_LEARN_USAGE):
+            local = dt_util.as_local(now)
+            if self.usage.usually_used(local.weekday(), local.hour):
+                return "Raum um diese Zeit meist genutzt – Komfort gehalten"
+        return None
+
+    def _observe_usage(self, present: bool) -> bool:
+        """Learn when the room is used; True when an hour was finished."""
+        if not self.config.get(CONF_PRESENCE_ENTITY) or not self.config.get(
+            CONF_LEARN_USAGE, DEFAULT_LEARN_USAGE
+        ):
+            return False
+        now = dt_util.utcnow()
+        seconds = (
+            0.0 if self._usage_at is None else (now - self._usage_at).total_seconds()
+        )
+        self._usage_at = now
+        if not self._household_present:
+            # Nobody home: an empty room says nothing about its use.
+            self.usage.pause()
+            return False
+        local = dt_util.as_local(now)
+        return self.usage.observe(local.weekday(), local.hour, present, seconds)
+
+    async def _observe_model(self, result: dict[str, Any]) -> bool:
+        """Feed the hourly model sample; True when the model learned one."""
+        room = result.get("room_temperature")
+        outdoor = result.get("outdoor_temperature")
+        demand = result.get("heat_demand")
+        if (
+            not self.enabled
+            or self._room_fallback
+            or room is None
+            or outdoor is None
+            or demand is None
+            or result.get("mode") in ("waiting", "maintenance", "window")
+            or result.get("window_open")
+            or result.get("manual_override")
+            or result.get("valve_maintenance")
+            or not result.get("thermostat_setpoints")
+        ):
+            self._model_collector.reset()
+            return False
+        solar_kw, wind = self._weather_inputs()
+        sample = self._model_collector.observe(
+            dt_util.utcnow().timestamp(),
+            float(room),
+            float(demand) / 100,
+            float(outdoor),
+            solar_kw,
+            wind,
+        )
+        return sample is not None and self.room_model.add(*sample)
+
+    async def async_seed_model(self) -> None:
+        """Learn the room model from the recorder once, at its first start."""
+        if self._model_seeded or self.room_model.samples:
+            return
+        if "recorder" not in self.hass.config.components:
+            return
+        room_id = self.config.get(CONF_ROOM_TEMPERATURE_ENTITY)
+        outdoor_id = self.config.get(CONF_OUTDOOR_TEMPERATURE_ENTITY)
+        demand_id = er.async_get(self.hass).async_get_entity_id(
+            "sensor", DOMAIN, f"{self.entry_id}_heat_demand"
+        )
+        if not room_id or not outdoor_id or not demand_id:
+            return
+        from homeassistant.components.recorder import get_instance, history
+
+        windows = [
+            entity_id
+            for _key, ids, _door, _open, _close in self._contact_groups()
+            for entity_id in ids
+        ]
+        optional = [
+            entity_id
+            for entity_id in (
+                self.config.get(CONF_SOLAR_RADIATION_ENTITY),
+                self.config.get(CONF_WIND_SPEED_ENTITY),
+            )
+            if entity_id
+        ]
+        end = dt_util.utcnow()
+        start = end - timedelta(days=MODEL_HISTORY_DAYS)
+        ids = [room_id, outdoor_id, demand_id, *windows, *optional]
+        try:
+            states = await get_instance(self.hass).async_add_executor_job(
+                history.get_significant_states,
+                self.hass,
+                start,
+                end,
+                ids,
+                None,
+                True,
+                False,
+                False,
+                True,
+            )
+        except Exception:  # noqa: BLE001 - history is a bonus, never fatal
+            _LOGGER.debug("Room model history not available", exc_info=True)
+            return
+        units = {
+            entity_id: str(
+                (self.hass.states.get(entity_id).attributes.get("unit_of_measurement"))
+                if self.hass.states.get(entity_id) is not None
+                else ""
+            ).lower()
+            for entity_id in optional
+        }
+        added = seed_room_model(
+            self.room_model,
+            {
+                entity_id: [
+                    (state.last_changed.timestamp(), state.state)
+                    for state in states.get(entity_id, [])
+                    if isinstance(state, State)
+                ]
+                for entity_id in ids
+            },
+            room_id=room_id,
+            outdoor_id=outdoor_id,
+            demand_id=demand_id,
+            window_ids=windows,
+            solar_id=self.config.get(CONF_SOLAR_RADIATION_ENTITY),
+            wind_id=self.config.get(CONF_WIND_SPEED_ENTITY),
+            units=units,
+            start=start.timestamp(),
+            end=end.timestamp(),
+        )
+        self._model_seeded = True
+        _LOGGER.debug("Room model learned %s hours from the recorder", added)
+        await self._save_learning()
+
+    def _early_stop(
+        self,
+        decision: HeatingDecision,
+        *,
+        room_temperature: float,
+        comfort_temperature: float,
+        eco_temperature: float,
+        next_event: datetime | None,
+        schedule_active: bool,
+        view: ModelView | None,
+    ) -> HeatingDecision:
+        """End heating before the comfort block ends if the room holds."""
+        if self._early_stop_event is not None and self._early_stop_event != next_event:
+            self._early_stop_event = None
+        seconds = int(self.config.get(CONF_EARLY_STOP, DEFAULT_EARLY_STOP) or 0)
+        if (
+            seconds <= 0
+            or not schedule_active
+            or next_event is None
+            or decision.mode != "comfort"
+        ):
+            return decision
+        minutes_left = (next_event - dt_util.now()).total_seconds() / 60
+        if minutes_left <= 0 or minutes_left > seconds / 60:
+            return decision
+        lowest = comfort_temperature - EARLY_STOP_DROP
+        if self._early_stop_event == next_event:
+            if room_temperature < lowest:
+                # Cooled faster than expected: heat again until the end.
+                self._early_stop_event = None
+                return decision
+        else:
+            hours = minutes_left / 60
+            if view is not None:
+                predicted = view.temperature_after(room_temperature, hours, 0.0)
+            elif self._cooling_samples:
+                predicted = room_temperature - self.cooling_rate * hours
+            else:
+                return decision
+            if room_temperature < comfort_temperature - 0.2 or predicted < lowest:
+                return decision
+            self._early_stop_event = next_event
+        end = dt_util.as_local(next_event).strftime("%H:%M")
+        return replace(
+            decision,
+            status=f"Komfort endet um {end} Uhr – Heizung schon aus, "
+            "der Raum hält die Wärme",
+            mode="early_stop",
+            target_temperature=min(eco_temperature, comfort_temperature),
+            preheat_minutes=0,
+        )
+
+    def _sun_pause(
+        self,
+        decision: HeatingDecision,
+        room_temperature: float,
+        eco_temperature: float,
+        view: ModelView | None,
+    ) -> HeatingDecision:
+        """Close the valves while the sun alone keeps the room at its target."""
+        target = decision.target_temperature
+        if (
+            view is None
+            or not self.config.get(CONF_SOLAR_RADIATION_ENTITY)
+            or decision.mode not in ("comfort", "preheat", "away_reduced")
+            or target is None
+        ):
+            self._solar_pause = False
+            return decision
+        gain = view.solar_gain * view.solar_kw
+        predicted = view.temperature_after(room_temperature, 1.0, 0.0)
+        if self._solar_pause:
+            pause = (
+                gain >= SOLAR_PAUSE_MIN_GAIN / 2
+                and room_temperature >= target - 0.5
+                and predicted >= target - 0.3
+            )
+        else:
+            pause = (
+                gain >= SOLAR_PAUSE_MIN_GAIN
+                and room_temperature >= target - 0.3
+                and predicted >= target
+            )
+        self._solar_pause = pause
+        if not pause:
+            return decision
+        return replace(
+            decision,
+            status="Sonne wärmt den Raum – Heizung pausiert",
+            mode="solar",
+            target_temperature=min(eco_temperature, target),
+            preheat_minutes=0,
+        )
+
+    def _model_diagnostics(self, view: ModelView | None) -> dict[str, Any]:
+        """What the room model learned, for sensors and the status."""
+        model = self.room_model
+        heat_output, loss, solar_gain, wind_loss = model.parameters()
+        if not self.config.get(CONF_ROOM_MODEL, DEFAULT_ROOM_MODEL):
+            status = "Raummodell aus"
+        elif not model.ready:
+            status = (
+                f"Lernt noch: {model.samples} Stunden, davon "
+                f"{model.heating_samples} mit und {model.idle_samples} ohne Heizen"
+            )
+        elif view is None:
+            status = "Bereit – Außentemperatur fehlt"
+        else:
+            status = "Aktiv"
+        ready = model.ready
+        local = dt_util.now()
+        return {
+            "model_status": status,
+            "model_ready": ready,
+            "model_samples": model.samples,
+            "model_heating_samples": model.heating_samples,
+            "model_idle_samples": model.idle_samples,
+            "model_error": model.mean_error,
+            "heat_output": round(heat_output, 2) if ready else None,
+            # °C per hour lost at 10 °C between room and outside.
+            "heat_loss": round(loss * 10, 2) if ready else None,
+            "solar_gain": round(solar_gain, 2) if ready else None,
+            "wind_loss": round(wind_loss * 100, 3) if ready else None,
+            "usage_now": self.usage.usage(local.weekday(), local.hour),
+            "solar_pause": self._solar_pause,
+        }
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Run one control cycle and attach the thermostats' health."""
         await self._sync_external_temperature()
@@ -2977,6 +3346,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result["heat_demand"], result["heat_demand_source"] = self._heat_demand(
             result.get("target_temperature"), result.get("room_temperature")
         )
+        if await self._observe_model(result):
+            await self._save_learning()
         self._fire_triggers(result)
         self._track_week(result)
         self._save_runtime_state()
@@ -3449,6 +3820,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._window_open = False
 
         present, presence_status = self._evaluate_presence()
+        if present is not None and self._observe_usage(present):
+            await self._save_learning()
         if self._proximity_metrics_dirty:
             self._proximity_metrics_dirty = False
             await self._save_learning()
@@ -3474,6 +3847,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 slot_comfort = house_temperature
         if slot_comfort is not None:
             comfort_temperature = slot_comfort
+        now_utc = dt_util.utcnow()
+        if not schedule_active:
+            self._comfort_started_at = None
+        elif self._schedule_was_active is False:
+            self._comfort_started_at = now_utc
+        self._schedule_was_active = schedule_active
+        solar_kw, wind = self._weather_inputs()
+        view = self._model_view(outdoor_temperature, solar_kw, wind)
         if self.boost_until is not None and dt_util.utcnow() >= self.boost_until:
             self.boost_until = None
         boost_temperature = (
@@ -3512,6 +3893,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             max_temperature = float(climate_state.attributes.get("max_temp"))
         except (TypeError, ValueError):
             max_temperature = None
+        if self._absence == "room_empty" and schedule_active:
+            hold = self._hold_comfort(now_utc)
+            if hold is not None:
+                # Comfort just started or the room is usually used now: an
+                # empty room keeps comfort for now.
+                present, presence_status = True, hold
         reduced_comfort: tuple[str, float] | None = None
         away_offset = self.config.get(CONF_AWAY_OFFSET)
         if away_offset and (
@@ -3523,14 +3910,27 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ):
             reduced = max(eco_temperature, comfort_temperature - float(away_offset))
             value = f"{float(away_offset):g}".replace(".", ",")
-            reduced_comfort = (
-                (
-                    f"Raum leer – Komfort minus {value} °C"
-                    if self._absence == "room_empty"
-                    else f"Niemand zuhause – Komfort minus {value} °C"
-                ),
-                reduced,
+            status = (
+                f"Raum leer – Komfort minus {value} °C"
+                if self._absence == "room_empty"
+                else f"Niemand zuhause – Komfort minus {value} °C"
             )
+            if self._absence == "room_empty" and view is not None and self.config.get(
+                CONF_RECOVERY_LIMIT, DEFAULT_RECOVERY_LIMIT
+            ):
+                seconds = int(
+                    self.config.get(CONF_ROOM_EMPTY_RECOVERY)
+                    or DEFAULT_ROOM_EMPTY_RECOVERY
+                )
+                floor = self._recovery_floor(view, comfort_temperature, seconds)
+                if floor > reduced:
+                    reduced = min(floor, comfort_temperature)
+                    status = (
+                        "Raum leer – nur bis "
+                        + f"{reduced:.1f}".replace(".", ",")
+                        + f" °C abgesenkt, in {seconds // 60} min wieder warm"
+                    )
+            reduced_comfort = (status, reduced)
         long_absence_temperature: float | None = None
         frost_after = int(
             self.config.get(CONF_FROST_AFTER_ABSENCE) or DEFAULT_FROST_AFTER_ABSENCE
@@ -3606,6 +4006,25 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         maintenance_temperature: float | None = None
         if quick is not None and quick[0] == "quick_maintenance":
             maintenance_temperature = quick[2]
+        max_preheat = int(
+            self.config.get(CONF_MAX_PREHEAT_MINUTES, DEFAULT_MAX_PREHEAT_MINUTES)
+        )
+        # The weather at the next comfort start; the sun is not counted on.
+        event_view = (
+            None
+            if view is None
+            else view.with_weather(outdoor=forecast_temperature, solar_kw=0.0)
+        )
+        setback_floor: float | None = None
+        if (
+            event_view is not None
+            and self.config.get(CONF_RECOVERY_LIMIT, DEFAULT_RECOVERY_LIMIT)
+            and self._absence != "house_empty"
+            and not self._heating_limit_reached
+        ):
+            setback_floor = self._recovery_floor(
+                event_view, comfort_temperature, max_preheat * 60
+            )
         decision = decide_heating_target(
             now=dt_util.now(),
             schedule_active=schedule_active,
@@ -3639,6 +4058,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             reduced_comfort=reduced_comfort,
             long_absence_temperature=long_absence_temperature,
             overshoot=self.overshoot,
+            room_model=event_view,
+            setback_floor=setback_floor,
+            household_present=(
+                self._household_present
+                and bool(
+                    self.config.get(CONF_PREHEAT_WHEN_HOME, DEFAULT_PREHEAT_WHEN_HOME)
+                )
+            ),
             quick_mode=(None if maintenance_temperature is not None else quick)
             or self._force_target(comfort_temperature, eco_temperature)
             or self._house_target(
@@ -3667,6 +4094,29 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             decision = replace(
                 decision,
                 status=f"Heizgrenze erreicht (Ø {span} {value} °C) – abgesenkt",
+            )
+        decision = self._early_stop(
+            decision,
+            room_temperature=room_temperature,
+            comfort_temperature=comfort_temperature,
+            eco_temperature=eco_temperature,
+            next_event=next_event,
+            schedule_active=schedule_active,
+            view=view,
+        )
+        decision = self._sun_pause(decision, room_temperature, eco_temperature, view)
+        reachable = None if view is None else round(view.equilibrium(1.0), 1)
+        if (
+            reachable is not None
+            and decision.target_temperature is not None
+            and decision.mode in _REACH_MODES
+            and decision.target_temperature > reachable + 0.2
+        ):
+            decision = replace(
+                decision,
+                status=f"{decision.status} – heute erreichbar ca. "
+                + f"{reachable:.1f}".replace(".", ",")
+                + " °C",
             )
         if decision.mode == "preheat":
             self._preheat_event = next_event
@@ -3752,7 +4202,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "proximity_distance_m": self._proximity_distance_m,
             "proximity_direction": self._proximity_direction,
             "proximity_age_seconds": self._proximity_age_seconds,
+            "reachable_temperature": reachable,
+            "setback_floor": setback_floor,
             **self._learning_diagnostics(),
+            **self._model_diagnostics(view),
         }
 
         if self._room_fallback:
@@ -3776,8 +4229,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             # Only watch while the thermostats really got the target: not with
             # an open window, a manual override or every thermostat off.
+            # Only what the radiators can reach at all is a fair target.
+            watch_target = target_temperature
+            if reachable is not None and watch_target is not None:
+                watch_target = min(watch_target, reachable - RECOVERY_REACH_MARGIN)
             self._update_heating_watchdog(
-                target_temperature,
+                watch_target,
                 room_temperature,
                 watch=bool(result.get("thermostat_setpoints"))
                 and not (window_open or result["manual_override"])

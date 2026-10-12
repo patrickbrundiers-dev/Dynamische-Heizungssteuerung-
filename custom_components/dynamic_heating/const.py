@@ -526,3 +526,39 @@ SETTINGS_GROUPS: Final = {
         CONF_NOTIFY_SERVICE,
     ),
 }
+
+# Intelligent control (0.9.0): a learned room equation (heat output, heat
+# loss, sun, wind) replaces the fixed heating rate once it has enough data.
+CONF_ROOM_MODEL: Final = "room_model"
+DEFAULT_ROOM_MODEL: Final = True
+CONF_SOLAR_RADIATION_ENTITY: Final = "solar_radiation_entity"
+CONF_WIND_SPEED_ENTITY: Final = "wind_speed_entity"
+# Set back only as far as the room can recover: outside comfort time within
+# the maximum preheat time, in an empty room within this time.
+CONF_RECOVERY_LIMIT: Final = "recovery_limit"
+DEFAULT_RECOVERY_LIMIT: Final = True
+CONF_ROOM_EMPTY_RECOVERY: Final = "room_empty_recovery"
+DEFAULT_ROOM_EMPTY_RECOVERY: Final = 3600
+# The target the room has to get back to stays this far below what full
+# heating can reach at all.
+RECOVERY_REACH_MARGIN: Final = 0.3
+# Preheat while somebody is home, even if this room is empty; at the start of
+# a comfort block an empty room keeps comfort this long before it drops.
+CONF_PREHEAT_WHEN_HOME: Final = "preheat_when_home"
+DEFAULT_PREHEAT_WHEN_HOME: Final = True
+CONF_ROOM_EMPTY_GRACE: Final = "room_empty_grace"
+DEFAULT_ROOM_EMPTY_GRACE: Final = 1800
+# Learn when the room is usually used (per weekday and hour) and keep comfort
+# then even if the presence sensor sees nobody.
+CONF_LEARN_USAGE: Final = "learn_usage"
+DEFAULT_LEARN_USAGE: Final = True
+# Optimum stop: end heating this long before the comfort block ends when the
+# room loses at most EARLY_STOP_DROP until then.
+CONF_EARLY_STOP: Final = "early_stop"
+DEFAULT_EARLY_STOP: Final = 1800
+EARLY_STOP_DROP: Final = 0.5
+# Sun pause: the sun (solar gain of the model) keeps the room warm, so the
+# valves close while it lasts.
+SOLAR_PAUSE_MIN_GAIN: Final = 0.1
+# Days of recorder history the room model learns from at its first start.
+MODEL_HISTORY_DAYS: Final = 7
