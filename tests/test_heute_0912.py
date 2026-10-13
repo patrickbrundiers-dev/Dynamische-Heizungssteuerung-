@@ -87,3 +87,48 @@ async def test_valve_readings_do_not_stand_in_for_the_room_right_after_a_start(
     await coordinator.async_refresh()
     assert coordinator.data["room_temperature"] == 23.0
     assert coordinator.data["room_temperature_source"] == "thermostats"
+
+
+@pytest.mark.asyncio
+async def test_valve_jumping_to_its_own_value_after_heat_is_not_manual(
+    hass, enable_custom_integrations
+):
+    # 13.10. 16:49: switched back to "heat", the Bad valve went 22 -> 20 °C by
+    # itself and the room was held at 20 °C "von Hand" until 21:30.
+    _tuya_valve(hass)
+
+    async def record(call):
+        return None
+
+    _set_up_test_entities(hass)
+    attributes = {
+        **hass.states.get("climate.living_room").attributes,
+        "hvac_modes": ["auto", "heat", "off"],
+    }
+    hass.states.async_set("climate.living_room", "heat", attributes)
+    _entry, coordinator = await _setup_integration(hass)
+    hass.services.async_register("climate", "set_hvac_mode", record)
+    coordinator.config["valve_fallback"] = True
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+    target = calls[-1][2]["temperature"]
+    attributes = {**attributes, "temperature": target}
+    hass.states.async_set("climate.living_room", "heat", attributes)
+    await coordinator.async_refresh()
+
+    await coordinator.async_arm_valve_fallback()
+    hass.states.async_set("climate.living_room", "auto", attributes)
+    with _capture_climate_calls(hass):
+        await coordinator.async_refresh()
+    assert coordinator._fallback_auto == []
+
+    hass.states.async_set(
+        "climate.living_room", "heat", {**attributes, "temperature": target - 2}
+    )
+    with _capture_climate_calls(hass) as calls:
+        await coordinator.async_refresh()
+    assert coordinator.data["mode"] != "quick_manual"
+    assert ("climate", "set_temperature", {
+        "entity_id": "climate.living_room", "temperature": target
+    }) in calls

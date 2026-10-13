@@ -107,6 +107,8 @@ FORECAST_EVALUATION_GRACE_SECONDS: Final = 1800
 # A setpoint that was written successfully is not re-sent for this long, even if
 # the thermostat reports a slightly different value (rounding, slow devices).
 SETPOINT_RESEND_SECONDS: Final = 300
+# A valve's own setpoint jump after its mode was switched is not manual.
+MODE_SWITCH_GRACE_SECONDS: Final = 120
 
 # Setpoint calibration with the room sensor (as Better Thermostat's
 # target-temperature based calibration): the thermostat measures near the
