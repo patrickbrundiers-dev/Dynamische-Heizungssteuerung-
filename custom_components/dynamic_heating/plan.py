@@ -115,6 +115,25 @@ def blocks_from_schedule(
     return sorted(blocks, key=lambda block: block.start)
 
 
+def blocks_switched_at(
+    first: list[Block], second: list[Block], at: datetime
+) -> list[Block]:
+    """``first``'s blocks until ``at``, ``second``'s from then on.
+
+    E.g. today's school day, then tomorrow's school-free schedule.
+    """
+    blocks = [
+        Block(block.start, min(block.end, at), block.temperature)
+        for block in first
+        if block.start < at
+    ] + [
+        Block(max(block.start, at), block.end, block.temperature)
+        for block in second
+        if block.end > at
+    ]
+    return sorted(blocks, key=lambda block: block.start)
+
+
 def _block_at(blocks: list[Block], at: datetime) -> Block | None:
     for block in blocks:
         if block.start <= at < block.end:

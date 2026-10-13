@@ -13,6 +13,7 @@ Pure Python without Home Assistant imports, like ``logic`` and ``model``.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
@@ -222,8 +223,16 @@ class Habits:
         self.events.append((at, mode, label))
         self.events = self.events[-HABIT_MAX_EVENTS:]
 
-    def suggestions(self, now: datetime) -> list[dict]:
-        """Repeated hand picks, most frequent first."""
+    def suggestions(
+        self,
+        now: datetime,
+        describe: Callable[[str, str, str, int], str] | None = None,
+    ) -> list[dict]:
+        """Repeated hand picks, most frequent first.
+
+        ``describe(when, clock, label, days)`` words a suggestion; the
+        default is the one for modes picked by hand.
+        """
         cutoff = now - timedelta(days=HABIT_DAYS)
         events = [item for item in self.events if item[0] >= cutoff]
         found: dict[str, dict] = {}
@@ -265,7 +274,9 @@ class Habits:
                 "minute": rounded,
                 "count": len(days),
                 "text": (
-                    f"{when} gegen {clock} Uhr „{label}“ "
+                    describe(when, clock, label, len(days))
+                    if describe is not None
+                    else f"{when} gegen {clock} Uhr „{label}“ "
                     f"({len(days)}× von Hand in {HABIT_DAYS // 7} Wochen) – "
                     "in den Zeitplan übernehmen?"
                 ),
@@ -294,6 +305,102 @@ class Habits:
                 result.events.append((at, str(item[1]), str(item[2])))
         result.notified = [str(item) for item in data.get("notified") or []][-50:]
         return result
+
+
+# --- Showers -------------------------------------------------------------------
+
+
+@dataclass
+class ShowerWatch:
+    """Showers in a bathroom, read from its humidity.
+
+    A shower is a rise of ``rise`` points within ``window`` seconds (a
+    bathroom's slow rise over hours is not); one per ``cooldown``.
+    """
+
+    rise: float
+    window: float
+    cooldown: float
+    samples: list[tuple[float, float]] = field(default_factory=list)
+    last: float | None = None
+
+    def observe(self, at: float, humidity: float) -> bool:
+        cutoff = at - self.window
+        self.samples = [item for item in self.samples if item[0] >= cutoff]
+        self.samples.append((at, humidity))
+        if self.last is not None and at - self.last < self.cooldown:
+            return False
+        if humidity - min(value for _, value in self.samples) >= self.rise:
+            self.last = at
+            return True
+        return False
+
+
+def showers_from_history(
+    watch: ShowerWatch,
+    readings: list[tuple[float, float]],
+    end: float,
+    step: float = 60.0,
+) -> list[float]:
+    """Showers in recorded humidity changes, replayed minute by minute.
+
+    The recorder keeps only changes; a value holds until the next one.
+    """
+    found: list[float] = []
+    if not readings:
+        return found
+    readings = sorted(readings)
+    index = 0
+    value = readings[0][1]
+    at = readings[0][0]
+    while at <= end:
+        while index < len(readings) and readings[index][0] <= at:
+            value = readings[index][1]
+            index += 1
+        if watch.observe(at, value):
+            found.append(at)
+        at += step
+    return found
+
+
+_SCHEDULE_DAYS = (
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+)
+
+
+def _minutes(value: object) -> int | None:
+    if isinstance(value, time):
+        return value.hour * 60 + value.minute
+    text = str(value or "")
+    try:
+        hour, minute = text.split(":")[:2]
+        return int(hour) * 60 + int(minute)
+    except ValueError:
+        return None
+
+
+def schedule_covers(weekly: object, weekend: bool, minute: int) -> bool:
+    """Is ``minute`` (of the day) comfort time on all such days of the week?"""
+    if not isinstance(weekly, dict):
+        return False
+    days = _SCHEDULE_DAYS[5:] if weekend else _SCHEDULE_DAYS[:5]
+    for day in days:
+        covered = False
+        for item in weekly.get(day) or []:
+            if not isinstance(item, dict):
+                continue
+            begin = _minutes(item.get("from"))
+            end = _minutes(item.get("to"))
+            if begin is None or end is None:
+                continue
+            if end <= begin or item.get("to") == time.max:
+                end = 24 * 60
+            if begin <= minute < end:
+                covered = True
+                break
+        if not covered:
+            return False
+    return True
 
 
 # --- Statistics ---------------------------------------------------------------

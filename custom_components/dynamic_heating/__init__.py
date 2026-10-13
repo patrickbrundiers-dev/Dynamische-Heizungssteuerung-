@@ -15,6 +15,10 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     CONF_ENTRY_TYPE,
+    CONF_LEAVING_HOME_DURATION,
+    DEFAULT_LEAVING_HOME_DURATION,
+    OLD_DEFAULT_LEAVING_HOME_DURATION,
+    PROXIMITY_SENSOR_KEYS,
     DEFAULT_DEVICE_NAME,
     DOMAIN,
     ENTRY_TYPE_HOUSE,
@@ -86,6 +90,41 @@ def _rename_default_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
             registry.async_update_entity(entity.entity_id, new_entity_id=new_id)
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """1.2 (0.10.0): leaving delay in seconds, geo-fencing sensors per room off.
+
+    Only the minor version changes, so an older release still loads the entry.
+    """
+    if entry.version > 1:
+        return False
+    if entry.minor_version < 2:
+        options = dict(entry.options)
+        if not _is_house(entry):
+            stored = options.get(
+                CONF_LEAVING_HOME_DURATION,
+                entry.data.get(CONF_LEAVING_HOME_DURATION),
+            )
+            if stored is not None and int(stored) == OLD_DEFAULT_LEAVING_HOME_DURATION:
+                # The old default (2) was meant as minutes but read as seconds.
+                options[CONF_LEAVING_HOME_DURATION] = DEFAULT_LEAVING_HOME_DURATION
+            # The geo-fencing sensors are the same in every room; the house
+            # device shows them once ("Geo-Fencing").
+            registry = er.async_get(hass)
+            for key in PROXIMITY_SENSOR_KEYS:
+                entity_id = registry.async_get_entity_id(
+                    "sensor", DOMAIN, f"{entry.entry_id}_{key}"
+                )
+                entity = registry.async_get(entity_id) if entity_id else None
+                if entity is not None and entity.disabled_by is None:
+                    registry.async_update_entity(
+                        entity_id, disabled_by=er.RegistryEntryDisabler.INTEGRATION
+                    )
+        hass.config_entries.async_update_entry(
+            entry, options=options, minor_version=2
+        )
+    return True
+
+
 def _is_house(entry: ConfigEntry) -> bool:
     return entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HOUSE
 
@@ -115,6 +154,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     coordinator.async_listen_notify_actions()
     entry.async_on_unload(coordinator.async_stop_notify_actions)
+    coordinator.async_watch_foreign_control()
+    entry.async_on_unload(coordinator.async_stop_foreign_control)
 
     stopped = False
 
@@ -133,6 +174,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # The room model learns from the recorder once, without delaying setup.
     entry.async_create_background_task(
         hass, coordinator.async_seed_model(), "dynamic_heating_seed_model"
+    )
+    entry.async_create_background_task(
+        hass, coordinator.async_seed_showers(), "dynamic_heating_seed_showers"
     )
     return True
 

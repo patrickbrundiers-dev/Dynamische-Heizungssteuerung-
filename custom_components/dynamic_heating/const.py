@@ -87,7 +87,11 @@ CONF_PRESENCE_SCHEDULE_ENTITY: Final = "presence_schedule_entity"
 CONF_PRESENCE_ON_DURATION: Final = "presence_on_duration"
 CONF_PRESENCE_OFF_DURATION: Final = "presence_off_duration"
 DEFAULT_ENTER_HOME_DURATION: Final = 2
-DEFAULT_LEAVING_HOME_DURATION: Final = 2
+# Seconds: a short handover (one leaves, the other comes home a few minutes
+# later) is not "nobody home". Until 0.9.13 this was 2 (seconds, meant as
+# minutes); entries with that old value are moved to this one.
+DEFAULT_LEAVING_HOME_DURATION: Final = 600
+OLD_DEFAULT_LEAVING_HOME_DURATION: Final = 2
 DEFAULT_PROXIMITY_DURATION: Final = 120
 DEFAULT_PROXIMITY_DISTANCE: Final = 500
 DEFAULT_PRESENCE_ON_DURATION: Final = 300
@@ -629,3 +633,48 @@ VALVE_SENSOR_CALIBRATION_WINDOW: Final = 3 * 3600
 OUTDOOR_FALLBACK_GRACE_SECONDS: Final = 600
 # Same for the room sensor before the valves' readings stand in for it.
 ROOM_FALLBACK_GRACE_SECONDS: Final = 600
+
+# Runde 10 (0.10.0)
+# While preheating, a household that just left keeps counting as home this
+# long: a short absence does not throw away the heat already put in.
+PREHEAT_LEAVE_GRACE_SECONDS: Final = 900
+# Cap for temperatures turned by hand (valve, app, room thermostat) and for
+# how long they hold; None/0 = no cap (default).
+CONF_MANUAL_MAX_TEMPERATURE: Final = "manual_max_temperature"
+CONF_MANUAL_MAX_DURATION: Final = "manual_max_duration"
+# School-free days: on these the room uses its school-free schedule. The
+# entity says whether today is free; a workday sensor (workday integration)
+# and a holiday calendar tell the day plan whether tomorrow is free too.
+CONF_SCHOOL_FREE_ENTITY: Final = "school_free_entity"
+CONF_SCHOOL_FREE_SCHEDULE: Final = "school_free_schedule"
+CONF_WORKDAY_ENTITY: Final = "workday_entity"
+CONF_SCHOOL_HOLIDAY_CALENDAR: Final = "school_holiday_calendar"
+SCHOOL_HOLIDAY_WORDS: Final = ("ferien",)
+# Learn shower times from the room's humidity (bathrooms): a rise of this
+# many points within the window is a shower; the room model does not learn
+# from the hour after it (the shower warms the room, not the radiator).
+CONF_SHOWER_LEARNING: Final = "shower_learning"
+DEFAULT_SHOWER_LEARNING: Final = False
+SHOWER_RISE_PERCENT: Final = 6.0
+SHOWER_RISE_WINDOW_SECONDS: Final = 20 * 60
+SHOWER_COOLDOWN_SECONDS: Final = 2 * 3600
+SHOWER_MODEL_PAUSE_SECONDS: Final = 3600
+SHOWER_HISTORY_DAYS: Final = 10
+# Comfort this long before the usual shower time in a suggestion.
+SHOWER_LEAD_MINUTES: Final = 30
+# An automation or script that sets a room's valves is reported once a day.
+FOREIGN_CONTROL_NOTIFY_SECONDS: Final = 24 * 3600
+# The geo-fencing sensors of a room (same in every room): shown once on the
+# house device, off in the rooms by default.
+PROXIMITY_SENSOR_KEYS: Final = (
+    "proximity_status",
+    "proximity_distance_m",
+    "proximity_age_seconds",
+    "proximity_updates_seen",
+    "proximity_average_update_interval_s",
+    "proximity_stale_events",
+    "proximity_invalid_events",
+    "proximity_out_of_range_events",
+    "proximity_approach_attempts",
+    "proximity_confirmed_approaches",
+)
