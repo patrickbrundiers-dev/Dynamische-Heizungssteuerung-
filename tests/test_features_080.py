@@ -92,6 +92,8 @@ async def test_implausible_room_temperature_is_ignored_and_reported(
     _set_up_test_entities(hass)
     _comfort_now(hass)
     entry, coordinator = await _setup_integration(hass)
+    # Long after the start: the valves' readings may stand in for the room.
+    coordinator._started_at -= timedelta(minutes=15)
     issue_id = f"implausible_room_temperature_{entry.entry_id}"
     hass.states.async_set(
         "climate.living_room",

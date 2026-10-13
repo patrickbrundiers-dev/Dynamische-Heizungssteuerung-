@@ -203,6 +203,7 @@ from .const import (
     QUICK_BOOST,
     QUICK_COMFORT,
     QUICK_ECO,
+    ROOM_FALLBACK_GRACE_SECONDS,
     ROOM_SENSOR_STALE_SECONDS,
     DEFAULT_HYSTERESIS,
     CONF_VALVE_MAINTENANCE,
@@ -1563,7 +1564,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """After the start the integration controls the valves again."""
         for entity_id in list(self._fallback_auto):
             state = self.hass.states.get(entity_id)
-            if state is None or state.state == "unavailable":
+            if state is None or state.state in ("unavailable", "unknown"):
+                # Right after a start the valve reports ``unknown`` before its
+                # real mode arrives; taking that for "not auto" left the valves
+                # running their own program all day (13.10.).
                 break
             if state.state != "auto" or await self._call(
                 "climate", "set_hvac_mode", {"entity_id": entity_id, "hvac_mode": "heat"}
@@ -5543,6 +5547,20 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         outdoor_temperature = self._outdoor_temperature()
 
         self._room_fallback = room_temperature is None
+        if (
+            self._room_fallback
+            and self.config.get(CONF_ROOM_TEMPERATURE_ENTITY)
+            and (dt_util.utcnow() - self._started_at).total_seconds()
+            < ROOM_FALLBACK_GRACE_SECONDS
+        ):
+            # Right after a start the room sensor comes a moment later; the
+            # valves' readings next to the radiator (21–23 °C) would show up
+            # as the room temperature and in its history.
+            return self._waiting_result(
+                "Temperatursensor nicht verfügbar – keine Sollwertänderung",
+                None,
+                outdoor_temperature,
+            )
         if self._room_fallback:
             room_temperature = fallback_room_temperature(
                 [self._thermostat_temperature(entity_id) for entity_id in self._thermostat_ids()]
