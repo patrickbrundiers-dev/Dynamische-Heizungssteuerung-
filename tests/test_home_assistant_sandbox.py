@@ -1768,6 +1768,8 @@ async def test_unavailable_room_sensor_falls_back_to_thermostat_readings(
     hass.states.async_set("sensor.living_room_temperature", "unavailable")
     _, coordinator = await _setup_integration(hass)
     coordinator.config["additional_climate_entities"] = ["climate.living_room_2"]
+    # Long after the start: the valves' readings may stand in for the room.
+    coordinator._started_at -= timedelta(minutes=15)
 
     with _capture_climate_calls(hass) as calls:
         coordinator.enabled = True

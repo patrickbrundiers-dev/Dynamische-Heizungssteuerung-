@@ -625,3 +625,5 @@ VALVE_SENSOR_CALIBRATION_WINDOW: Final = 3 * 3600
 # After a start, a missing outdoor sensor is waited for this long before the
 # weather entity stands in (its value can differ by degrees).
 OUTDOOR_FALLBACK_GRACE_SECONDS: Final = 600
+# Same for the room sensor before the valves' readings stand in for it.
+ROOM_FALLBACK_GRACE_SECONDS: Final = 600
