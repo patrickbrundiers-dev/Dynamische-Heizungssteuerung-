@@ -1396,6 +1396,8 @@ async def test_weather_entity_temperature_is_used_without_outdoor_sensor(
     _, coordinator = await _setup_integration(hass)
     coordinator.config["weather_entity"] = "weather.home"
     coordinator.config["heating_limit_temperature"] = 18.0
+    # The sensor has been missing for longer than the grace after a start.
+    coordinator._started_at -= timedelta(hours=1)
 
     await coordinator.async_refresh()
 

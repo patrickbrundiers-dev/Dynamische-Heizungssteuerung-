@@ -176,7 +176,8 @@
           "lock_valves": "Lock valves",
           "aggressive_range": "Aggressive mode: range (°C, optional)",
           "aggressive_offset": "Aggressive mode: offset",
-          "valve_fallback": "Fallback schedule in the valve on shutdown"
+          "valve_fallback": "Fallback schedule in the valve on shutdown",
+          "valve_sensor_calibration": "Calibrate the valve sensor to the room temperature"
         },
         "data_description": {
           "calibration": "The thermostat measures right at the radiator. When enabled, its setpoint is shifted by the difference between thermostat and room temperature (like Better Thermostat's target-temperature calibration) so it regulates on the room sensor. The difference is recomputed at most every 10 minutes. Do not enable when the selected thermostat already is a Better Thermostat.",
@@ -191,7 +192,8 @@
           "lock_valves": "A setpoint turned at a thermostat is set back to the room's target at once (like Better Thermostat's child lock or Climate Group Helper's lock sync mode). Wins over 'Turning a valve applies to the room'.",
           "aggressive_range": "When the room is more than this below or above the target, target plus or minus the offset is sent so sluggish valves open or close decisively. Leave empty to turn off.",
           "aggressive_offset": "How far the sent setpoint is raised or lowered outside the range.",
-          "valve_fallback": "When Home Assistant shuts down, valves with their own schedule (e.g. Aqara E1) get today's comfort and eco times and use their own sensor. After the start this is switched off again. Does not help on power loss or a crash."
+          "valve_fallback": "When Home Assistant shuts down, valves with their own schedule (e.g. Aqara E1) get today's comfort and eco times and use their own sensor. After the start this is switched off again. Does not help on power loss or a crash.",
+          "valve_sensor_calibration": "For valves without an input for the room temperature (e.g. Tuya): the integration sets the valve's own calibration so it reads about the room temperature. Matters for the fallback schedule in the valve."
         }
       },
       "modes": {
@@ -369,14 +371,18 @@
           "solar_radiation_entity": "Solar radiation (W/m², optional)",
           "wind_speed_entity": "Wind speed (optional)",
           "punctuality": "Warm on time: learn preheating from late mornings",
-          "preheat_extension": "Preheating may take this much longer (0 = never)"
+          "preheat_extension": "Preheating may take this much longer (0 = never)",
+          "morning_report": "Morning push when the room was not warm at comfort start",
+          "hold_before_supply_pause": "Keep comfort in the evening until the central heating pauses"
         },
         "data_description": {
           "recovery_limit": "Outside comfort time the room must get warm again within the maximum preheat time.",
           "learn_usage": "At times the room is usually used, comfort is kept even without motion.",
           "early_stop": "Only if the room loses at most 0.5 °C until the end.",
           "punctuality": "Every morning checks whether the room was warm when comfort began and learns how much earlier or later to preheat.",
-          "preheat_extension": "On top of the maximum preheat time, only when the central heating is not usually off then."
+          "preheat_extension": "On top of the maximum preheat time, only when the central heating is not usually off then.",
+          "morning_report": "One push at 7 am, only when the room was at least 0.5 °C below its target at comfort start, with the reason (e.g. the central heating was not delivering yet).",
+          "hold_before_supply_pause": "When comfort ends shortly before the central heating's usual night pause, the room keeps comfort until the pause starts. It starts warmer in the morning but uses some more heat."
         }
       }
     },

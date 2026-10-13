@@ -84,10 +84,16 @@ from .const import (
     CONF_PREHEAT_EXTENSION,
     CONF_PUNCTUALITY,
     CONF_VALVE_FALLBACK,
+    CONF_VALVE_SENSOR_CALIBRATION,
+    CONF_HOLD_BEFORE_PAUSE,
+    CONF_MORNING_REPORT,
     DEFAULT_NOTIFY_AWAY,
     DEFAULT_PREHEAT_EXTENSION,
     DEFAULT_PUNCTUALITY,
     DEFAULT_VALVE_FALLBACK,
+    DEFAULT_VALVE_SENSOR_CALIBRATION,
+    DEFAULT_HOLD_BEFORE_PAUSE,
+    DEFAULT_MORNING_REPORT,
     CONF_BOOST_TEMPERATURE,
     CONF_CALIBRATION,
     CONF_ENTRY_TYPE,
@@ -771,6 +777,14 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 CONF_VALVE_FALLBACK,
                 default=bool(current.get(CONF_VALVE_FALLBACK, DEFAULT_VALVE_FALLBACK)),
             ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_VALVE_SENSOR_CALIBRATION,
+                default=bool(
+                    current.get(
+                        CONF_VALVE_SENSOR_CALIBRATION, DEFAULT_VALVE_SENSOR_CALIBRATION
+                    )
+                ),
+            ): selector.BooleanSelector(),
         })
 
     def _modes_schema(self, current: dict) -> vol.Schema:
@@ -955,12 +969,14 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             self._entity_field(CONF_WIND_SPEED_ENTITY, "sensor", current),
         ):
             schema[item[0]] = item[1]
-        schema[
-            vol.Optional(
-                CONF_PUNCTUALITY,
-                default=bool(current.get(CONF_PUNCTUALITY, DEFAULT_PUNCTUALITY)),
+        for key, default in (
+            (CONF_PUNCTUALITY, DEFAULT_PUNCTUALITY),
+            (CONF_MORNING_REPORT, DEFAULT_MORNING_REPORT),
+            (CONF_HOLD_BEFORE_PAUSE, DEFAULT_HOLD_BEFORE_PAUSE),
+        ):
+            schema[vol.Optional(key, default=bool(current.get(key, default)))] = (
+                selector.BooleanSelector()
             )
-        ] = selector.BooleanSelector()
         item = self._duration_field(
             CONF_PREHEAT_EXTENSION, current, DEFAULT_PREHEAT_EXTENSION
         )
@@ -1065,6 +1081,11 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 current[CONF_MAINTENANCE_HOUR] = int(user_input[CONF_MAINTENANCE_HOUR])
             current[CONF_VALVE_FALLBACK] = bool(
                 user_input.get(CONF_VALVE_FALLBACK, DEFAULT_VALVE_FALLBACK)
+            )
+            current[CONF_VALVE_SENSOR_CALIBRATION] = bool(
+                user_input.get(
+                    CONF_VALVE_SENSOR_CALIBRATION, DEFAULT_VALVE_SENSOR_CALIBRATION
+                )
             )
             return await self.async_step_init()
         return self._show_step("valves", self._valves_schema(current), current)
@@ -1231,6 +1252,8 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 (CONF_PREHEAT_WHEN_HOME, DEFAULT_PREHEAT_WHEN_HOME),
                 (CONF_LEARN_USAGE, DEFAULT_LEARN_USAGE),
                 (CONF_PUNCTUALITY, DEFAULT_PUNCTUALITY),
+                (CONF_MORNING_REPORT, DEFAULT_MORNING_REPORT),
+                (CONF_HOLD_BEFORE_PAUSE, DEFAULT_HOLD_BEFORE_PAUSE),
             ):
                 current[key] = bool(user_input.get(key, default))
             for key in (CONF_ROOM_EMPTY_RECOVERY, CONF_ROOM_EMPTY_GRACE, CONF_EARLY_STOP,

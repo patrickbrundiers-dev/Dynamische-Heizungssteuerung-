@@ -33,7 +33,13 @@ from .const import (
     HOUSE_VACATION,
     QUICK_AUTO,
 )
-from .radiator import SUPPLY_COLD, SUPPLY_WARM, SupplyProfile, house_supply
+from .radiator import (
+    SUPPLY_COLD,
+    SUPPLY_VERSION,
+    SUPPLY_WARM,
+    SupplyProfile,
+    house_supply,
+)
 from .logic import (
     calendar_temperature,
     description_value,
@@ -45,6 +51,10 @@ _LOGGER = logging.getLogger(__name__)
 
 # The boiler has to stay cold this long before the house says so.
 SUPPLY_NOTIFY_AFTER = timedelta(minutes=60)
+# No push about the boiler at night: a pause then is common and a push would
+# only wake someone; still cold in the morning, it is told then.
+SUPPLY_QUIET_FROM = 22
+SUPPLY_QUIET_UNTIL = 7
 
 if TYPE_CHECKING:
     from .coordinator import DynamicHeatingCoordinator
@@ -88,7 +98,8 @@ class HouseManager:
             raw = stored.get("vacation_until")
             parsed = dt_util.parse_datetime(raw) if isinstance(raw, str) else None
             self.vacation_until = dt_util.as_utc(parsed) if parsed else None
-            self.supply = SupplyProfile.from_list(stored.get("supply_profile"))
+            if stored.get("supply_version") == SUPPLY_VERSION:
+                self.supply = SupplyProfile.from_list(stored.get("supply_profile"))
         self._unsubs = [
             async_track_time_interval(
                 self.hass, self._async_observe_supply, timedelta(minutes=1)
@@ -165,6 +176,7 @@ class HouseManager:
                     self.vacation_until.isoformat() if self.vacation_until else None
                 ),
                 "supply_profile": self.supply.as_list(),
+                "supply_version": SUPPLY_VERSION,
             }
         )
 
@@ -239,7 +251,10 @@ class HouseManager:
             self._cold_since = now
         if self._cold_sent or (now - self._cold_since) < SUPPLY_NOTIFY_AFTER:
             return
-        if self.supply.usually_off(dt_util.as_local(now).hour):
+        hour = dt_util.as_local(now).hour
+        if self.supply.usually_off(hour):
+            return
+        if hour >= SUPPLY_QUIET_FROM or hour < SUPPLY_QUIET_UNTIL:
             return
         since = dt_util.as_local(self._cold_since).strftime("%H:%M")
         self._cold_sent = await self._push(

@@ -145,6 +145,84 @@ def room_supply(states: dict[str, str]) -> str | None:
     return SUPPLY_IDLE
 
 
+# --- Does the room answer the open valves? ----------------------------------
+
+# Valves count as asking for real heat from this heat demand (%) on ...
+RESPONSE_DEMAND = 50
+# ... while the room is at least this far below its target.
+RESPONSE_GAP = 0.5
+# The room is judged over this long a stretch of asking for heat.
+RESPONSE_SECONDS = 3600
+# Warmer by this much over the stretch: heat arrives.
+RESPONSE_WARM_RISE = 0.08
+# Colder by at least this much: nothing arrives. A room that just holds its
+# temperature may be at the limit of its radiators, so only cooling counts.
+RESPONSE_COLD_RISE = -0.04
+
+
+@dataclass(slots=True)
+class RoomResponse:
+    """Judge the heat supply by the room itself.
+
+    The housing temperature of a valve rises only a little when the water is
+    hot, and a valve near a warm wall or window can look warm all night. The
+    room does not lie: an hour with the valves wide open in which it keeps
+    cooling means no hot water arrives, whatever the valves say.
+    """
+
+    readings: list[tuple[float, float]] = field(default_factory=list)
+
+    def observe(
+        self,
+        at: float,
+        demand: float | None,
+        room: float | None,
+        target: float | None,
+    ) -> str:
+        """``WARM``, ``COLD``, ``WAITING`` (not judged yet) or ``IDLE``."""
+        if (
+            demand is None
+            or room is None
+            or target is None
+            or demand < RESPONSE_DEMAND
+            or target - room < RESPONSE_GAP
+        ):
+            self.readings = []
+            return IDLE
+        self.readings.append((at, room))
+        cutoff = at - RESPONSE_SECONDS
+        # Keep one reading at or before the start of the stretch.
+        while len(self.readings) > 1 and self.readings[1][0] <= cutoff:
+            self.readings.pop(0)
+        start_at, start = self.readings[0]
+        if at - start_at < RESPONSE_SECONDS - 60:
+            return WAITING
+        rise = room - start
+        if rise >= RESPONSE_WARM_RISE:
+            return WARM
+        if rise <= RESPONSE_COLD_RISE:
+            return COLD
+        return WAITING
+
+
+def combined_supply(radiators: str | None, response: str) -> str | None:
+    """The room's verdict from its radiators and its own warming.
+
+    A room that keeps cooling with the valves open gets no heat, even
+    if a radiator looks warm. A room without radiator readings is judged by
+    its warming alone.
+    """
+    if response == COLD:
+        return SUPPLY_COLD
+    if radiators is None:
+        return {
+            WARM: SUPPLY_WARM,
+            WAITING: SUPPLY_WAITING,
+            IDLE: None,
+        }.get(response)
+    return radiators
+
+
 def house_supply(verdicts: list[str | None]) -> str | None:
     """One verdict for the central heating from all rooms' verdicts.
 
@@ -162,6 +240,10 @@ def house_supply(verdicts: list[str | None]) -> str | None:
 
 
 SUPPLY_ALPHA = 0.3
+# Raised when the way the profile is learned changes: older profiles are
+# dropped. 2: the room's own warming counts (valve housings alone took a
+# boiler pause at night for delivery).
+SUPPLY_VERSION = 2
 SUPPLY_MIN_SECONDS = 1200
 SUPPLY_OFF_BELOW = 0.3
 SUPPLY_ON_FROM = 0.5

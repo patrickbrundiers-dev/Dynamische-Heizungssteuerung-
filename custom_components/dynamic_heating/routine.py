@@ -31,6 +31,21 @@ PUNCTUAL_DAYS = 7
 PUNCTUAL_GAIN = 0.5
 BIAS_MIN = -30.0
 BIAS_MAX = 60.0
+# Raised when what is learned changes: older results and correction are
+# dropped. 2: mornings without heat from the central heating do not count.
+PUNCTUALITY_VERSION = 2
+
+
+@dataclass(frozen=True, slots=True)
+class Morning:
+    """How warm the room was when a watched comfort block began."""
+
+    day: str
+    start: datetime
+    room: float
+    target: float
+    # The central heating delivered no heat at some time while preheating.
+    supply_missing: bool
 
 
 @dataclass(slots=True)
@@ -44,6 +59,10 @@ class Punctuality:
     watch_start: datetime | None = None
     readings: list[tuple[datetime, float]] = field(default_factory=list)
     preheated: bool = False
+    supply_missing: bool = False
+    # The latest comfort start, set once when it begins (picked up by the
+    # morning report).
+    morning: Morning | None = None
 
     def observe(
         self,
@@ -53,12 +72,16 @@ class Punctuality:
         mode: str | None,
         next_event: datetime | None,
         target: float | None,
+        supply_cold: bool = False,
     ) -> int | None:
         """Feed one cycle; returns the lateness when a morning was judged.
 
         ``mode`` is the control mode, ``next_event`` the next comfort start,
         ``target`` the current target. Mornings without preheating, with a
-        window open or nobody home at the start are not judged.
+        window open or nobody home at the start are not judged. Neither are
+        mornings on which the central heating delivered no heat while
+        preheating (``supply_cold``): preheating earlier would not have
+        helped, so nothing is learned from them.
         """
         if room is None:
             return None
@@ -67,6 +90,8 @@ class Punctuality:
                 self.watch_start = next_event
                 self.readings = []
             self.preheated = True
+            if supply_cold:
+                self.supply_missing = True
             if not self.readings or now - self.readings[-1][0] >= timedelta(minutes=1):
                 self.readings.append((now, room))
             cutoff = now - timedelta(minutes=PUNCTUAL_LOOKBACK_MINUTES)
@@ -81,6 +106,16 @@ class Punctuality:
         if mode != "comfort" or target is None or not self.preheated:
             self._reset()
             return None
+        if supply_cold and now - start < timedelta(minutes=PUNCTUAL_GIVE_UP_MINUTES):
+            self.supply_missing = True
+        if self.morning is None or self.morning.start != start:
+            self.morning = Morning(
+                start.date().isoformat(),
+                start,
+                float(room),
+                float(target),
+                self.supply_missing,
+            )
         goal = target - PUNCTUAL_TOLERANCE
         early = next((at for at, value in self.readings if value >= goal), None)
         late: int | None = None
@@ -92,6 +127,10 @@ class Punctuality:
             late = PUNCTUAL_GIVE_UP_MINUTES
         if late is None:
             return None
+        if self.supply_missing and late > PUNCTUAL_MINUTES:
+            # Late because there was no heat: not a lesson for preheating.
+            self._reset()
+            return None
         self._record(start.date(), late)
         self._reset()
         return late
@@ -100,6 +139,7 @@ class Punctuality:
         self.watch_start = None
         self.readings = []
         self.preheated = False
+        self.supply_missing = False
 
     def _record(self, day: date, late: int) -> None:
         self.results = [item for item in self.results if item[0] != day.isoformat()]
@@ -130,6 +170,7 @@ class Punctuality:
 
     def as_dict(self) -> dict:
         return {
+            "version": PUNCTUALITY_VERSION,
             "bias_minutes": self.bias_minutes,
             "results": [list(item) for item in self.results],
         }
@@ -137,7 +178,7 @@ class Punctuality:
     @classmethod
     def from_dict(cls, data: object) -> Punctuality:
         result = cls()
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or data.get("version") != PUNCTUALITY_VERSION:
             return result
         bias = data.get("bias_minutes")
         if isinstance(bias, (int, float)) and math.isfinite(bias):
@@ -389,3 +430,104 @@ def fallback_schedule(
         f"|{minute // 60}:{minute % 60:02d},{_half(temperature)}"
         for minute, temperature in points
     )
+
+
+# Tuya valves (e.g. TS0601 via Zigbee2MQTT) keep a week program of their own:
+# one text per weekday with six switch points "HH:MM/temperature". It runs
+# when the valve is set to "auto".
+TUYA_DAYS = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
+TUYA_POINTS = 6
+
+
+def _minutes(raw: object) -> int | None:
+    if not isinstance(raw, str):
+        return None
+    parts = raw.split(":")
+    try:
+        hour, minute = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+    except ValueError:
+        return None
+    if not (0 <= hour <= 24 and 0 <= minute < 60) or hour * 60 + minute > 1440:
+        return None
+    return hour * 60 + minute
+
+
+def tuya_day_schedule(
+    items: object,
+    comfort: float,
+    eco: float,
+    step: float = 0.5,
+    temperature_of=None,
+) -> str:
+    """Six switch points for one day from a schedule helper's blocks.
+
+    ``items`` is one weekday of ``schedule.get_schedule`` (list of blocks
+    with ``from``, ``to`` and optional ``data.temperature``). At most three
+    comfort blocks fit; the time between them is eco.
+    """
+    step = step if step and step > 0 else 0.5
+
+    def degrees(value: float) -> float:
+        return max(5.0, min(30.0, round(value / step) * step))
+
+    blocks: list[tuple[int, int, float]] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        start, end = _minutes(item.get("from")), _minutes(item.get("to"))
+        if start is None or end is None or end <= start:
+            continue
+        temperature = comfort
+        data = item.get("data")
+        if temperature_of is not None and isinstance(data, dict):
+            value = temperature_of(data.get("temperature"))
+            if value is not None:
+                temperature = value
+        blocks.append((start, end, temperature))
+    blocks.sort()
+    points: list[tuple[int, float]] = []
+    for start, end, temperature in blocks[:3]:
+        points.append((start, temperature))
+        if end < 1440:
+            points.append((end, eco))
+    if not points or points[0][0] > 0:
+        points.insert(0, (0, eco))
+    merged: list[tuple[int, float]] = []
+    for minute, temperature in points:
+        if merged and merged[-1][0] == minute:
+            merged[-1] = (minute, temperature)
+        else:
+            merged.append((minute, temperature))
+    merged = merged[:TUYA_POINTS]
+    while len(merged) < TUYA_POINTS:
+        last_minute, last_temperature = merged[-1]
+        missing = TUYA_POINTS - len(merged)
+        minute = max(last_minute + 1, 1440 - missing)
+        merged.append((min(minute, 1439), last_temperature))
+    return " ".join(
+        f"{minute // 60:02d}:{minute % 60:02d}/{degrees(temperature):.1f}"
+        for minute, temperature in merged
+    )
+
+
+def tuya_week_schedule(
+    weekly: object,
+    comfort: float,
+    eco: float,
+    step: float = 0.5,
+    temperature_of=None,
+) -> dict[str, str]:
+    """Weekday -> text for a Tuya valve from a schedule helper's week."""
+    week = weekly if isinstance(weekly, dict) else {}
+    return {
+        day: tuya_day_schedule(week.get(day), comfort, eco, step, temperature_of)
+        for day in TUYA_DAYS
+    }

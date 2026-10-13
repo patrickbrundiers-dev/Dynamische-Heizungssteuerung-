@@ -251,7 +251,10 @@ async def test_cold_radiators_at_their_usual_off_time_send_no_alarm(
     assert "Zentralheizung" in message
     result["supply_usually_off"] = True
     assert "heating" not in coordinator._alert_conditions(result)
+    # At its usual off time a partly cold room says nothing about a radiator.
     result.update(radiator_supply=SUPPLY_PARTLY, radiator_status="Sofa bleibt kalt")
+    assert "radiator" not in coordinator._alert_conditions(result)
+    result["supply_usually_off"] = False
     conditions = coordinator._alert_conditions(result)
     assert "Sofa bleibt kalt" in conditions["radiator"][1]
     assert "Ventile und Heizung" in conditions["heating"][1]
