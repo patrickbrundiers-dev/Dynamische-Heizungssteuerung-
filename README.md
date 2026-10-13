@@ -382,6 +382,7 @@ Ein frisch gelerntes Raummodell steuert nur das Vorheizen. Absenkungsgrenzen, �
 
   Speichern dürfen nur Administratoren (wie im Helfer-Editor). Zeitpläne aus der YAML-Konfiguration werden nur angezeigt. Mit `schedule_editor: false` blendet die Raumkarte die Taste aus.
 - **Status-Sensor**: neue Attribute `schedules`, `active_schedule` und `eco_temperature`.
+- **0.11.1**: Von/Bis zeigen Zeiten außerhalb des 15-Minuten-Rasters (z. B. 05:10 aus dem Helfer-Editor) richtig an, statt auf 00:00 zu springen.
 
 ## Version 0.10.0: Übergabe zuhause, fremde Automationen, Gute Nacht, Schulfrei, Duschzeiten
 
