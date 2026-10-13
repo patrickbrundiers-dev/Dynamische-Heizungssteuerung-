@@ -607,3 +607,21 @@ CONF_VALVE_FALLBACK: Final = "valve_fallback"
 DEFAULT_VALVE_FALLBACK: Final = False
 # Device name of a room without area.
 DEFAULT_DEVICE_NAME: Final = "Dynamische Heizungssteuerung"
+# Runde 9 (0.9.9): keep comfort in the evening until the central heating's
+# usual night pause starts (off by default: costs some heat).
+CONF_HOLD_BEFORE_PAUSE: Final = "hold_before_supply_pause"
+DEFAULT_HOLD_BEFORE_PAUSE: Final = False
+# Push in the morning when the room was not warm at the start of comfort.
+CONF_MORNING_REPORT: Final = "morning_report"
+DEFAULT_MORNING_REPORT: Final = True
+MORNING_REPORT_HOUR: Final = 7
+MORNING_REPORT_SHORTFALL: Final = 0.5
+# Set the valve's own sensor calibration so it reads the room temperature
+# (valves without an external temperature input, e.g. Tuya).
+CONF_VALVE_SENSOR_CALIBRATION: Final = "valve_sensor_calibration"
+DEFAULT_VALVE_SENSOR_CALIBRATION: Final = False
+VALVE_SENSOR_CALIBRATION_INTERVAL: Final = 3 * 3600
+VALVE_SENSOR_CALIBRATION_WINDOW: Final = 3 * 3600
+# After a start, a missing outdoor sensor is waited for this long before the
+# weather entity stands in (its value can differ by degrees).
+OUTDOOR_FALLBACK_GRACE_SECONDS: Final = 600

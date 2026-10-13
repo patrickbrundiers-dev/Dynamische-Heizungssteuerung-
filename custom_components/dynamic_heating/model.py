@@ -90,6 +90,9 @@ class ModelView:
     outdoor: float
     solar_kw: float = 0.0
     wind: float = 0.0
+    # Measured cooling without heat compared with the equation's (see
+    # ``CoolingCorrection``); only predictions without heat use it.
+    cooling_factor: float = 1.0
 
     @property
     def effective_loss(self) -> float:
@@ -109,6 +112,7 @@ class ModelView:
             self.outdoor if outdoor is None else outdoor,
             self.solar_kw if solar_kw is None else solar_kw,
             self.wind if wind is None else wind,
+            self.cooling_factor,
         )
 
     def equilibrium(self, demand: float = 1.0) -> float:
@@ -135,8 +139,13 @@ class ModelView:
 
     def temperature_after(self, room: float, hours: float, demand: float) -> float:
         """Room temperature after ``hours`` at a constant heat demand."""
-        settle = self.equilibrium(demand)
-        return settle - (settle - room) * math.exp(-self.effective_loss * hours)
+        loss = self.effective_loss
+        if demand <= 0 and self.cooling_factor != 1.0:
+            loss *= self.cooling_factor
+            settle = self.outdoor + self.solar_gain * self.solar_kw / loss
+        else:
+            settle = self.equilibrium(demand)
+        return settle - (settle - room) * math.exp(-loss * hours)
 
     def hours_to_reach(self, room: float, target: float) -> float | None:
         """Hours of full heating from ``room`` to ``target``; None if never."""
@@ -594,3 +603,116 @@ class UsageProfile:
                         ):
                             profile.slots[weekday][hour] = float(value)
         return profile
+
+
+# --- How fast the room really cools -------------------------------------------
+
+# A stretch without heat is compared with the equation after this long ...
+COOLING_SECONDS = 7200
+# ... if the equation expects at least this drop (else the ratio is noise).
+COOLING_MIN_DROP = 0.1
+COOLING_ALPHA = 0.3
+COOLING_MIN = 0.5
+COOLING_MAX = 3.0
+# Stretches compared before the factor is used.
+COOLING_MIN_SAMPLES = 2
+# Sun above this (kW/m²) warms the room: no cooling stretch.
+COOLING_MAX_SOLAR = 0.05
+
+
+@dataclass(slots=True)
+class CoolingCorrection:
+    """Learns how much faster (or slower) the room cools than the equation says.
+
+    The equation is fitted mostly on hours with heat. On nights without heat,
+    e.g. while the central heating pauses, the room may cool much faster:
+    that decides how far it falls by the morning and when preheating must
+    start. Each stretch of two hours without heat compares the real drop with
+    the predicted one.
+    """
+
+    factor: float = 1.0
+    samples: int = 0
+    start_at: float | None = None
+    start_room: float | None = None
+    outdoor_sum: float = 0.0
+    outdoor_count: int = 0
+
+    def reset(self) -> None:
+        self.start_at = None
+        self.start_room = None
+        self.outdoor_sum = 0.0
+        self.outdoor_count = 0
+
+    def observe(
+        self,
+        at: float,
+        room: float,
+        outdoor: float,
+        idle: bool,
+        view: ModelView | None,
+        solar_kw: float = 0.0,
+    ) -> bool:
+        """Feed one cycle; True when a stretch was compared."""
+        if not idle or view is None or solar_kw > COOLING_MAX_SOLAR:
+            self.reset()
+            return False
+        if self.start_at is None or self.start_room is None:
+            self.start_at, self.start_room = at, room
+            self.outdoor_sum, self.outdoor_count = outdoor, 1
+            return False
+        self.outdoor_sum += outdoor
+        self.outdoor_count += 1
+        hours = (at - self.start_at) / 3600
+        if hours * 3600 < COOLING_SECONDS:
+            return False
+        plain = ModelView(
+            view.heat_output,
+            view.loss,
+            view.solar_gain,
+            view.wind_loss,
+            self.outdoor_sum / self.outdoor_count,
+            0.0,
+            view.wind,
+        )
+        expected = self.start_room - plain.temperature_after(
+            self.start_room, hours, 0.0
+        )
+        actual = self.start_room - room
+        self.start_at, self.start_room = at, room
+        self.outdoor_sum, self.outdoor_count = outdoor, 1
+        if expected < COOLING_MIN_DROP:
+            return False
+        ratio = max(COOLING_MIN, min(COOLING_MAX, actual / expected))
+        self.factor = round(
+            ratio
+            if self.samples == 0
+            else (1 - COOLING_ALPHA) * self.factor + COOLING_ALPHA * ratio,
+            3,
+        )
+        self.samples += 1
+        return True
+
+    @property
+    def active_factor(self) -> float:
+        return self.factor if self.samples >= COOLING_MIN_SAMPLES else 1.0
+
+    def as_dict(self) -> dict:
+        return {"factor": self.factor, "samples": self.samples}
+
+    @classmethod
+    def from_dict(cls, data: object) -> CoolingCorrection:
+        result = cls()
+        if not isinstance(data, dict):
+            return result
+        factor = data.get("factor")
+        samples = data.get("samples")
+        if (
+            isinstance(factor, (int, float))
+            and not isinstance(factor, bool)
+            and math.isfinite(factor)
+        ):
+            result.factor = max(COOLING_MIN, min(COOLING_MAX, float(factor)))
+        if isinstance(samples, int) and not isinstance(samples, bool) and samples >= 0:
+            result.samples = samples
+        return result

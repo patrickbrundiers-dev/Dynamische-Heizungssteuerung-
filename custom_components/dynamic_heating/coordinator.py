@@ -149,11 +149,22 @@ from .const import (
     CONF_PREHEAT_EXTENSION,
     CONF_PUNCTUALITY,
     CONF_VALVE_FALLBACK,
+    CONF_VALVE_SENSOR_CALIBRATION,
+    CONF_HOLD_BEFORE_PAUSE,
+    CONF_MORNING_REPORT,
     DEFAULT_DEVICE_NAME,
     DEFAULT_NOTIFY_AWAY,
     DEFAULT_PREHEAT_EXTENSION,
     DEFAULT_PUNCTUALITY,
     DEFAULT_VALVE_FALLBACK,
+    DEFAULT_VALVE_SENSOR_CALIBRATION,
+    DEFAULT_HOLD_BEFORE_PAUSE,
+    DEFAULT_MORNING_REPORT,
+    MORNING_REPORT_HOUR,
+    MORNING_REPORT_SHORTFALL,
+    OUTDOOR_FALLBACK_GRACE_SECONDS,
+    VALVE_SENSOR_CALIBRATION_INTERVAL,
+    VALVE_SENSOR_CALIBRATION_WINDOW,
     LEARN_RUN_DURATION_SECONDS,
     LEARN_RUN_RISE,
     NOTIFY_ACTION_PREFIX,
@@ -293,6 +304,7 @@ from .logic import (
 )
 from .model import (
     TRUSTED_SAMPLES,
+    CoolingCorrection,
     ModelView,
     RoomModel,
     SampleCollector,
@@ -306,15 +318,25 @@ from .radiator import (
     SUPPLY_COLD,
     SUPPLY_IDLE,
     SUPPLY_PARTLY,
+    SUPPLY_VERSION,
     SUPPLY_WAITING,
     SUPPLY_WARM,
     RadiatorStats,
     RadiatorTracker,
+    RoomResponse,
     SupplyProfile,
     balance_verdict,
+    combined_supply,
     room_supply,
 )
-from .routine import Habits, HeatStats, Punctuality, fallback_schedule
+from .routine import (
+    TUYA_DAYS,
+    Habits,
+    HeatStats,
+    Punctuality,
+    fallback_schedule,
+    tuya_week_schedule,
+)
 from .plan import (
     CHECK_ALPHA,
     CHECK_HOURS,
@@ -333,6 +355,11 @@ ROOM_MODEL_VERSION = 2
 # 2 = 0.9.7, which counts hours with warm radiators as heating hours. A model
 # that is not ready yet starts over from the recorder (no hour twice).
 SEED_VERSION = 2
+# A room warming this much faster (°C/h) than the model's full heat shows the
+# model is wrong for now: no "reachable today" from it.
+REACH_TREND_MARGIN = 0.2
+# The forecast's current error is carried this many hours ahead, fading out.
+FORECAST_CORRECTION_HOURS = 12
 # The self-test runs this long after a start, and again while it fails.
 SELFTEST_DELAY = timedelta(minutes=10)
 SELFTEST_RETRY = timedelta(hours=1)
@@ -577,11 +604,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Learned room equation, its running hourly sample and where it
         # learned last (persisted with the learning data).
         self.room_model = RoomModel()
+        # How much faster the room cools without heat than the model says.
+        self.cooling = CoolingCorrection()
         self._model_collector = SampleCollector()
         self._model_seeded = False
         # Whether heat reaches each radiator, and per hour of the day how
         # often the central heating delivered (persisted).
         self._radiators: dict[str, RadiatorTracker] = {}
+        # Whether the room itself warms while the valves are open.
+        self._response = RoomResponse()
         self.supply = SupplyProfile()
         self._supply_at: datetime | None = None
         # How often the room is used per weekday and hour (persisted).
@@ -615,6 +646,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._household_present = False
         # Start of the running comfort block, for the empty-room grace time.
         self._schedule_was_active: bool | None = None
+        self._comfort_ended_at: datetime | None = None
+        self._started_at = dt_util.utcnow()
+        # Day (ISO) of the last comfort start told in the morning report.
+        self._morning_reported: str | None = None
         self._comfort_started_at: datetime | None = None
         # Comfort block that already ended heating early, and the sun pause.
         self._early_stop_event: datetime | None = None
@@ -636,6 +671,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsub_actions: Callable[[], None] | None = None
         # Valves whose own schedule was switched on at the last shutdown.
         self._fallback_armed: list[str] = []
+        # Tuya valves switched to their own week program on shutdown.
+        self._fallback_auto: list[str] = []
+        self._week_written_at: datetime | None = None
+        self._week_written_key: tuple | None = None
+        # Valve sensor calibration: (time, room minus raw valve reading).
+        self._valve_cal_samples: dict[str, list[tuple[datetime, float]]] = {}
+        self._valve_cal_at: dict[str, datetime] = {}
+        # (error before, change, value before) of the last write, to see that
+        # the reading follows; valves whose reading does not are left alone.
+        self._valve_cal_check: dict[str, tuple[float, float, float]] = {}
+        self._valve_cal_off: set[str] = set()
 
     def _runtime_state(self) -> dict[str, Any]:
         """What has to survive a restart of Home Assistant."""
@@ -679,11 +725,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.learn_run_until.isoformat() if self.learn_run_until else None
             ),
             "learn_run_target": self._learn_run_target,
+            "morning_reported": self._morning_reported,
             "heating_muted_until": (
                 self._heating_muted_until.isoformat()
                 if self._heating_muted_until else None
             ),
             "fallback_armed": list(self._fallback_armed),
+            "fallback_auto": list(self._fallback_auto),
         }
 
     def _save_runtime_state(self) -> None:
@@ -868,6 +916,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._shortfall_since = since
                 self._shortfall_temperature = temperature
                 self.heating_problem = shortfall[2] is True
+        reported = stored.get("morning_reported")
+        self._morning_reported = reported if isinstance(reported, str) else None
         self.learn_run_at = moment(stored.get("learn_run_at"))
         learn_until = moment(stored.get("learn_run_until"))
         if learn_until is not None and learn_until > now:
@@ -879,6 +929,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         armed = stored.get("fallback_armed")
         if isinstance(armed, list):
             self._fallback_armed = [str(item) for item in armed]
+        auto = stored.get("fallback_auto")
+        if isinstance(auto, list):
+            self._fallback_auto = [str(item) for item in auto]
         self.heat_stats = HeatStats.from_dict(stored.get("heat_stats"))
         week = stored.get("week")
         if isinstance(week, dict):
@@ -997,7 +1050,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # the recorder.
             self.room_model = RoomModel()
             self._model_seeded = False
-        self.supply = SupplyProfile.from_list(stored.get("supply_profile"))
+        self.cooling = CoolingCorrection.from_dict(stored.get("cooling_correction"))
+        self.supply = (
+            SupplyProfile.from_list(stored.get("supply_profile"))
+            if stored.get("supply_version") == SUPPLY_VERSION
+            else SupplyProfile()
+        )
         self.usage = UsageProfile.from_list(stored.get("usage_profile"))
         self._seed_version = self._stored_count(stored.get("seed_version"))
         raw_stats = stored.get("radiator_stats")
@@ -1279,6 +1337,168 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return device_entry.entity_id
         return None
 
+    def _tuya_week_texts(self, entity_id: str) -> dict[str, str] | None:
+        """Weekday -> text entity of a valve's own week program, if it has one
+        and can run it (``auto``)."""
+        state = self.hass.states.get(entity_id)
+        modes = state.attributes.get("hvac_modes") if state else None
+        if not modes or "auto" not in modes:
+            return None
+        texts = {}
+        for day in TUYA_DAYS:
+            text_id = self._device_entity(entity_id, "text", f"schedule_{day}")
+            if text_id is None:
+                return None
+            texts[day] = text_id
+        return texts
+
+    async def _sync_valve_week_schedule(self) -> None:
+        """Keep the week program of Tuya valves at the room's schedule.
+
+        Written while running (a few times a day, only what changed), so on
+        shutdown the valves only need to be switched to ``auto``.
+        """
+        if not self.enabled or not self.config.get(
+            CONF_VALVE_FALLBACK, DEFAULT_VALVE_FALLBACK
+        ):
+            return
+        schedule_id = self.active_schedule
+        if not schedule_id or not schedule_id.startswith("schedule."):
+            return
+        comfort = float(
+            self.config.get(CONF_COMFORT_TEMPERATURE, DEFAULT_COMFORT_TEMPERATURE)
+        )
+        eco = float(self.config.get(CONF_ECO_TEMPERATURE, DEFAULT_ECO_TEMPERATURE))
+        now = dt_util.utcnow()
+        key = (schedule_id, comfort, eco)
+        if (
+            key == self._week_written_key
+            and self._week_written_at is not None
+            and now - self._week_written_at < timedelta(hours=6)
+        ):
+            return
+        valves = {
+            entity_id: texts
+            for entity_id in self._thermostat_ids()
+            if (texts := self._tuya_week_texts(entity_id))
+        }
+        self._week_written_at = now
+        self._week_written_key = key
+        if not valves:
+            return
+        try:
+            response = await self.hass.services.async_call(
+                "schedule",
+                "get_schedule",
+                {"entity_id": schedule_id},
+                blocking=True,
+                return_response=True,
+            )
+        except (HomeAssistantError, TypeError, ValueError) as err:
+            _LOGGER.debug("Schedule %s not readable: %s", schedule_id, err)
+            return
+        weekly = response.get(schedule_id) if isinstance(response, dict) else None
+        if not isinstance(weekly, dict):
+            return
+        for entity_id, texts in valves.items():
+            state = self.hass.states.get(entity_id)
+            try:
+                step = float(state.attributes.get("target_temp_step") or 0.5)
+            except (AttributeError, TypeError, ValueError):
+                step = 0.5
+            week = tuya_week_schedule(
+                weekly, comfort, eco, step, schedule_comfort_temperature
+            )
+            for day, text_id in texts.items():
+                current = self.hass.states.get(text_id)
+                if current is not None and current.state == week[day]:
+                    continue
+                await self._call(
+                    "text", "set_value", {"entity_id": text_id, "value": week[day]}
+                )
+
+    async def _calibrate_valve_sensors(self, result: dict[str, Any]) -> None:
+        """Set the valves' own calibration so they read the room temperature.
+
+        Only valves without an input for the room temperature: their reading
+        is what their own control (and the week program in a fallback) works
+        with. The offset is the median over the last hours, written in whole
+        steps and not more often than every few hours.
+        """
+        if not self.enabled or not self.config.get(
+            CONF_VALVE_SENSOR_CALIBRATION, DEFAULT_VALVE_SENSOR_CALIBRATION
+        ):
+            return
+        room = result.get("room_temperature")
+        if room is None or self._room_fallback or result.get("window_open"):
+            return
+        now = dt_util.utcnow()
+        for entity_id in self._thermostat_ids():
+            if self._external_temperature_entities(entity_id) is not None:
+                continue
+            number_id = self._device_entity(
+                entity_id, "number", "local_temperature_calibration"
+            )
+            state = self.hass.states.get(entity_id)
+            number = self.hass.states.get(number_id) if number_id else None
+            reading = _as_number(state.attributes.get("current_temperature")) if state else None
+            current = _as_float(number)
+            if number_id is None or reading is None or current is None:
+                continue
+            if entity_id in self._valve_cal_off:
+                continue
+            samples = self._valve_cal_samples.setdefault(entity_id, [])
+            # How far the valve's (calibrated) reading is off the room.
+            samples.append((now, float(room) - reading))
+            cutoff = now - timedelta(seconds=VALVE_SENSOR_CALIBRATION_WINDOW)
+            samples[:] = [item for item in samples if item[0] >= cutoff]
+            last = self._valve_cal_at.get(entity_id)
+            if last is not None and (
+                now - last
+            ).total_seconds() < VALVE_SENSOR_CALIBRATION_INTERVAL:
+                continue
+            if len(samples) < 6 or (now - samples[0][0]) < timedelta(hours=1):
+                continue
+            ordered = sorted(value for _, value in samples)
+            error = ordered[len(ordered) // 2]
+            check = self._valve_cal_check.pop(entity_id, None)
+            if check is not None:
+                before, change, previous = check
+                if abs(before - error) < abs(change) / 2:
+                    # The reading did not follow the calibration: this valve
+                    # reports its raw value. Put it back and leave it alone.
+                    await self._call(
+                        "number", "set_value", {"entity_id": number_id, "value": previous}
+                    )
+                    self._valve_cal_off.add(entity_id)
+                    self._log(
+                        f"Ventilfühler {self._friendly_name(entity_id)}: "
+                        "Kalibrierung wirkt nicht, zurückgesetzt"
+                    )
+                    continue
+            try:
+                step = float(number.attributes.get("step") or 1)
+                low = float(number.attributes.get("min", -9))
+                high = float(number.attributes.get("max", 9))
+            except (TypeError, ValueError):
+                step, low, high = 1.0, -9.0, 9.0
+            step = step if step > 0 else 1.0
+            wanted = max(low, min(high, current + round(error / step) * step))
+            if abs(wanted - current) < step - 1e-6:
+                continue
+            if await self._call(
+                "number", "set_value", {"entity_id": number_id, "value": wanted}
+            ):
+                self._valve_cal_at[entity_id] = now
+                self._valve_cal_check[entity_id] = (error, wanted - current, current)
+                # Readings before the change mean something else now.
+                samples.clear()
+                self._log(
+                    f"Ventilfühler {self._friendly_name(entity_id)} kalibriert: "
+                    + f"{wanted:+.1f}".replace(".", ",")
+                    + " °C"
+                )
+
     async def async_arm_valve_fallback(self) -> None:
         """Home Assistant shuts down: let the valves run on their own.
 
@@ -1309,10 +1529,18 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             eco,
         )
         armed: list[str] = []
+        auto: list[str] = []
         for entity_id in self._thermostat_ids():
             switch_id = self._device_entity(entity_id, "switch", "schedule")
             text_id = self._device_entity(entity_id, "text", "schedule_settings")
             if switch_id is None or text_id is None:
+                if self._tuya_week_texts(entity_id) and await self._call(
+                    "climate",
+                    "set_hvac_mode",
+                    {"entity_id": entity_id, "hvac_mode": "auto"},
+                ):
+                    # Its week program was kept up to date while running.
+                    auto.append(entity_id)
                 continue
             if await self._call(
                 "text", "set_value", {"entity_id": text_id, "value": settings}
@@ -1321,10 +1549,22 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if armed:
             await self._sync_external_temperature(release=True)
         self._fallback_armed = armed
+        self._fallback_auto = auto
         self._save_runtime_state()
 
     async def _disarm_valve_fallback(self) -> None:
         """After the start the integration controls the valves again."""
+        for entity_id in list(self._fallback_auto):
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state == "unavailable":
+                break
+            if state.state != "auto" or await self._call(
+                "climate", "set_hvac_mode", {"entity_id": entity_id, "hvac_mode": "heat"}
+            ):
+                self._fallback_auto.remove(entity_id)
+                if not self._fallback_auto:
+                    self._log("Wochenprogramm der Ventile wieder ausgeschaltet")
+                    self._save_runtime_state()
         if not self._fallback_armed:
             return
         for switch_id in self._fallback_armed:
@@ -1473,6 +1713,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "room_model_seeded": self._model_seeded,
                 "room_model_version": ROOM_MODEL_VERSION,
                 "supply_profile": self.supply.as_list(),
+                "supply_version": SUPPLY_VERSION,
+                "cooling_correction": self.cooling.as_dict(),
                 "usage_profile": self.usage.as_list(),
                 "seed_version": self._seed_version,
                 "radiator_stats": {
@@ -1808,6 +2050,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         temperature = _as_float(self._state(CONF_OUTDOOR_TEMPERATURE_ENTITY))
         if temperature is not None:
             return temperature
+        if (
+            self.config.get(CONF_OUTDOOR_TEMPERATURE_ENTITY)
+            and (dt_util.utcnow() - self._started_at).total_seconds()
+            < OUTDOOR_FALLBACK_GRACE_SECONDS
+        ):
+            # Right after a start the own sensor comes a moment later; the
+            # weather entity in between can be degrees off and would show up
+            # in the heating limit's average.
+            return None
         weather_id = self.config.get(CONF_WEATHER_ENTITY)
         weather_state = self.hass.states.get(weather_id) if weather_id else None
         if not self._valid(weather_state):
@@ -3419,7 +3670,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or not self.room_model.ready
         ):
             return None
-        return self.room_model.view(outdoor, solar_kw, wind)
+        return replace(
+            self.room_model.view(outdoor, solar_kw, wind),
+            cooling_factor=self.cooling.active_factor,
+        )
 
     @staticmethod
     def _recovery_floor(
@@ -3526,7 +3780,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             for entity_id, sensor_id in sensors.items()
         }
-        supply = room_supply(states)
+        target = result.get("target_temperature")
+        response = self._response.observe(
+            at,
+            demand,
+            None if room is None else float(room),
+            None if target is None else float(target),
+        )
+        result["room_response"] = response
+        supply = combined_supply(room_supply(states), response)
         now = dt_util.utcnow()
         local = dt_util.as_local(now)
         seconds = (
@@ -3534,11 +3796,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._supply_at = now
         learned = self.supply.observe(local.hour, supply, seconds)
-        learned = self._learn_balance(sensors) or learned
         house = self._house()
         house_verdict = (
             None if house is None else house.supply_verdict({self.entry_id: supply})
         )
+        if SUPPLY_COLD not in (supply, house_verdict):
+            # Without hot water in the house, cold radiators say nothing
+            # about their balance.
+            learned = self._learn_balance(sensors) or learned
+        else:
+            for tracker in self._radiators.values():
+                tracker.period = None
         profile = self.supply_profile
         result["radiators"] = {
             self._friendly_name(entity_id): state for entity_id, state in states.items()
@@ -3627,6 +3895,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     else " (um diese Zeit üblich)"
                 )
             return text
+        if supply == SUPPLY_PARTLY and house_verdict == SUPPLY_COLD:
+            return "Kalt – die Zentralheizung liefert keine Wärme"
         if supply == SUPPLY_PARTLY:
             cold = ", ".join(
                 self._friendly_name(entity_id)
@@ -3639,6 +3909,48 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             SUPPLY_WAITING: "Werden warm",
             SUPPLY_IDLE: "Kein Heizbedarf",
         }.get(supply, supply)
+
+    def _observe_cooling(self, result: dict[str, Any]) -> bool:
+        """Compare stretches without heat with the model; True when one was."""
+        room = result.get("room_temperature")
+        outdoor = result.get("outdoor_temperature")
+        demand = result.get("heat_demand")
+        target = result.get("target_temperature")
+        # Only clearly above its target are the valves really closed; a
+        # room held at its target still gets some heat.
+        no_heat = (
+            demand is not None
+            and demand <= 10
+            and room is not None
+            and target is not None
+            and float(room) - float(target) >= 0.3
+        ) or SUPPLY_COLD in (
+            result.get("radiator_supply"),
+            result.get("house_supply"),
+        )
+        idle = (
+            self.enabled
+            and not self._room_fallback
+            and room is not None
+            and outdoor is not None
+            and no_heat
+            and not result.get("window_open")
+            and result.get("mode") not in ("waiting", "maintenance", "window")
+        )
+        solar_kw, _wind = self._weather_inputs()
+        learned = self.cooling.observe(
+            dt_util.utcnow().timestamp(),
+            float(room) if room is not None else 0.0,
+            float(outdoor) if outdoor is not None else 0.0,
+            bool(idle),
+            self._model_view(
+                None if outdoor is None else float(outdoor), 0.0, 0.0
+            ),
+            solar_kw,
+        )
+        result["cooling_factor"] = self.cooling.active_factor
+        result["cooling_samples"] = self.cooling.samples
+        return learned
 
     async def _observe_model(self, result: dict[str, Any]) -> bool:
         """Feed the hourly model sample; True when the model learned one."""
@@ -3878,8 +4190,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._schedule_week_at = now
         return blocks
 
-    def _outdoor_at(self, fallback: float) -> Any:
-        """A function giving the forecast outdoor temperature for a time."""
+    def _forecast_points(self) -> list[tuple[datetime, float]]:
         forecast: list[tuple[datetime, float]] = []
         for item in self._forecast_items:
             raw = item.get("datetime")
@@ -3888,14 +4199,48 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if moment is not None and value is not None:
                 forecast.append((dt_util.as_utc(moment), value))
         forecast.sort()
+        return forecast
+
+    def _forecast_correction(
+        self, outdoor: float | None, at: datetime, now: datetime | None = None
+    ) -> float:
+        """What to add to the forecast for ``at``: the forecast's error now.
+
+        The weather service's hourly value can be degrees off the own outdoor
+        sensor (13.10.: 10.9 °C forecast, 8.4 °C measured). The error seen
+        now is carried into the next hours, fading out over half a day.
+        """
+        if outdoor is None:
+            return 0.0
+        now = dt_util.utcnow() if now is None else dt_util.as_utc(now)
+        forecast_now = None
+        for start, temperature in self._forecast_points():
+            if start > now:
+                if forecast_now is None and start - now <= timedelta(hours=1):
+                    forecast_now = temperature
+                break
+            forecast_now = temperature
+        if forecast_now is None:
+            return 0.0
+        hours = max(0.0, (dt_util.as_utc(at) - now).total_seconds() / 3600)
+        fade = max(0.0, 1 - hours / FORECAST_CORRECTION_HOURS)
+        return (float(outdoor) - forecast_now) * fade
+
+    def _outdoor_at(self, fallback: float) -> Any:
+        """A function giving the forecast outdoor temperature for a time."""
+        forecast = self._forecast_points()
 
         def outdoor_at(at: datetime) -> float:
             value = fallback
             moment = dt_util.as_utc(at)
+            found = False
             for start, temperature in forecast:
                 if start > moment:
                     break
                 value = temperature
+                found = True
+            if found:
+                value += self._forecast_correction(fallback, at)
             return value
 
         return outdoor_at
@@ -4265,6 +4610,63 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             at += timedelta(minutes=30)
         return max_preheat + extension
 
+    def _supply_wait(
+        self,
+        decision: HeatingDecision,
+        *,
+        comfort_temperature: float,
+        eco_temperature: float,
+        schedule_active: bool,
+    ) -> HeatingDecision:
+        """Fit preheating and the evening to the central heating's pauses.
+
+        Preheating in an hour in which the central heating usually delivers
+        nothing only keeps the valves open in vain: it waits until the usual
+        end of the pause (unless the radiators are warm right now). With
+        the option on, comfort that ended shortly before the usual night
+        pause is kept until the pause starts.
+        """
+        profile = self.supply_profile
+        local = dt_util.now()
+        hour = local.hour
+        last = self.data if isinstance(self.data, dict) else {}
+        if (
+            decision.mode == "preheat"
+            and profile.usually_off(hour)
+            and last.get("house_supply") != SUPPLY_WARM
+            and last.get("radiator_supply") != SUPPLY_WARM
+        ):
+            next_hour = profile.next_on_hour(hour)
+            # Timed afresh once the central heating delivers again.
+            self._preheat_event = None
+            return replace(
+                decision,
+                status="Vorheizen wartet auf die Zentralheizung"
+                + (
+                    f" (liefert meist ab {next_hour}:00 Uhr)"
+                    if next_hour is not None
+                    else ""
+                ),
+                mode="eco",
+                target_temperature=eco_temperature,
+            )
+        if (
+            self.config.get(CONF_HOLD_BEFORE_PAUSE, DEFAULT_HOLD_BEFORE_PAUSE)
+            and decision.mode == "eco"
+            and not schedule_active
+            and self._comfort_ended_at is not None
+            and dt_util.utcnow() - self._comfort_ended_at <= timedelta(hours=2)
+            and not profile.usually_off(hour)
+            and any(profile.usually_off((hour + step) % 24) for step in (1, 2))
+        ):
+            return replace(
+                decision,
+                status="Komfort bis zur Nachtpause der Zentralheizung",
+                mode="comfort",
+                target_temperature=comfort_temperature,
+            )
+        return decision
+
     def _early_stop(
         self,
         decision: HeatingDecision,
@@ -4407,7 +4809,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._disarm_valve_fallback()
         await self._sync_external_temperature()
         await self._sync_trv_window_detection()
+        await self._sync_valve_week_schedule()
         result = await self._async_control_cycle()
+        await self._calibrate_valve_sensors(result)
         self._update_repair_issue()
         self._announce_mode(result)
         self._pending_source = None
@@ -4422,8 +4826,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result.get("target_temperature"), result.get("room_temperature")
         )
         supply_learned = self._observe_radiators(result)
+        supply_learned = self._observe_cooling(result) or supply_learned
         await self._update_plan(result)
         routine_learned = self._observe_routine(result)
+        await self._morning_report(result)
         habit = self._update_habits(result)
         await self._maybe_selftest(result)
         await self._send_notifications(result)
@@ -4465,6 +4871,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     dt_util.as_local(self._next_event) if self._next_event else None
                 ),
                 target=result.get("target_temperature"),
+                supply_cold=SUPPLY_COLD
+                in (result.get("radiator_supply"), result.get("house_supply"))
+                or bool(result.get("supply_usually_off")),
             )
             if late is not None:
                 judged = True
@@ -4481,6 +4890,45 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for day, late in self.punctuality.results
         ]
         return judged
+
+    async def _morning_report(self, result: dict[str, Any]) -> None:
+        """One push in the morning when the room was not warm at comfort start."""
+        morning = self.punctuality.morning
+        if morning is None or morning.day == self._morning_reported:
+            return
+        now = dt_util.now()
+        start = dt_util.as_local(morning.start)
+        due = max(start, start.replace(hour=MORNING_REPORT_HOUR, minute=0, second=0))
+        if now < due:
+            return
+        self._morning_reported = morning.day
+        self._save_runtime_state()
+        if (
+            not self.config.get(CONF_MORNING_REPORT, DEFAULT_MORNING_REPORT)
+            or now - due > timedelta(hours=3)
+            or morning.target - morning.room < MORNING_REPORT_SHORTFALL
+        ):
+            return
+
+        def degrees(value: float) -> str:
+            return f"{value:.1f}".replace(".", ",")
+
+        message = (
+            f"Um {start.strftime('%H:%M')} Uhr erst {degrees(morning.room)} statt "
+            f"{degrees(morning.target)} °C"
+        )
+        if morning.supply_missing:
+            message += (
+                " – die Zentralheizung lieferte beim Vorheizen noch keine Wärme"
+            )
+        elif self._punctual():
+            message += " – das Vorheizen beginnt künftig früher"
+        room = result.get("room_temperature")
+        if room is not None:
+            message += f". Jetzt {degrees(float(room))} °C."
+        else:
+            message += "."
+        await self._push_room(message)
 
     def _announce_mode(self, result: dict[str, Any]) -> None:
         """Fire an event when the decided mode or target changed."""
@@ -4601,7 +5049,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"Thermostat-Problem – {details}",
             )
         supply = result.get("radiator_supply")
-        if supply == SUPPLY_PARTLY:
+        if (
+            supply == SUPPLY_PARTLY
+            and result.get("house_supply") != SUPPLY_COLD
+            and not result.get("supply_usually_off")
+        ):
             conditions["radiator"] = (
                 NOTIFY_PROBLEM_DELAY_SECONDS,
                 f"Heizkörper: {result.get('radiator_status')}.",
@@ -5178,6 +5630,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now_utc = dt_util.utcnow()
         if not schedule_active:
             self._comfort_started_at = None
+            if self._schedule_was_active:
+                self._comfort_ended_at = now_utc
         elif self._schedule_was_active is False:
             self._comfort_started_at = now_utc
         self._schedule_was_active = schedule_active
@@ -5336,6 +5790,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         forecast_temperature = select_forecast_temperature(
             forecast_items, next_event, dt_util.now()
         )
+        if forecast_temperature is not None and next_event is not None:
+            forecast_temperature = round(
+                forecast_temperature
+                + self._forecast_correction(outdoor_temperature, next_event),
+                1,
+            )
         quick = self._quick_target(
             comfort_temperature,
             eco_temperature,
@@ -5451,6 +5911,16 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         reachable = (
             None if trusted is None else round(trusted.reachable(room_temperature), 1)
         )
+        trend = temperature_trend(self._trend_samples, TREND_MIN_SPAN_SECONDS)
+        if (
+            reachable is not None
+            and trusted is not None
+            and trend is not None
+            and trend > trusted.rate(room_temperature, 1.0) + REACH_TREND_MARGIN
+        ):
+            # The room warms faster than the model allows (a new room whose
+            # model was learned under other control): no forecast from it.
+            reachable = None
         if (
             reachable is not None
             and decision.target_temperature is not None
@@ -5463,6 +5933,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 + f"{reachable:.1f}".replace(".", ",")
                 + " °C",
             )
+        decision = self._supply_wait(
+            decision,
+            comfort_temperature=comfort_temperature,
+            eco_temperature=eco_temperature,
+            schedule_active=schedule_active,
+        )
         if decision.mode == "preheat":
             self._preheat_event = next_event
         if (

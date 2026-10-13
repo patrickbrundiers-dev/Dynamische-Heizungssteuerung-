@@ -167,7 +167,6 @@ async def test_house_tells_once_when_the_boiler_delivers_nothing(
     house = await _setup_house(hass, sent)
     coordinator.config["climate_entity"] = "climate.living_room_trv"
     coordinator.config["comfort_temperature"] = 21.0
-    start = dt_util.utcnow()
     with _capture_climate_calls(hass):
         coordinator.enabled = True
         coordinator.quick_mode = "comfort"
@@ -180,10 +179,14 @@ async def test_house_tells_once_when_the_boiler_delivers_nothing(
     result = dict(coordinator.data, heating_problem=True)
     assert "heating" not in coordinator._alert_conditions(result)
 
+    # In the daytime: at night the house keeps quiet about the boiler.
+    noon = dt_util.as_utc(
+        dt_util.now().replace(hour=12, minute=0, second=0, microsecond=0)
+    )
     for minutes in (0, 30, 61, 90):
         with patch(
             "custom_components.dynamic_heating.house.dt_util.utcnow",
-            return_value=start + timedelta(minutes=minutes),
+            return_value=noon + timedelta(minutes=minutes),
         ):
             await house._async_observe_supply()
     boiler = [item for item in sent if "Zentralheizung liefert keine" in item["message"]]
@@ -202,7 +205,7 @@ async def test_house_tells_once_when_the_boiler_delivers_nothing(
         await coordinator.async_refresh()
     with patch(
         "custom_components.dynamic_heating.house.dt_util.utcnow",
-        return_value=start + timedelta(minutes=95),
+        return_value=noon + timedelta(minutes=95),
     ):
         await house._async_observe_supply()
     assert sent[-1]["message"] == "Die Zentralheizung liefert wieder Wärme."

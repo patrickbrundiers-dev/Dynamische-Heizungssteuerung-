@@ -50,6 +50,8 @@ class PlanPoint:
     temperature: float
     heating: bool
     preheat: bool
+    # The central heating usually delivers nothing at this time.
+    supply_off: bool = False
 
 
 def _parse_time(raw: object) -> time | None:
@@ -176,9 +178,15 @@ def simulate(
                     target, preheat = goal, True
                     preheating_for = upcoming
         off = supply_off(at)
+        if off and preheat:
+            # The valves wait for the central heating instead of standing
+            # open in vain; preheating goes on once it delivers again.
+            target, preheat = eco, False
         heating = not off and temperature < target - 0.05
         points.append(
-            PlanPoint(at, round(target, 1), round(temperature, 2), heating, preheat)
+            PlanPoint(
+                at, round(target, 1), round(temperature, 2), heating, preheat, off
+            )
         )
         if heating:
             temperature = min(
@@ -204,6 +212,23 @@ def _clock(moment: datetime) -> str:
 
 def _degrees(value: float) -> str:
     return f"{value:.1f}".replace(".", ",")
+
+
+def _supply_resumes(points: list[PlanPoint], start: datetime) -> datetime | None:
+    """When the central heating comes back before ``start`` after a pause in
+    the hours just before it; None without such a pause."""
+    window = [
+        p for p in points if start - timedelta(hours=3) <= p.at < start
+    ]
+    if not any(p.supply_off for p in window):
+        return None
+    if window[-1].supply_off:
+        return start
+    resumes = None
+    for earlier, later in zip(window, window[1:], strict=False):
+        if earlier.supply_off and not later.supply_off:
+            resumes = later.at
+    return resumes
 
 
 def summary(points: list[PlanPoint], blocks: list[Block], now: datetime) -> dict:
@@ -241,6 +266,12 @@ def summary(points: list[PlanPoint], blocks: list[Block], now: datetime) -> dict
             info["comfort_start"] = upcoming.start.isoformat()
             info["expected_at_start"] = round(at_start.temperature, 1)
             info["comfort_target"] = goal
+            resumes = _supply_resumes(points, upcoming.start)
+            if resumes is not None and at_start.temperature < goal - 0.3:
+                parts.append(
+                    f"Zentralheizung liefert erst ab {_clock(resumes)} Uhr"
+                )
+                info["supply_resumes"] = resumes.isoformat()
     if not parts:
         parts.append(
             f"Kein Komfort in den nächsten {PLAN_HOURS} Stunden – "
