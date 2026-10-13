@@ -1382,6 +1382,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for entity_id in self._thermostat_ids()
             if (texts := self._tuya_week_texts(entity_id))
         }
+        for texts in valves.values():
+            for text_id in texts.values():
+                text = self.hass.states.get(text_id)
+                if text is None or text.state in ("unavailable", "unknown"):
+                    # Right after a start the valves are not there yet; a
+                    # write now would be lost, so try again next cycle.
+                    return
         self._week_written_at = now
         self._week_written_key = key
         if not valves:
