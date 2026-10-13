@@ -124,6 +124,8 @@ SENSORS = (
         key="proximity_status",
         name="Geo-Fencing Status",
         icon="mdi:map-marker-check",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
     ),
     HeatingSensorDescription(
         key="proximity_distance_m",
@@ -132,6 +134,8 @@ SENSORS = (
         device_class=SensorDeviceClass.DISTANCE,
         native_unit_of_measurement=UnitOfLength.METERS,
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
     ),
     HeatingSensorDescription(
         key="proximity_age_seconds",
@@ -140,6 +144,7 @@ SENSORS = (
         native_unit_of_measurement="s",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
     ),
     HeatingSensorDescription(
         key="proximity_updates_seen",
@@ -380,6 +385,7 @@ async def async_setup_entry(
             HouseOverviewSensor(entry.runtime_data, entry, "overview"),
             HouseHeatDemandSensor(entry.runtime_data, entry, "heat_demand"),
             HouseSupplySensor(entry.runtime_data, entry, "central_heating"),
+            HouseGeofenceSensor(entry.runtime_data, entry, "geofencing"),
         ])
         return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
@@ -593,6 +599,53 @@ class HouseSupplySensor(HouseEntity, SensorEntity):
             "rooms": {
                 room.room_name: (room.data or {}).get("radiator_supply")
                 for room in self.house.rooms()
+            },
+        }
+
+
+class HouseGeofenceSensor(HouseEntity, SensorEntity):
+    """Geo-fencing once for the house: the rooms share people and zone."""
+
+    _attr_name = "Geo-Fencing"
+    _attr_icon = "mdi:map-marker-check"
+    _attr_should_poll = True
+
+    def _room(self):
+        rooms = [
+            room
+            for room in sorted(self.house.rooms(), key=lambda room: room.room_name)
+            if room.data
+            and room.data.get("proximity_status") not in (None, "Proximity nicht konfiguriert")
+        ]
+        return rooms[0] if rooms else None
+
+    @property
+    def native_value(self) -> str | None:
+        room = self._room()
+        return None if room is None else room.data.get("proximity_status")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        room = self._room()
+        if room is None:
+            return {}
+        data = room.data
+        return {
+            "room": room.room_name,
+            "distance_m": data.get("proximity_distance_m"),
+            "direction": data.get("proximity_direction"),
+            "age_seconds": data.get("proximity_age_seconds"),
+            **{
+                key.removeprefix("proximity_"): data.get(key)
+                for key in (
+                    "proximity_updates_seen",
+                    "proximity_average_update_interval_s",
+                    "proximity_stale_events",
+                    "proximity_invalid_events",
+                    "proximity_out_of_range_events",
+                    "proximity_approach_attempts",
+                    "proximity_confirmed_approaches",
+                )
             },
         }
 

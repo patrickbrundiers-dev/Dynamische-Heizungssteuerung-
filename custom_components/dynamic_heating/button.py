@@ -28,7 +28,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up the report button (house) or the mode buttons (room)."""
     if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HOUSE:
-        async_add_entities([SendReportButton(entry.runtime_data, entry, "send_report")])
+        async_add_entities([
+            SendReportButton(entry.runtime_data, entry, "send_report"),
+            GoodNightButton(entry.runtime_data, entry, "good_night"),
+        ])
         return
     entities: list[ButtonEntity] = [
         QuickModeButton(entry.runtime_data, entry, mode) for mode in QUICK_MODES
@@ -150,3 +153,13 @@ class SendReportButton(HouseEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self.house.async_send_report(reset=False)
+
+
+class GoodNightButton(HouseEntity, ButtonEntity):
+    """"Gute Nacht": every room in comfort time goes to night setback now."""
+
+    _attr_name = "Gute Nacht"
+    _attr_icon = "mdi:weather-night"
+
+    async def async_press(self) -> None:
+        await self.house.async_good_night()

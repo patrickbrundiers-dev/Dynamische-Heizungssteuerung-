@@ -208,7 +208,13 @@
           "activity_temperature": "\"Activity\" temperature",
           "sleep_temperature": "\"Sleep\" temperature",
           "warm_up_step": "Warm up: raise by",
-          "warm_up_duration": "Warm up: for"
+          "warm_up_duration": "Warm up: for",
+          "manual_max_temperature": "Maximum for manual changes",
+          "manual_max_duration": "Longest manual change",
+          "school_free_entity": "School-free today",
+          "school_free_schedule": "Schedule on school-free days",
+          "workday_entity": "Workday sensor (for tomorrow)",
+          "school_holiday_calendar": "Holiday calendar (for tomorrow)"
         },
         "data_description": {
           "additional_schedule_entities": "Further comfort schedules, e.g. holidays or home office. Pick the active one with the room's \"Zeitplan\" entity; without a choice the first schedule applies.",
@@ -219,7 +225,13 @@
           "activity_temperature": "Target of the \"Aktivität\" (activity) button and mode, like Better Thermostat's activity preset.",
           "sleep_temperature": "Target of the \"Schlafen\" (sleep) button and mode, like Better Thermostat's sleep preset. \"Abwesend\" (away) uses the away temperature, or eco without one.",
           "warm_up_step": "The \"Kurz wärmer\" button (also via Alexa) raises the current target by this much. Pressing again adds another step (at most three).",
-          "warm_up_duration": "Afterwards the room returns to automatic on its own."
+          "warm_up_duration": "Afterwards the room returns to automatic on its own.",
+          "manual_max_temperature": "A higher value set at the valve, in the app or on the room thermostat is capped at this. Empty = no cap.",
+          "manual_max_duration": "A manual change ends after this time at the latest and the room returns to its schedule. 0 = as chosen under mode duration.",
+          "school_free_entity": "On means school-free (e.g. binary_sensor.schulfrei). The school-free schedule applies then, the normal one otherwise.",
+          "school_free_schedule": "Picked automatically on school-free days and listed under schedule.",
+          "workday_entity": "Sensor of the Workday integration, so the day plan knows in the evening whether tomorrow is school-free.",
+          "school_holiday_calendar": "An event with 'Ferien' in its title makes the day school-free."
         }
       },
       "presence": {
@@ -373,7 +385,8 @@
           "punctuality": "Warm on time: learn preheating from late mornings",
           "preheat_extension": "Preheating may take this much longer (0 = never)",
           "morning_report": "Morning push when the room was not warm at comfort start",
-          "hold_before_supply_pause": "Keep comfort in the evening until the central heating pauses"
+          "hold_before_supply_pause": "Keep comfort in the evening until the central heating pauses",
+          "shower_learning": "Learn shower times (bathroom)"
         },
         "data_description": {
           "recovery_limit": "Outside comfort time the room must get warm again within the maximum preheat time.",
@@ -382,7 +395,8 @@
           "punctuality": "Every morning checks whether the room was warm when comfort began and learns how much earlier or later to preheat.",
           "preheat_extension": "On top of the maximum preheat time, only when the central heating is not usually off then.",
           "morning_report": "One push at 7 am, only when the room was at least 0.5 °C below its target at comfort start, with the reason (e.g. the central heating was not delivering yet).",
-          "hold_before_supply_pause": "When comfort ends shortly before the central heating's usual night pause, the room keeps comfort until the pause starts. It starts warmer in the morning but uses some more heat."
+          "hold_before_supply_pause": "When comfort ends shortly before the central heating's usual night pause, the room keeps comfort until the pause starts. It starts warmer in the morning but uses some more heat.",
+          "shower_learning": "Detects showers from a fast humidity rise, suggests comfort times and keeps the room model from learning the hour after."
         }
       }
     },
@@ -416,6 +430,10 @@
     "selftest_failed": {
       "title": "Self-test in {room} found problems",
       "description": "The self-test after the start found: {problems}. It repeats hourly; this goes away once everything is fine. The \"Selbsttest starten\" button repeats it now."
+    },
+    "foreign_control": {
+      "title": "Something else controls {room}",
+      "description": "{source} set {valves}: {value}. It works against this room's control. Turn it off if it is no longer needed; this goes away on its own then."
     }
   },
   "device_automation": {

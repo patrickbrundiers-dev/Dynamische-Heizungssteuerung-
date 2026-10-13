@@ -86,6 +86,14 @@ from .const import (
     CONF_VALVE_FALLBACK,
     CONF_VALVE_SENSOR_CALIBRATION,
     CONF_HOLD_BEFORE_PAUSE,
+    CONF_MANUAL_MAX_DURATION,
+    CONF_MANUAL_MAX_TEMPERATURE,
+    CONF_SCHOOL_FREE_ENTITY,
+    CONF_SCHOOL_FREE_SCHEDULE,
+    CONF_SCHOOL_HOLIDAY_CALENDAR,
+    CONF_SHOWER_LEARNING,
+    CONF_WORKDAY_ENTITY,
+    DEFAULT_SHOWER_LEARNING,
     CONF_MORNING_REPORT,
     DEFAULT_NOTIFY_AWAY,
     DEFAULT_PREHEAT_EXTENSION,
@@ -212,6 +220,7 @@ _DURATION_OPTIONS = (
     CONF_MAINTENANCE_DURATION,
     CONF_WARM_UP_DURATION,
     CONF_PREHEAT_EXTENSION,
+    CONF_MANUAL_MAX_DURATION,
 )
 
 _WEEKDAYS = (
@@ -457,6 +466,7 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Set up one controller per thermostat."""
 
     VERSION = 1
+    MINOR_VERSION = 2
 
     @staticmethod
     @callback
@@ -823,6 +833,21 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             self._duration_field(
                 CONF_WARM_UP_DURATION, current, DEFAULT_WARM_UP_DURATION
             )[0]: _duration_selector(),
+            vol.Optional(CONF_MANUAL_MAX_TEMPERATURE): _temperature_selector(16, 30),
+            self._duration_field(CONF_MANUAL_MAX_DURATION, current, 0)[0]:
+                _duration_selector(),
+            vol.Optional(CONF_SCHOOL_FREE_ENTITY): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])
+            ),
+            vol.Optional(CONF_SCHOOL_FREE_SCHEDULE): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["schedule", "calendar"])
+            ),
+            vol.Optional(CONF_WORKDAY_ENTITY): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="binary_sensor")
+            ),
+            vol.Optional(CONF_SCHOOL_HOLIDAY_CALENDAR): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain="calendar")
+            ),
         })
 
     def _presence_schema(self, current: dict) -> vol.Schema:
@@ -973,6 +998,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             (CONF_PUNCTUALITY, DEFAULT_PUNCTUALITY),
             (CONF_MORNING_REPORT, DEFAULT_MORNING_REPORT),
             (CONF_HOLD_BEFORE_PAUSE, DEFAULT_HOLD_BEFORE_PAUSE),
+            (CONF_SHOWER_LEARNING, DEFAULT_SHOWER_LEARNING),
         ):
             schema[vol.Optional(key, default=bool(current.get(key, default)))] = (
                 selector.BooleanSelector()
@@ -1110,6 +1136,15 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 current[key] = _duration_to_seconds(
                     user_input.get(key, current.get(key, default))
                 ) or default
+            current[CONF_MANUAL_MAX_TEMPERATURE] = user_input.get(
+                CONF_MANUAL_MAX_TEMPERATURE
+            )
+            current[CONF_MANUAL_MAX_DURATION] = _duration_to_seconds(
+                user_input.get(CONF_MANUAL_MAX_DURATION, 0)
+            )
+            for key in (CONF_SCHOOL_FREE_ENTITY, CONF_SCHOOL_FREE_SCHEDULE,
+                        CONF_WORKDAY_ENTITY, CONF_SCHOOL_HOLIDAY_CALENDAR):
+                current[key] = user_input.get(key) or None
             return await self.async_step_init()
         return self._show_step("modes", self._modes_schema(current), current)
 
@@ -1254,6 +1289,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 (CONF_PUNCTUALITY, DEFAULT_PUNCTUALITY),
                 (CONF_MORNING_REPORT, DEFAULT_MORNING_REPORT),
                 (CONF_HOLD_BEFORE_PAUSE, DEFAULT_HOLD_BEFORE_PAUSE),
+                (CONF_SHOWER_LEARNING, DEFAULT_SHOWER_LEARNING),
             ):
                 current[key] = bool(user_input.get(key, default))
             for key in (CONF_ROOM_EMPTY_RECOVERY, CONF_ROOM_EMPTY_GRACE, CONF_EARLY_STOP,

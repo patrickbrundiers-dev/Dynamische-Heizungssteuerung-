@@ -208,7 +208,13 @@
           "activity_temperature": "Temperatur „Aktivität“",
           "sleep_temperature": "Temperatur „Schlafen“",
           "warm_up_step": "Kurz wärmer: um so viel anheben",
-          "warm_up_duration": "Kurz wärmer: so lange"
+          "warm_up_duration": "Kurz wärmer: so lange",
+          "manual_max_temperature": "Höchstwert für Handänderungen",
+          "manual_max_duration": "Längste Dauer einer Handänderung",
+          "school_free_entity": "Schulfrei heute",
+          "school_free_schedule": "Zeitplan an schulfreien Tagen",
+          "workday_entity": "Arbeitstag-Sensor (für morgen)",
+          "school_holiday_calendar": "Ferienkalender (für morgen)"
         },
         "data_description": {
           "additional_schedule_entities": "Zusätzliche Komfort-Zeitpläne, z. B. Ferien oder Homeoffice. Welcher gilt, wählst du mit der Entität „Zeitplan“ des Raums; ohne Auswahl gilt der erste Zeitplan.",
@@ -219,7 +225,13 @@
           "activity_temperature": "Solltemperatur der Taste bzw. Betriebsart „Aktivität“ (wie das Preset „Activity“ von Better Thermostat).",
           "sleep_temperature": "Solltemperatur der Taste bzw. Betriebsart „Schlafen“ (wie das Preset „Sleep“ von Better Thermostat). „Abwesend“ nutzt die Abwesenheitstemperatur, ohne sie die Eco-Temperatur.",
           "warm_up_step": "Die Taste „Kurz wärmer“ (auch per Alexa) hebt das aktuelle Ziel um diesen Wert an. Nochmals drücken legt einen weiteren Schritt drauf (höchstens drei).",
-          "warm_up_duration": "Danach geht der Raum von selbst zurück in Automatik."
+          "warm_up_duration": "Danach geht der Raum von selbst zurück in Automatik.",
+          "manual_max_temperature": "Wird am Ventil, in der App oder am Raum-Thermostat mehr eingestellt, regelt der Raum nur bis zu diesem Wert. Leer = keine Grenze.",
+          "manual_max_duration": "Eine Handänderung endet spätestens nach dieser Zeit und der Raum kehrt zum Zeitplan zurück. 0 = so lange wie unter Betriebsart-Dauer gewählt.",
+          "school_free_entity": "An-Zustand bedeutet schulfrei (z. B. binary_sensor.schulfrei). Dann gilt der Schulfrei-Zeitplan, sonst der normale.",
+          "school_free_schedule": "Wird bei Schulfrei automatisch gewählt und erscheint unter „Zeitplan“.",
+          "workday_entity": "Sensor der Integration „Workday“. Damit weiß der Tagesplan schon am Abend, ob morgen schulfrei ist.",
+          "school_holiday_calendar": "Ein Termin mit „Ferien“ im Titel macht den Tag schulfrei."
         }
       },
       "presence": {
@@ -373,7 +385,8 @@
           "punctuality": "Pünktlich warm: Vorheizen aus verspäteten Morgen lernen",
           "preheat_extension": "Vorheizen darf so viel länger dauern (0 = nie)",
           "morning_report": "Morgenmeldung, wenn es zum Komfortbeginn nicht warm war",
-          "hold_before_supply_pause": "Abends bis zur Pause der Zentralheizung warm halten"
+          "hold_before_supply_pause": "Abends bis zur Pause der Zentralheizung warm halten",
+          "shower_learning": "Duschzeiten lernen (Bad)"
         },
         "data_description": {
           "recovery_limit": "Außerhalb der Komfortzeit muss der Raum innerhalb der maximalen Vorheizzeit wieder warm werden.",
@@ -382,7 +395,8 @@
           "punctuality": "Jeden Morgen wird geprüft, ob der Raum zum Komfortbeginn warm war. Daraus lernt die Regelung, wie viel früher oder später sie vorheizen muss.",
           "preheat_extension": "Zusätzlich zur maximalen Vorheizzeit, nur wenn die Zentralheizung in dieser Zeit nicht üblicherweise aus ist.",
           "morning_report": "Eine Push-Nachricht um 7 Uhr, nur wenn der Raum zum Komfortbeginn mindestens 0,5 °C unter dem Ziel lag, mit dem Grund (z. B. Zentralheizung lieferte noch nicht).",
-          "hold_before_supply_pause": "Endet der Komfort kurz vor der üblichen Nachtpause der Zentralheizung, bleibt der Raum bis zum Beginn der Pause auf Komfort. Er startet dann morgens wärmer, kostet aber etwas Wärme."
+          "hold_before_supply_pause": "Endet der Komfort kurz vor der üblichen Nachtpause der Zentralheizung, bleibt der Raum bis zum Beginn der Pause auf Komfort. Er startet dann morgens wärmer, kostet aber etwas Wärme.",
+          "shower_learning": "Erkennt Duschen am schnellen Anstieg der Luftfeuchte, schlägt passende Komfortzeiten vor und lernt das Raummodell nicht aus der Stunde danach."
         }
       }
     },
@@ -416,6 +430,10 @@
     "selftest_failed": {
       "title": "Selbsttest in {room} hat Probleme gefunden",
       "description": "Beim Selbsttest nach dem Start ist aufgefallen: {problems}. Der Test wiederholt sich stündlich; die Meldung verschwindet, sobald alles in Ordnung ist. Über die Taste „Selbsttest starten“ lässt er sich sofort wiederholen."
+    },
+    "foreign_control": {
+      "title": "Fremde Steuerung in {room}",
+      "description": "{source} hat {valves} {value}. Sie arbeitet gegen die Regelung dieses Raums. Wenn sie nicht mehr gebraucht wird, bitte ausschalten; die Meldung verschwindet dann von selbst."
     }
   },
   "device_automation": {

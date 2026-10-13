@@ -196,7 +196,7 @@ async def test_user_flow_creates_entry(hass, enable_custom_integrations):
     assert result["data"]["climate_entity"] == "climate.living_room"
     # Native duration selector values are normalized to numeric seconds.
     assert result["data"]["enter_home_duration"] == 2
-    assert result["data"]["leaving_home_duration"] == 2
+    assert result["data"]["leaving_home_duration"] == 600
     assert result["data"]["proximity_duration"] == 120
     assert result["data"]["proximity_max_age"] == 900
     assert result["data"]["presence_on_duration"] == 300

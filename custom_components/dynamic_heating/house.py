@@ -32,6 +32,8 @@ from .const import (
     HOUSE_MODES,
     HOUSE_VACATION,
     QUICK_AUTO,
+    QUICK_MORNING_HOUR,
+    QUICK_SLEEP,
 )
 from .radiator import (
     SUPPLY_COLD,
@@ -302,6 +304,39 @@ class HouseManager:
             room._pending_source = "Hausmodus"
         self.mode = mode
         await self._async_changed()
+
+    async def async_good_night(self) -> list[str]:
+        """"Gute Nacht": rooms in comfort time go to night setback now.
+
+        Each such room sleeps until its comfort block ends; from there the
+        schedule goes on as usual (eco, preheating in the morning). Rooms
+        outside comfort time stay as they are, so no preheating is lost.
+        Returns the names of the rooms that were lowered.
+        """
+        now = dt_util.utcnow()
+        local = dt_util.as_local(now)
+        morning = local.replace(
+            hour=QUICK_MORNING_HOUR, minute=0, second=0, microsecond=0
+        )
+        if morning <= local:
+            morning += timedelta(days=1)
+        lowered = []
+        for room in self.rooms():
+            data = room.data or {}
+            if not room.enabled or not data.get("schedule_active"):
+                continue
+            end = room._next_event
+            room.boost_until = None
+            room.quick_mode = QUICK_SLEEP
+            room.quick_until = (
+                end if end is not None and end > now else dt_util.as_utc(morning)
+            )
+            room._pending_source = "Gute Nacht"
+            lowered.append(room.room_name)
+        for room in self.rooms():
+            if room.room_name in lowered:
+                await room.async_refresh()
+        return sorted(lowered)
 
     async def async_set_vacation_until(self, value: datetime | None) -> None:
         """Set when the vacation ends (and the house returns to Zuhause)."""

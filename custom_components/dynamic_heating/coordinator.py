@@ -11,7 +11,8 @@ from datetime import datetime, timedelta
 from collections.abc import Callable
 from typing import Any
 
-from homeassistant.core import HomeAssistant, State
+from homeassistant.const import EVENT_CALL_SERVICE
+from homeassistant.core import Context, Event, HomeAssistant, State, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
@@ -246,6 +247,7 @@ from .const import (
     DEFAULT_ECO_TEMPERATURE,
     DEFAULT_ENTER_HOME_DURATION,
     DEFAULT_LEAVING_HOME_DURATION,
+    PREHEAT_LEAVE_GRACE_SECONDS,
     DEFAULT_PROXIMITY_DURATION,
     DEFAULT_PROXIMITY_DISTANCE,
     DEFAULT_PROXIMITY_MAX_AGE,
@@ -275,6 +277,22 @@ from .const import (
     MIN_LEARNED_COOLING_RATE,
     MIN_LEARNED_HEATING_RATE,
     MIN_SAMPLE_SECONDS,
+    CONF_MANUAL_MAX_TEMPERATURE,
+    CONF_MANUAL_MAX_DURATION,
+    CONF_SCHOOL_FREE_ENTITY,
+    CONF_SCHOOL_FREE_SCHEDULE,
+    CONF_WORKDAY_ENTITY,
+    CONF_SCHOOL_HOLIDAY_CALENDAR,
+    SCHOOL_HOLIDAY_WORDS,
+    CONF_SHOWER_LEARNING,
+    DEFAULT_SHOWER_LEARNING,
+    SHOWER_RISE_PERCENT,
+    SHOWER_RISE_WINDOW_SECONDS,
+    SHOWER_COOLDOWN_SECONDS,
+    SHOWER_MODEL_PAUSE_SECONDS,
+    SHOWER_HISTORY_DAYS,
+    SHOWER_LEAD_MINUTES,
+    FOREIGN_CONTROL_NOTIFY_SECONDS,
 )
 from .logic import (
     HeatingDecision,
@@ -332,8 +350,12 @@ from .radiator import (
     room_supply,
 )
 from .routine import (
+    HABIT_DAYS,
     TUYA_DAYS,
     Habits,
+    ShowerWatch,
+    schedule_covers,
+    showers_from_history,
     HeatStats,
     Punctuality,
     fallback_schedule,
@@ -344,6 +366,7 @@ from .plan import (
     CHECK_HOURS,
     Block,
     blocks_from_schedule,
+    blocks_switched_at,
     simulate,
     summary as plan_summary,
     temperature_at,
@@ -422,6 +445,25 @@ def _as_number(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def foreign_source(hass: HomeAssistant, context: Context | None) -> tuple[str, str] | None:
+    """The automation or script whose run made a service call, if any.
+
+    An automation writes its state (last_triggered) with the context its
+    actions then run in, so the call's context names it.
+    """
+    if context is None:
+        return None
+    ids = {context.id, context.parent_id} - {None}
+    for state in hass.states.async_all(("automation", "script")):
+        if state.context.id in ids:
+            return state.entity_id, state.name
+    return None
+
+
+def _foreign_issue_id(entry_id: str, source_id: str) -> str:
+    return f"foreign_control_{entry_id}_{source_id.replace('.', '_')}"
 
 
 class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -516,6 +558,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # has been home, for frost protection after a long absence.
         self._absence = "none"
         self._absent_since: datetime | None = None
+        # When each person of the room was last seen at home (leaving delay).
+        self._seen_home: dict[str, datetime] = {}
+        # School-free days (runde 10): today's state as last followed, and
+        # whether tomorrow is free (asked once a day).
+        self._school_free: bool | None = None
+        self._free_tomorrow_cache: tuple[Any, bool] | None = None
+        self._tomorrow_note: str | None = None
+        # Weeks of the schedule helpers as read for the day plan.
+        self._schedule_weekly: dict[str, dict] = {}
+        # A hand change above the cap: the value that was asked for.
+        self._manual_capped_from: float | None = None
         # Room offset (all targets) and per-valve offsets, both persisted.
         self.room_offset = 0.0
         self.valve_offsets: dict[str, float] = {}
@@ -537,7 +590,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Notifications: since when each alert condition holds and whether
         # it was already sent.
         self._alerts: dict[str, tuple[datetime, bool]] = {}
-        self._proximity_status_category = "unconfigured"
+        self._proximity_categories: dict[str, str] = {}
         self._proximity_metrics_dirty = False
         self._proximity_last_state_update: datetime | None = None
         self._proximity_last_update_at: str | None = None
@@ -663,6 +716,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Warm on time, modes picked by hand, long-term figures (persisted).
         self.punctuality = Punctuality()
         self.habits = Habits()
+        # Showers seen in the room's humidity (bathrooms, runde 10).
+        self.showers = Habits()
+        self._showers_seeded = False
+        self._shower_watch = ShowerWatch(
+            SHOWER_RISE_PERCENT, SHOWER_RISE_WINDOW_SECONDS, SHOWER_COOLDOWN_SECONDS
+        )
+        self._shower_until: datetime | None = None
         self.heat_stats = HeatStats()
         self._habits_at: datetime | None = None
         self._habit_suggestions: list[dict] = []
@@ -671,6 +731,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._window_ignored = False
         self._heating_muted_until: datetime | None = None
         self._unsub_actions: Callable[[], None] | None = None
+        # Automations and scripts that set this room's valves (runde 10):
+        # automation entity id -> what it did; when each was last pushed.
+        self._unsub_foreign: Callable[[], None] | None = None
+        self.foreign_control: dict[str, dict[str, Any]] = {}
+        self._foreign_notified: dict[str, datetime] = {}
         # Valves whose own schedule was switched on at the last shutdown.
         self._fallback_armed: list[str] = []
         # Tuya valves switched to their own week program on shutdown.
@@ -1072,6 +1137,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.plan_checked = self._stored_count(stored.get("plan_checked"))
         self.punctuality = Punctuality.from_dict(stored.get("punctuality"))
         self.habits = Habits.from_dict(stored.get("habits"))
+        self.showers = Habits.from_dict(stored.get("showers"))
+        self._showers_seeded = bool(stored.get("showers_seeded"))
         raw_maintenance = self._stored_string(stored.get("valve_maintenance_last"))
         parsed_maintenance = (
             dt_util.parse_datetime(raw_maintenance) if raw_maintenance else None
@@ -1743,6 +1810,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "plan_checked": self.plan_checked,
                 "punctuality": self.punctuality.as_dict(),
                 "habits": self.habits.as_dict(),
+                "showers": self.showers.as_dict(),
+                "showers_seeded": self._showers_seeded,
             }
         )
 
@@ -2156,6 +2225,22 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             **self._learning_diagnostics(),
         }
 
+    def _left_home_within(
+        self, entity_id: str, state: State, now: datetime, delay_seconds: int
+    ) -> bool:
+        """True while a person left home less than ``delay_seconds`` ago."""
+        if delay_seconds <= 0:
+            return False
+        seen = self._seen_home.get(entity_id)
+        if seen is not None:
+            gone = (now - seen).total_seconds()
+        elif state.state == "not_home":
+            # Not seen at home since the start: the state's age tells.
+            gone = (now - state.last_changed).total_seconds()
+        else:
+            return False
+        return gone < delay_seconds
+
     def _presence_is_active(
         self, state: State, expected: bool, delay_seconds: int
     ) -> bool:
@@ -2197,11 +2282,15 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         result = value * factor
         return result if math.isfinite(result) and result >= 0 else None
 
-    def _record_proximity_category(self, category: str) -> None:
-        """Count only changes between meaningful geofence states."""
-        if category == self._proximity_status_category:
+    def _record_proximity_category(self, category: str, key: str = "") -> None:
+        """Count only changes between meaningful geofence states.
+
+        Per source: with two people in the zone their states differ, and one
+        shared state counted every cycle as a change (2526 "stale" events).
+        """
+        if category == self._proximity_categories.get(key):
             return
-        self._proximity_status_category = category
+        self._proximity_categories[key] = category
         if category == "stale":
             self._proximity_stale_events += 1
             self._proximity_metrics_dirty = True
@@ -2253,7 +2342,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if not self._valid(distance_state):
             self._proximity_approaching.pop(key, None)
-            self._record_proximity_category("invalid")
+            self._record_proximity_category("invalid", key)
             return None, "Proximity-Entfernung nicht verfügbar"
 
         if observe:
@@ -2268,7 +2357,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         if age < -60 or age > max_age:
             self._proximity_approaching.pop(key, None)
-            self._record_proximity_category("stale")
+            self._record_proximity_category("stale", key)
             return (
                 None,
                 # No age in the text: a status that changes every minute
@@ -2284,24 +2373,24 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raw_direction = direction_state.state
         elif self.config.get(CONF_PROXIMITY_DIRECTION_ENTITY):
             self._proximity_approaching.pop(key, None)
-            self._record_proximity_category("invalid")
+            self._record_proximity_category("invalid", key)
             return None, "Proximity-Richtung nicht verfügbar"
         else:
             self._proximity_approaching.pop(key, None)
-            self._record_proximity_category("invalid")
+            self._record_proximity_category("invalid", key)
             return None, "Proximity-Richtung fehlt: bitte Richtungssensor auswählen"
 
         direction = str(raw_direction or "").strip().lower()
         self._proximity_direction = direction or None
         if direction == "unknown" or direction in _INVALID_STATES or not direction:
             self._proximity_approaching.pop(key, None)
-            self._record_proximity_category("invalid")
+            self._record_proximity_category("invalid", key)
             return None, "Proximity-Richtung ist unbekannt"
 
         raw_distance = _as_float(distance_state)
         if raw_distance is None:
             self._proximity_approaching.pop(key, None)
-            self._record_proximity_category("invalid")
+            self._record_proximity_category("invalid", key)
             return None, "Proximity-Entfernung ist kein gültiger Zahlenwert"
 
         distance_m = self._distance_to_meters(
@@ -2310,7 +2399,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         if distance_m is None:
             self._proximity_approaching.pop(key, None)
-            self._record_proximity_category("invalid")
+            self._record_proximity_category("invalid", key)
             return None, "Proximity-Einheit nicht unterstützt"
         self._proximity_distance_m = round(distance_m, 1)
 
@@ -2320,28 +2409,28 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         if direction == "arrived" or distance_m <= 0:
             self._proximity_approaching.pop(key, None)
-            self._record_proximity_category("confirmed")
+            self._record_proximity_category("confirmed", key)
             return True, "Proximity meldet Ankunft"
         if direction in ("away_from", "stationary"):
             self._proximity_approaching.pop(key, None)
-            self._record_proximity_category("not_approaching")
+            self._record_proximity_category("not_approaching", key)
             return False, (
                 "Bewegung weg vom Zuhause" if direction == "away_from"
                 else "Standort stationär – keine Anfahrt"
             )
         if direction != "towards":
             self._proximity_approaching.pop(key, None)
-            self._record_proximity_category("invalid")
+            self._record_proximity_category("invalid", key)
             return None, f"Unbekannte Bewegungsrichtung: {direction}"
 
         if distance_m > maximum_distance:
             self._proximity_approaching.pop(key, None)
-            self._record_proximity_category("out_of_range")
+            self._record_proximity_category("out_of_range", key)
             return False, "Noch außerhalb der Anfahrtsentfernung"
 
         if key not in self._proximity_approaching:
             self._proximity_approaching[key] = now
-            self._record_proximity_category("approaching")
+            self._record_proximity_category("approaching", key)
         duration = max(
             0,
             int(self.config.get(CONF_PROXIMITY_DURATION, DEFAULT_PROXIMITY_DURATION)),
@@ -2351,7 +2440,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False, (
                 f"Anfahrt erkannt – Wartezeit {round(duration - elapsed)} s"
             )
-        self._record_proximity_category("confirmed")
+        self._record_proximity_category("confirmed", key)
         return True, "Anfahrt bestätigt"
 
     def _zone_sources(
@@ -2444,18 +2533,23 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         leave_delay = int(
             self.config.get(CONF_LEAVING_HOME_DURATION, DEFAULT_LEAVING_HOME_DURATION)
         )
+        if leave_delay > 0 and (self.data or {}).get("mode") == "preheat":
+            # Heat already put in is not thrown away for a short absence
+            # (0 = react at once, kept as set).
+            leave_delay = max(leave_delay, PREHEAT_LEAVE_GRACE_SECONDS)
 
+        now = dt_util.utcnow()
         for entity_id in people:
             state = self.hass.states.get(entity_id)
             if not self._valid(state):
                 invalid_people = True
-            elif state.state == "home" and self._presence_is_active(
-                state, True, enter_delay
-            ):
-                household_home = True
-            elif state.state == "not_home" and not self._presence_is_active(
-                state, False, leave_delay
-            ):
+            elif state.state == "home":
+                self._seen_home[entity_id] = now
+                if self._presence_is_active(state, True, enter_delay):
+                    household_home = True
+            elif self._left_home_within(entity_id, state, now, leave_delay):
+                # Left just now, also straight into another zone ("Arbeit"):
+                # still counts as home for the leaving delay.
                 household_home = True
 
         if guest_id:
@@ -3050,6 +3144,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     result["status"] = result["decision_status"] = (
                         f"{value} °C am Thermostat eingestellt"
                     )
+                    if self._manual_capped_from is not None:
+                        turned_text = f"{self._manual_capped_from:g}".replace(".", ",")
+                        result["status"] = result["decision_status"] = (
+                            f"{turned_text} °C gedreht – auf {value} °C begrenzt"
+                        )
                 else:
                     self._manual_override = override_key
                     _LOGGER.info(
@@ -3267,8 +3366,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._pending_source = "Raum-Thermostat"
         self.boost_until = None
         self.quick_mode = QUICK_MANUAL
-        self.quick_temperature = float(temperature)
-        self.quick_until = self._quick_end()
+        self.quick_temperature = self._manual_capped(float(temperature))
+        self.quick_until = self._manual_until(self._quick_end())
         # A temperature set directly is meant as is (as in Climate Group Helper).
         self.room_offset = 0.0
         value = f"{float(temperature):g}"
@@ -3286,7 +3385,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now = dt_util.now()
         if self._habits_at is None or now - self._habits_at >= timedelta(hours=1):
             self._habits_at = now
-            self._habit_suggestions = self.habits.suggestions(now)
+            self._habit_suggestions = (
+                self.habits.suggestions(now) + self._shower_suggestions(now)
+            )
         suggestions = self._habit_suggestions
         result["schedule_suggestion"] = (
             suggestions[0]["text"] if suggestions else "Keine Vorschläge"
@@ -3297,6 +3398,103 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.habits.notified.append(item["key"])
                 return str(item["text"])
         return None
+
+    def _shower_suggestions(self, now: datetime) -> list[dict]:
+        """Usual shower times that the schedule does not warm the room for."""
+        if not self.config.get(CONF_SHOWER_LEARNING, DEFAULT_SHOWER_LEARNING):
+            return []
+
+        def describe(when: str, clock: str, _label: str, days: int) -> str:
+            hour, minute = (int(part) for part in clock.split(":"))
+            start = (hour * 60 + minute - SHOWER_LEAD_MINUTES) % (24 * 60)
+            return (
+                f"{when} gegen {clock} Uhr wird geduscht ({days}× in "
+                f"{HABIT_DAYS // 7} Wochen) – Komfort im Bad ab "
+                f"{start // 60:02d}:{start % 60:02d} Uhr in den Zeitplan?"
+            )
+
+        weekly = self._schedule_weekly.get(self.config.get(CONF_SCHEDULE_ENTITY) or "")
+        return [
+            item
+            for item in self.showers.suggestions(now, describe)
+            if not schedule_covers(
+                weekly,
+                item["weekend"],
+                (item["minute"] - SHOWER_LEAD_MINUTES) % (24 * 60),
+            )
+        ]
+
+    def _observe_shower(self, result: dict[str, Any]) -> bool:
+        """A shower in the room's humidity; True when one was seen."""
+        result["shower_until"] = (
+            self._shower_until.isoformat() if self._shower_until else None
+        )
+        if not self.config.get(CONF_SHOWER_LEARNING, DEFAULT_SHOWER_LEARNING):
+            return False
+        humidity = _as_float(self._state(CONF_HUMIDITY_ENTITY))
+        if humidity is None:
+            return False
+        now = dt_util.utcnow()
+        if not self._shower_watch.observe(now.timestamp(), humidity):
+            return False
+        self.showers.record(dt_util.now(), "shower", "Duschen")
+        self._shower_until = now + timedelta(seconds=SHOWER_MODEL_PAUSE_SECONDS)
+        self._habits_at = None
+        result["shower_until"] = self._shower_until.isoformat()
+        self._log("Duschen erkannt (Luftfeuchte steigt schnell)")
+        return True
+
+    async def async_seed_showers(self) -> None:
+        """Showers of the last days from the recorder, once."""
+        humidity_id = self.config.get(CONF_HUMIDITY_ENTITY)
+        if (
+            self._showers_seeded
+            or not humidity_id
+            or not self.config.get(CONF_SHOWER_LEARNING, DEFAULT_SHOWER_LEARNING)
+            or "recorder" not in self.hass.config.components
+        ):
+            return
+        from homeassistant.components.recorder import get_instance, history
+
+        end = dt_util.utcnow()
+        start = end - timedelta(days=SHOWER_HISTORY_DAYS)
+        try:
+            states = await get_instance(self.hass).async_add_executor_job(
+                history.get_significant_states,
+                self.hass,
+                start,
+                end,
+                [humidity_id],
+                None,
+                True,
+                False,
+                False,
+                True,
+            )
+        except Exception:  # noqa: BLE001 - history is a bonus, never fatal
+            _LOGGER.debug("Humidity history not available", exc_info=True)
+            return
+        readings = []
+        for state in states.get(humidity_id, []):
+            if not isinstance(state, State):
+                continue
+            try:
+                readings.append((state.last_changed.timestamp(), float(state.state)))
+            except (TypeError, ValueError):
+                continue
+        watch = ShowerWatch(
+            SHOWER_RISE_PERCENT, SHOWER_RISE_WINDOW_SECONDS, SHOWER_COOLDOWN_SECONDS
+        )
+        found = showers_from_history(watch, readings, end.timestamp())
+        for at in found:
+            self.showers.record(
+                dt_util.as_local(dt_util.utc_from_timestamp(at)), "shower", "Duschen"
+            )
+        self._showers_seeded = True
+        self._habits_at = None
+        if found:
+            self._log(f"{len(found)}× Duschen aus dem Verlauf erkannt")
+        await self._save_learning()
 
     async def async_start_learn_run(self, at: datetime | None = None) -> None:
         """Plan the calibration run for ``at``, or start it now."""
@@ -3506,7 +3704,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         extra = self.config.get(CONF_ADDITIONAL_SCHEDULE_ENTITIES) or []
         if isinstance(extra, str):
             extra = [extra]
-        ids += [entity_id for entity_id in extra if entity_id not in ids]
+        extra = [*extra, self.config.get(CONF_SCHOOL_FREE_SCHEDULE)]
+        ids = list(dict.fromkeys([*ids, *extra]))
         return [
             (entity_id, self._friendly_name(entity_id))
             for entity_id in ids
@@ -3546,12 +3745,38 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         cached = self._calibration.get(entity_id)
         if cached is not None and entity_id not in self._external_fed:
             setpoint -= cached[0]
-        temperature = round(setpoint * 2) / 2
+        temperature = self._manual_capped(round(setpoint * 2) / 2)
         self.boost_until = None
         self.quick_mode = QUICK_MANUAL
         self.quick_temperature = temperature
-        self.quick_until = self._quick_end()
+        self.quick_until = self._manual_until(self._quick_end())
         return temperature
+
+    def _manual_capped(self, temperature: float) -> float:
+        """A temperature set by hand, at most the room's cap for hand changes."""
+        cap = self.config.get(CONF_MANUAL_MAX_TEMPERATURE)
+        if cap is None:
+            self._manual_capped_from = None
+            return temperature
+        cap = float(cap)
+        if temperature > cap:
+            self._manual_capped_from = temperature
+            self._log(
+                f"{temperature:g} °C von Hand gewählt – auf {cap:g} °C begrenzt".replace(
+                    ".", ","
+                )
+            )
+            return cap
+        self._manual_capped_from = None
+        return temperature
+
+    def _manual_until(self, until: datetime | None) -> datetime | None:
+        """End of a hand change, at most the room's longest hand change."""
+        seconds = int(self.config.get(CONF_MANUAL_MAX_DURATION) or 0)
+        if seconds <= 0:
+            return until
+        latest = dt_util.utcnow() + timedelta(seconds=seconds)
+        return latest if until is None or until > latest else until
 
     def _window_drop(self, room_temperature: float) -> bool:
         """An open window guessed from a fast temperature drop."""
@@ -3985,9 +4210,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         room = result.get("room_temperature")
         outdoor = result.get("outdoor_temperature")
         demand = result.get("heat_demand")
+        if self._shower_until is not None and dt_util.utcnow() >= self._shower_until:
+            self._shower_until = None
         if (
             not self.enabled
             or self._room_fallback
+            or self._shower_until is not None
             or room is None
             or outdoor is None
             or demand is None
@@ -4148,14 +4376,20 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         A schedule helper's week comes from ``schedule.get_schedule``, a
         calendar's events from ``calendar.get_events``; None when neither
-        answers.
+        answers. When tomorrow is school-free (or not) and that needs another
+        schedule, the blocks after midnight come from that one.
         """
         schedule_id = self.active_schedule
-        key = (schedule_id, dt_util.as_local(now).strftime("%Y-%m-%d %H"))
+        tomorrow_id = await self._tomorrow_schedule(now)
+        key = (
+            schedule_id,
+            tomorrow_id,
+            dt_util.as_local(now).strftime("%Y-%m-%d %H"),
+        )
         if (
             self._schedule_week is not None
             and self._schedule_week_key is not None
-            and self._schedule_week_key[0] == schedule_id
+            and self._schedule_week_key[:2] == key[:2]
             and self._schedule_week_at is not None
             and now - self._schedule_week_at < SCHEDULE_WEEK_INTERVAL
         ):
@@ -4163,6 +4397,27 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not schedule_id:
             return None
         local = dt_util.as_local(now)
+        blocks = await self._fetch_blocks(schedule_id, local)
+        self._tomorrow_note = None
+        if blocks is not None and tomorrow_id is not None and tomorrow_id != schedule_id:
+            later = await self._fetch_blocks(tomorrow_id, local)
+            if later is not None:
+                midnight = (local + timedelta(days=1)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                blocks = blocks_switched_at(blocks, later, midnight)
+                self._tomorrow_note = (
+                    "morgen schulfrei"
+                    if tomorrow_id == self.config.get(CONF_SCHOOL_FREE_SCHEDULE)
+                    else "morgen Schultag"
+                )
+        self._schedule_week = blocks
+        self._schedule_week_key = key
+        self._schedule_week_at = now
+        return blocks
+
+    async def _fetch_blocks(self, schedule_id: str, local: datetime) -> list[Block] | None:
+        """The next 24 hours of one schedule helper or calendar."""
         blocks: list[Block] | None = None
         try:
             if schedule_id.startswith("schedule."):
@@ -4174,6 +4429,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     return_response=True,
                 )
                 weekly = response.get(schedule_id) if isinstance(response, dict) else None
+                if isinstance(weekly, dict):
+                    self._schedule_weekly[schedule_id] = weekly
                 blocks = blocks_from_schedule(
                     weekly, local, schedule_comfort_temperature
                 )
@@ -4213,10 +4470,106 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (HomeAssistantError, TypeError, ValueError, AttributeError) as err:
             _LOGGER.debug("Schedule of %s not readable for the day plan: %s", schedule_id, err)
             blocks = None
-        self._schedule_week = blocks
-        self._schedule_week_key = key
-        self._schedule_week_at = now
         return blocks
+
+    def _follow_school_free(self) -> None:
+        """Pick the school-free schedule on free days, the normal one else.
+
+        Like the automation it replaces: on a change of the entity (and once
+        after the start). Picking another schedule by hand holds until the
+        next change.
+        """
+        entity_id = self.config.get(CONF_SCHOOL_FREE_ENTITY)
+        free_schedule = self.config.get(CONF_SCHOOL_FREE_SCHEDULE)
+        if not entity_id or not free_schedule:
+            return
+        state = self.hass.states.get(entity_id)
+        if not self._valid(state):
+            return
+        free = state.state == "on"
+        if free == self._school_free:
+            return
+        self._school_free = free
+        choice = free_schedule if free else self.config.get(CONF_SCHEDULE_ENTITY)
+        if choice and self.schedule_choice != choice:
+            self.schedule_choice = choice
+            self._preheat_event = None
+            self._pending_source = "Schulfrei"
+            self._log(
+                f"Zeitplan {self._friendly_name(choice)} "
+                + ("(schulfrei)" if free else "(Schultag)")
+            )
+
+    async def _tomorrow_schedule(self, now: datetime) -> str | None:
+        """The schedule tomorrow needs when school-free days are set up.
+
+        None when that is not known (no workday sensor or holiday calendar).
+        """
+        free_schedule = self.config.get(CONF_SCHOOL_FREE_SCHEDULE)
+        if not self.config.get(CONF_SCHOOL_FREE_ENTITY) or not free_schedule:
+            return None
+        free = await self._free_tomorrow(now)
+        if free is None:
+            return None
+        return free_schedule if free else self.config.get(CONF_SCHEDULE_ENTITY)
+
+    async def _free_tomorrow(self, now: datetime) -> bool | None:
+        """Is tomorrow school-free? Asked once a day (workday, holidays)."""
+        day = (dt_util.as_local(now) + timedelta(days=1)).date()
+        if self._free_tomorrow_cache is not None and self._free_tomorrow_cache[0] == day:
+            return self._free_tomorrow_cache[1]
+        workday_id = self.config.get(CONF_WORKDAY_ENTITY)
+        calendar_id = self.config.get(CONF_SCHOOL_HOLIDAY_CALENDAR)
+        if not workday_id and not calendar_id:
+            return None
+        free: bool | None = None
+        try:
+            if workday_id:
+                response = await self.hass.services.async_call(
+                    "workday",
+                    "check_date",
+                    {"entity_id": workday_id, "check_date": day},
+                    blocking=True,
+                    return_response=True,
+                )
+                value = (
+                    (response.get(workday_id) or {}).get("workday")
+                    if isinstance(response, dict)
+                    else None
+                )
+                if isinstance(value, bool):
+                    free = not value
+            if calendar_id and not free:
+                start = datetime.combine(day, datetime.min.time(), dt_util.get_default_time_zone())
+                response = await self.hass.services.async_call(
+                    "calendar",
+                    "get_events",
+                    {
+                        "entity_id": calendar_id,
+                        "start_date_time": (start + timedelta(hours=8)).isoformat(),
+                        "end_date_time": (start + timedelta(hours=16)).isoformat(),
+                    },
+                    blocking=True,
+                    return_response=True,
+                )
+                events = (
+                    (response.get(calendar_id) or {}).get("events")
+                    if isinstance(response, dict)
+                    else None
+                )
+                if events is not None:
+                    holiday = any(
+                        word in str(event.get("summary") or "").casefold()
+                        for event in events
+                        for word in SCHOOL_HOLIDAY_WORDS
+                    )
+                    free = bool(free) or holiday
+        except (HomeAssistantError, TypeError, ValueError, AttributeError) as err:
+            _LOGGER.debug("Could not tell whether tomorrow is school-free: %s", err)
+            return None
+        if free is not None:
+            self._free_tomorrow_cache = (day, free)
+        return free
 
     def _forecast_points(self) -> list[tuple[datetime, float]]:
         forecast: list[tuple[datetime, float]] = []
@@ -4373,6 +4726,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             lead_bias_minutes=self._lead_bias(),
         )
         info = plan_summary(points, blocks, local)
+        if self._tomorrow_note:
+            info["text"] = f"{info['text']} ({self._tomorrow_note})"
         if self.plan_error is not None and self.plan_checked >= 3:
             info["text"] = (
                 f"{info['text']} (Abweichung bisher ±"
@@ -4838,9 +5193,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._sync_external_temperature()
         await self._sync_trv_window_detection()
         await self._sync_valve_week_schedule()
+        self._follow_school_free()
         result = await self._async_control_cycle()
         await self._calibrate_valve_sensors(result)
         self._update_repair_issue()
+        self._check_foreign_control(result)
         self._announce_mode(result)
         self._pending_source = None
         result["last_change_source"] = self.last_change_source
@@ -4858,6 +5215,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._update_plan(result)
         routine_learned = self._observe_routine(result)
         await self._morning_report(result)
+        shower_seen = self._observe_shower(result)
         habit = self._update_habits(result)
         await self._maybe_selftest(result)
         await self._send_notifications(result)
@@ -4866,7 +5224,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             routine_learned = True
         result["external_temperature_thermostats"] = sorted(self._external_fed)
         result["quick_duration"] = self.quick_duration
-        if await self._observe_model(result) or supply_learned or routine_learned:
+        if (
+            await self._observe_model(result)
+            or supply_learned
+            or routine_learned
+            or shower_seen
+        ):
             await self._save_learning()
         self._fire_triggers(result)
         self._track_week(result)
@@ -5196,6 +5559,110 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._unsub_actions is not None:
             self._unsub_actions()
             self._unsub_actions = None
+
+    def async_watch_foreign_control(self) -> None:
+        """Notice automations and scripts that set this room's valves."""
+        if self._unsub_foreign is None:
+            self._unsub_foreign = self.hass.bus.async_listen(
+                EVENT_CALL_SERVICE, self._on_call_service
+            )
+
+    def async_stop_foreign_control(self) -> None:
+        if self._unsub_foreign is not None:
+            self._unsub_foreign()
+            self._unsub_foreign = None
+
+    @callback
+    def _on_call_service(self, event: Event) -> None:
+        data = event.data
+        if data.get("domain") != "climate":
+            return
+        service_data = data.get("service_data") or {}
+        target = service_data.get("entity_id")
+        targets = {target} if isinstance(target, str) else set(target or [])
+        valves = sorted(targets & set(self._thermostat_ids()))
+        if not valves:
+            return
+        source = foreign_source(self.hass, event.context)
+        if source is None:
+            return
+        source_id, source_name = source
+        value = service_data.get("temperature")
+        if value is None:
+            value = service_data.get("hvac_mode") or data.get("service")
+        self.foreign_control[source_id] = {
+            "name": source_name,
+            "at": dt_util.utcnow(),
+            "valves": valves,
+            "value": value,
+        }
+        self.hass.async_create_task(self._report_foreign_control(source_id))
+
+    async def _report_foreign_control(self, source_id: str) -> None:
+        """Repairs entry, logbook line and (once a day) a push."""
+        info = self.foreign_control.get(source_id)
+        if info is None:
+            return
+        valves = ", ".join(self._friendly_name(valve) for valve in info["valves"])
+        value = info["value"]
+        what = (
+            f"auf {float(value):g} °C gestellt".replace(".", ",")
+            if isinstance(value, int | float)
+            else f"verstellt ({value})"
+        )
+        kind = "Automation" if source_id.startswith("automation.") else "Skript"
+        text = f"{kind} „{info['name']}“ hat {valves} {what}"
+        _LOGGER.info("%s set the valves of %s: %s", source_id, self.room_name, value)
+        self._log(text)
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            _foreign_issue_id(self.entry_id, source_id),
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="foreign_control",
+            translation_placeholders={
+                "room": self.room_name,
+                "source": f"{kind} „{info['name']}“ ({source_id})",
+                "valves": valves,
+                "value": what,
+            },
+        )
+        now = dt_util.utcnow()
+        last = self._foreign_notified.get(source_id)
+        if last is None or (now - last).total_seconds() >= FOREIGN_CONTROL_NOTIFY_SECONDS:
+            self._foreign_notified[source_id] = now
+            await self._push_room(
+                f"{text}. Sie arbeitet gegen die Regelung dieses Raums – "
+                "bitte ausschalten, wenn sie nicht mehr gebraucht wird."
+            )
+
+    def _check_foreign_control(self, result: dict[str, Any]) -> None:
+        """Forget an automation once it is off (or a script after a day)."""
+        now = dt_util.utcnow()
+        for source_id in list(self.foreign_control):
+            info = self.foreign_control[source_id]
+            state = self.hass.states.get(source_id)
+            old = (now - info["at"]).total_seconds() >= FOREIGN_CONTROL_NOTIFY_SECONDS
+            if (
+                state is None
+                or (source_id.startswith("automation.") and state.state == "off")
+                or (not source_id.startswith("automation.") and old)
+            ):
+                del self.foreign_control[source_id]
+                ir.async_delete_issue(
+                    self.hass, DOMAIN, _foreign_issue_id(self.entry_id, source_id)
+                )
+        result["foreign_control"] = [
+            {
+                "source": source_id,
+                "name": info["name"],
+                "at": info["at"].isoformat(),
+                "valves": info["valves"],
+                "value": info["value"],
+            }
+            for source_id, info in self.foreign_control.items()
+        ]
 
     async def _async_notify_action(self, event) -> None:
         action = str(event.data.get("action") or "")
