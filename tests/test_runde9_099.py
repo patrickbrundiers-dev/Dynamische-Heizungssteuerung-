@@ -448,3 +448,55 @@ async def test_weather_does_not_stand_in_right_after_a_start(
     assert coordinator._outdoor_temperature() is None
     coordinator._started_at -= timedelta(minutes=11)
     assert coordinator._outdoor_temperature() == 10.2
+
+
+@pytest.mark.asyncio
+async def test_week_program_waits_until_the_valve_is_there(
+    hass, enable_custom_integrations
+):
+    from datetime import time as clock
+
+    from homeassistant.core import SupportsResponse
+
+    _tuya_valve(hass)
+    days = (
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+    )
+    _set_up_test_entities(hass)
+    state = hass.states.get("climate.living_room")
+    hass.states.async_set(
+        "climate.living_room",
+        "heat",
+        {**state.attributes, "hvac_modes": ["auto", "heat", "off"]},
+    )
+    _entry, coordinator = await _setup_integration(hass)
+    written = {}
+
+    async def get_schedule(call):
+        return {
+            "schedule.living_room_comfort": {
+                day: [{"from": clock(5, 30), "to": clock(6, 50)}] for day in days
+            }
+        }
+
+    async def set_value(call):
+        written[call.data["entity_id"]] = call.data["value"]
+
+    hass.services.async_register(
+        "schedule", "get_schedule", get_schedule,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register("text", "set_value", set_value)
+    coordinator.enabled = True
+    coordinator.config["valve_fallback"] = True
+    await coordinator._sync_valve_week_schedule()
+    assert written == {}
+    assert coordinator._week_written_at is None
+
+    for day in days:
+        hass.states.async_set(f"text.living_room_schedule_{day}", "old")
+    await coordinator._sync_valve_week_schedule()
+    assert written["text.living_room_schedule_monday"].startswith(
+        "00:00/18.0 05:30/"
+    )
+    assert len(written) == 7
