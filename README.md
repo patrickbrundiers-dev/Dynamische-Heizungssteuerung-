@@ -368,6 +368,21 @@ Ein frisch gelerntes Raummodell steuert nur das Vorheizen. Absenkungsgrenzen, �
 - **Raummodell lernt nur aus Stunden mit Wärme**: Stunden, in denen geheizt werden sollte, die Heizkörper aber kalt blieben, zählen nicht mehr. Bisher lernte das Modell daraus eine viel zu kleine Heizleistung und plante beim Vorheizen immer die volle Zeit. Ein mit 0.9.2 oder älter gelerntes Modell wird einmal verworfen und neu aus dem Recorder angelernt (dann mit den Gehäusetemperaturen).
 - **Wochenbericht**: nennt zusätzlich die geschätzte Ersparnis gegenüber Dauer-Komfort (aus der Temperaturdifferenz zu draußen, nach der sich der Wärmeverlust richtet), die Stunden mit kalten Heizkörpern trotz Heizbedarf und wie gut das Raummodell liegt.
 
+## Version 0.11.0: Zeitplan als Graph bearbeiten
+
+- **Zeitplan-Editor in der Raumkarte**: Die Taste *Zeitplan* in der Karte *Dynamische Heizung* klappt den Zeitplan des Raums als Graph auf. Gibt es mehrere Zeitpläne (z. B. *Kinderzimmer Schulfrei*), stehen sie oben zur Wahl, der gerade aktive hat einen grünen Punkt. Die Integration bleibt der einzige Regler: Bearbeitet wird der Zeitplan-Helfer selbst, wie unter *Einstellungen → Helfer*.
+- **Bedienung**: Tippen auf eine freie Stelle legt einen Block von 2 Stunden an. Block seitlich ziehen verschiebt ihn, nach oben oder unten ändert die Temperatur (in 0,5 °C), die Ränder ändern Anfang und Ende (in 15 Minuten). Ein angetippter Block lässt sich auch über Von/Bis, −/+ und *Löschen* einstellen; *Komforttemperatur* nimmt die eigene Temperatur wieder heraus. Ein Tag lässt sich auf Mo–Fr, Sa–So oder alle Tage kopieren. Erst *Speichern* schreibt den Zeitplan.
+- **Was der Graph zeigt**: Orange die Komfortblöcke mit ihrer Temperatur (aus den Zusatzdaten `temperature`, sonst die Komforttemperatur des Raums, markiert mit „K“), grau gestrichelt Eco dazwischen und blau die Raumtemperatur des gewählten Tages (heute oder der letzte gleiche Wochentag). Andere Zusatzdaten eines Blocks (z. B. Pausen) bleiben erhalten.
+- **Eigene Karte** *Dynamische Heizung – Zeitplan* für eine breite Ansicht, z. B. auf dem Tablet:
+
+  ```yaml
+  type: custom:dynamic-heating-schedule-card
+  entity: select.leonie_heizung_betriebsart
+  ```
+
+  Speichern dürfen nur Administratoren (wie im Helfer-Editor). Zeitpläne aus der YAML-Konfiguration werden nur angezeigt. Mit `schedule_editor: false` blendet die Raumkarte die Taste aus.
+- **Status-Sensor**: neue Attribute `schedules`, `active_schedule` und `eco_temperature`.
+
 ## Version 0.10.0: Übergabe zuhause, fremde Automationen, Gute Nacht, Schulfrei, Duschzeiten
 
 - **Kurze Übergabe ist nicht „alle weg“**: Die Wartezeit nach dem Verlassen ist jetzt 10 Minuten. Bisher stand sie auf 2 – gemeint waren Minuten, gelesen wurden Sekunden; Räume mit diesem alten Wert bekommen beim Update die 10 Minuten. Die Wartezeit gilt auch, wenn eine Person direkt in eine andere Zone wechselt (z. B. „Arbeit“). Während des Vorheizens zählt eine gerade gegangene Person 15 Minuten lang noch als zuhause, damit die schon eingesetzte Wärme nicht verloren geht.
