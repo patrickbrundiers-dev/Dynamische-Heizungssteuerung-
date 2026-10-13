@@ -1,7 +1,7 @@
 """0.9.9: the boiler's night pause, preheating that waits for it, mornings
 without heat, real night cooling, Tuya valves and a morning push."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -303,6 +303,14 @@ def test_tuya_day_has_six_points():
     )
     assert tuya_day_schedule([], 20.0, 18.0) == (
         "00:00/18.0 23:55/18.0 23:56/18.0 23:57/18.0 23:58/18.0 23:59/18.0"
+    )
+    # Inside Home Assistant the service answers with time objects.
+    native = [
+        {"from": time(5, 30), "to": time(6, 50)},
+        {"from": time(14, 30), "to": time(23, 59, 59)},
+    ]
+    assert tuya_day_schedule(native, 20.0, 18.0) == (
+        "00:00/18.0 05:30/20.0 06:50/18.0 14:30/20.0 23:58/20.0 23:59/20.0"
     )
     week = tuya_week_schedule({"monday": items}, 20.0, 18.0)
     assert set(week) == {

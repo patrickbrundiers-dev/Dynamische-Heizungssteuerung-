@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 # --- Punctuality --------------------------------------------------------------
 
@@ -448,6 +448,12 @@ TUYA_POINTS = 6
 
 
 def _minutes(raw: object) -> int | None:
+    if isinstance(raw, time):
+        # Inside Home Assistant schedule.get_schedule returns time objects;
+        # a block running to midnight ends at 23:59:59.
+        if raw >= time(23, 59, 59):
+            return 1440
+        return raw.hour * 60 + raw.minute
     if not isinstance(raw, str):
         return None
     parts = raw.split(":")
