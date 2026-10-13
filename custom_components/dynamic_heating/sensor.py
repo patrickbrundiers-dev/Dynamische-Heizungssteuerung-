@@ -487,6 +487,8 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "external_temperature_thermostats",
             "comfort_temperature",
             "schedule_comfort_temperature",
+            "eco_temperature",
+            "active_schedule",
             "boost_until",
             "valve_maintenance",
             "heating_limit_reached",
@@ -556,6 +558,12 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             key: self.coordinator.data[key]
             for key in diagnostic_keys
             if key in self.coordinator.data
+        } | {
+            # The room card's schedule editor offers these to edit.
+            "schedules": [
+                {"entity_id": entity_id, "name": name}
+                for entity_id, name in self.coordinator.schedule_options()
+            ]
         }
 
 
