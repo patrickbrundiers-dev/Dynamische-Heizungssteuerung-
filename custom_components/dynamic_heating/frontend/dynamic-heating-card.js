@@ -753,12 +753,15 @@ class DynamicHeatingScheduleCard extends HTMLElement {
       return;
     }
     const { low, high } = this._limits(this._block);
+    // The 15-minute grid plus the ends and the block's own time, so times like
+    // 05:10 from the helper editor show as they are.
     const options = (from, to, selected) => {
-      const list = [];
-      for (let minute = from; minute <= to; minute += STEP) {
-        list.push(`<option value="${minute}" ${minute === selected ? "selected" : ""}>${clock(minute)}</option>`);
+      const minutes = new Set([from, to, selected]);
+      for (let minute = Math.ceil(from / STEP) * STEP; minute <= to; minute += STEP) {
+        minutes.add(minute);
       }
-      return list.join("");
+      return [...minutes].sort((a, b) => a - b).map((minute) => `
+        <option value="${minute}" ${minute === selected ? "selected" : ""}>${clock(minute)}</option>`).join("");
     };
     const own = Number.isFinite(Number(block.data?.temperature));
     box.innerHTML = `
