@@ -160,6 +160,7 @@ from .const import (
     DEFAULT_VALVE_SENSOR_CALIBRATION,
     DEFAULT_HOLD_BEFORE_PAUSE,
     DEFAULT_MORNING_REPORT,
+    MODE_SWITCH_GRACE_SECONDS,
     MORNING_REPORT_HOUR,
     MORNING_REPORT_SHORTFALL,
     OUTDOOR_FALLBACK_GRACE_SECONDS,
@@ -674,6 +675,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._fallback_armed: list[str] = []
         # Tuya valves switched to their own week program on shutdown.
         self._fallback_auto: list[str] = []
+        # Valves switched back from their own program: when, per entity.
+        self._mode_switched_at: dict[str, datetime] = {}
         self._week_written_at: datetime | None = None
         self._week_written_key: tuple | None = None
         # Valve sensor calibration: (time, room minus raw valve reading).
@@ -1572,6 +1575,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if state.state != "auto" or await self._call(
                 "climate", "set_hvac_mode", {"entity_id": entity_id, "hvac_mode": "heat"}
             ):
+                if state.state == "auto":
+                    # Tuya valves take their stored manual setpoint on the
+                    # switch; that jump is not a turn of the knob.
+                    self._mode_switched_at[entity_id] = dt_util.utcnow()
                 self._fallback_auto.remove(entity_id)
                 if not self._fallback_auto:
                     self._log("Wochenprogramm der Ventile wieder ausgeschaltet")
@@ -2684,6 +2691,16 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False
         if abs(current - written.target) < 0.2:
             written.confirmed = True
+            return False
+        switched = self._mode_switched_at.get(entity_id)
+        if (
+            switched is not None
+            and (dt_util.utcnow() - switched).total_seconds()
+            < MODE_SWITCH_GRACE_SECONDS
+        ):
+            # The valve set its own value when its mode changed (13.10.:
+            # Bad 22 -> 20 °C right after "heat"): send the target again.
+            self._written.pop(entity_id, None)
             return False
         return written.confirmed
 
