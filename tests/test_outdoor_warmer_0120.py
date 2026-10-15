@@ -61,6 +61,8 @@ def test_warmer_outside_beats_comfort_with_frost_floor() -> None:
 def test_hand_picked_heating_and_windows_still_win() -> None:
     assert _decide(boost_temperature=24.0).mode == "boost"
     assert _decide(quick_mode=("quick_comfort", "Komfort", 21.0)).mode == "quick_comfort"
+    for mode in ("quick_sleep", "quick_home", "quick_activity", "learn_run"):
+        assert _decide(quick_mode=(mode, "von Hand", 21.0)).mode == mode
     assert _decide(window_open=True, window_temperature=15.0).mode == "window"
     assert _decide(heating_season=False).mode == "season_off"
     assert _decide(maintenance_temperature=30.0).mode == "maintenance"

@@ -149,7 +149,7 @@ def decide_heating_target(
         outdoor_warmer
         and not window_open
         and boost_temperature is None
-        and (quick_mode is None or quick_mode[0] not in _OUTDOOR_HAND_MODES)
+        and (quick_mode is None or not _picked_by_hand(quick_mode[0]))
     ):
         decision = HeatingDecision(
             "Außen wärmer als innen – nicht geheizt",
@@ -777,18 +777,12 @@ def calendar_temperature(description: object, key: str = "temperature") -> float
     return schedule_comfort_temperature(value.replace(",", "."))
 
 
-# Modes picked by hand: they still heat when it is warmer outside than in.
-_OUTDOOR_HAND_MODES = frozenset(
-    {
-        "quick_comfort",
-        "quick_eco",
-        "quick_away",
-        "quick_off",
-        "quick_manual",
-        "quick_maintenance",
-        "learn_run",
-    }
-)
+# Modes picked by hand (every quick_* preset and the calibration run) still
+# heat when it is warmer outside than in.
+def _picked_by_hand(mode: str) -> bool:
+    return mode.startswith("quick_") or mode == "learn_run"
+
+
 _OFF_WORDS = frozenset({"off", "aus", "false", "nein", "no", "0", "disabled"})
 _ON_WORDS = frozenset({"on", "an", "ein", "true", "ja", "yes", "1", "enabled"})
 
