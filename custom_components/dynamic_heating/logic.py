@@ -103,6 +103,7 @@ def decide_heating_target(
     setback_floor: float | None = None,
     household_present: bool = False,
     lead_bias_minutes: int = 0,
+    outdoor_warmer: bool = False,
 ) -> HeatingDecision:
     """Return the target and reason for the current conditions.
 
@@ -129,6 +130,9 @@ def decide_heating_target(
     although the room is empty: outside comfort time it is then preheated
     like an occupied room. ``lead_bias_minutes`` is the learned correction
     from mornings the room was warm too late (positive) or too early.
+    With ``outdoor_warmer`` it is warmer outside than in the room: the room
+    is not heated (like outside the heating season), unless a window is open
+    or heating was asked for by hand (boost, quick mode).
     """
     if maintenance_temperature is not None:
         return HeatingDecision(
@@ -138,6 +142,18 @@ def decide_heating_target(
         decision = HeatingDecision(
             "Heizperiode aus – nicht geheizt",
             "season_off",
+            off_temperature if off_temperature is not None else eco_temperature,
+            0,
+        )
+    elif (
+        outdoor_warmer
+        and not window_open
+        and boost_temperature is None
+        and (quick_mode is None or not _picked_by_hand(quick_mode[0]))
+    ):
+        decision = HeatingDecision(
+            "Außen wärmer als innen – nicht geheizt",
+            "outdoor_warm",
             off_temperature if off_temperature is not None else eco_temperature,
             0,
         )
@@ -369,6 +385,28 @@ def _decide(
         forecast_condition,
         solar_adjustment,
     )
+
+
+def evaluate_outdoor_warmer(
+    outdoor_temperature: float | None,
+    room_temperature: float | None,
+    currently_warmer: bool,
+    margin: float = 0.0,
+    hysteresis: float = 0.5,
+) -> bool:
+    """Return whether it is warm enough outside that the room needs no heat.
+
+    Reached once the outdoor temperature is at least the room temperature
+    minus ``margin``; released only ``hysteresis`` below that, so the room
+    does not toggle while both are about equal. Without either value the
+    room is heated as usual.
+    """
+    if outdoor_temperature is None or room_temperature is None:
+        return False
+    threshold = room_temperature - max(0.0, margin)
+    if outdoor_temperature >= threshold:
+        return True
+    return currently_warmer and outdoor_temperature > threshold - hysteresis
 
 
 def evaluate_heating_limit(
@@ -737,6 +775,12 @@ def calendar_temperature(description: object, key: str = "temperature") -> float
     if value is None:
         return None
     return schedule_comfort_temperature(value.replace(",", "."))
+
+
+# Modes picked by hand (every quick_* preset and the calibration run) still
+# heat when it is warmer outside than in.
+def _picked_by_hand(mode: str) -> bool:
+    return mode.startswith("quick_") or mode == "learn_run"
 
 
 _OFF_WORDS = frozenset({"off", "aus", "false", "nein", "no", "0", "disabled"})

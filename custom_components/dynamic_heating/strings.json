@@ -314,7 +314,9 @@
           "window_change": "Änderungen bei offenem Fenster",
           "heating_limit_average": "Heizgrenze nach dem Durchschnitt",
           "heating_limit_fallback_off": "Ohne Außentemperatur nicht heizen",
-          "notify_away": "Push, wenn niemand zuhause erkannt wird"
+          "notify_away": "Push, wenn niemand zuhause erkannt wird",
+          "outdoor_warmer_stop": "Nicht heizen, wenn es außen wärmer ist",
+          "outdoor_warmer_margin": "Außen wärmer: Puffer"
         },
         "data_description": {
           "window_entity": "EIN erzwingt Absenkung. Ist ein ausgewählter Fensterkontakt nicht verfügbar, wird kein neuer Sollwert geschrieben.",
@@ -339,7 +341,9 @@
           "window_change": "Wird bei offenem Fenster am Ventil oder am Raum-Thermostat etwas eingestellt, wird nie sofort geheizt. Der Wert wird gemerkt und gilt nach dem Schließen, oder er wird verworfen.",
           "heating_limit_average": "Entscheidend ist der Durchschnitt der Wettervorhersage für die nächsten zwei Tage, ohne Vorhersage der Durchschnitt des Außenfühlers der letzten zwei Tage. Ein warmer Nachmittag stellt die Heizung so nicht ab. Aus = aktuelle Außentemperatur.",
           "heating_limit_fallback_off": "Gibt es gar keine Außentemperatur, gilt die Heizgrenze als erreicht. Aus = wie bisher weiterheizen.",
-          "notify_away": "Mit Knopf „Stimmt nicht, ich bin da“. Nur ein Raum meldet das für das ganze Haus."
+          "notify_away": "Mit Knopf „Stimmt nicht, ich bin da“. Nur ein Raum meldet das für das ganze Haus.",
+          "outdoor_warmer_stop": "Im Wintermodus wird der Raum nicht geheizt, solange es außen (aktueller Wert des Außenfühlers, sonst der Wetter-Entität) mindestens so warm ist wie im Raum. Erst wenn es außen 0,5 °C kühler ist, wird wieder normal geheizt. Fenster, Frostschutz, Boost und Schnellwahl per Hand gehen vor.",
+          "outdoor_warmer_margin": "Um so viel darf es außen kälter sein als innen und trotzdem wird nicht geheizt. 0 = erst wenn außen mindestens so warm wie innen."
         }
       },
       "house_settings": {
