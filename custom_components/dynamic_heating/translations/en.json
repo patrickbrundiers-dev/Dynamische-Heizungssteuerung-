@@ -314,7 +314,9 @@
           "window_change": "Changes while a window is open",
           "heating_limit_average": "Heating limit by average",
           "heating_limit_fallback_off": "No heating without outdoor temperature",
-          "notify_away": "Push when nobody is detected at home"
+          "notify_away": "Push when nobody is detected at home",
+          "outdoor_warmer_stop": "No heating when it is warmer outside",
+          "outdoor_warmer_margin": "Warmer outside: margin"
         },
         "data_description": {
           "window_entity": "When ON, setback is enforced. If configured but unavailable, the controller avoids writing a new target.",
@@ -339,7 +341,9 @@
           "window_change": "A setpoint changed at a valve or the room thermostat while a window is open never heats right away. It is kept and applied once the window is closed, or discarded.",
           "heating_limit_average": "Uses the mean weather forecast of the next two days, without a forecast the mean of the outdoor sensor over the last two days, so one warm afternoon does not stop heating. Off = current outdoor temperature.",
           "heating_limit_fallback_off": "Without any outdoor temperature the heating limit counts as reached. Off = keep heating as before.",
-          "notify_away": "With a button \"Not true, I'm here\". One room sends it for the whole house."
+          "notify_away": "With a button \"Not true, I'm here\". One room sends it for the whole house.",
+          "outdoor_warmer_stop": "In the heating season the room is not heated while it is at least as warm outside (current outdoor sensor value, else the weather entity) as in the room. Normal heating resumes once it is 0.5 °C cooler outside. Windows, frost protection, boost and hand-picked quick modes take precedence.",
+          "outdoor_warmer_margin": "It may be this much colder outside than inside and the room is still not heated. 0 = only once it is at least as warm outside as inside."
         }
       },
       "house_settings": {

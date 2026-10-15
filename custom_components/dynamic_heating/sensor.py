@@ -494,6 +494,7 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "heating_limit_reached",
             "heating_limit_basis",
             "heating_limit_source",
+            "outdoor_warmer",
             "paused_features",
             "house_calendar",
             "skipped_valves",

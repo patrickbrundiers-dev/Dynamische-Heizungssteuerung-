@@ -40,6 +40,13 @@ OUTDOOR_HISTORY_MIN_SPAN_SECONDS: Final = 21600
 CONF_HEATING_LIMIT_FALLBACK_OFF: Final = "heating_limit_fallback_off"
 # The heating limit is released only this far below the limit.
 HEATING_LIMIT_HYSTERESIS: Final = 1.0
+# In the heating season: no heating while it is at least as warm outside as
+# in the room (minus the margin); heating resumes this far below again.
+CONF_OUTDOOR_WARMER_STOP: Final = "outdoor_warmer_stop"
+DEFAULT_OUTDOOR_WARMER_STOP: Final = True
+CONF_OUTDOOR_WARMER_MARGIN: Final = "outdoor_warmer_margin"
+DEFAULT_OUTDOOR_WARMER_MARGIN: Final = 0.0
+OUTDOOR_WARMER_HYSTERESIS: Final = 0.5
 # Window contact debounce (seconds) and optional own setpoint while open.
 CONF_WINDOW_OPEN_DELAY: Final = "window_open_delay"
 CONF_WINDOW_CLOSE_DELAY: Final = "window_close_delay"
@@ -542,6 +549,8 @@ SETTINGS_GROUPS: Final = {
         CONF_HEATING_LIMIT_TEMPERATURE,
         CONF_HEATING_LIMIT_AVERAGE,
         CONF_HEATING_LIMIT_FALLBACK_OFF,
+        CONF_OUTDOOR_WARMER_STOP,
+        CONF_OUTDOOR_WARMER_MARGIN,
         CONF_NOTIFY_SERVICE,
     ),
 }

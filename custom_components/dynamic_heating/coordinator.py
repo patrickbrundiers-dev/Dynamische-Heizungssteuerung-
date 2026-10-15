@@ -58,6 +58,8 @@ from .const import (
     CONF_FORCE_ECO_ENTITIES,
     CONF_HEATING_LIMIT_AVERAGE,
     CONF_HEATING_LIMIT_FALLBACK_OFF,
+    CONF_OUTDOOR_WARMER_MARGIN,
+    CONF_OUTDOOR_WARMER_STOP,
     CONF_HUMIDITY_ENTITY,
     CONF_MAINTENANCE_DURATION,
     CONF_MAINTENANCE_HOUR,
@@ -71,6 +73,8 @@ from .const import (
     DEFAULT_DOOR_OPEN_DELAY,
     DEFAULT_FOLLOW_HOUSE_CALENDAR,
     DEFAULT_HEATING_LIMIT_AVERAGE,
+    DEFAULT_OUTDOOR_WARMER_MARGIN,
+    DEFAULT_OUTDOOR_WARMER_STOP,
     DEFAULT_ZONE_WINDOW_CLOSE_DELAY,
     DEFAULT_ZONE_WINDOW_OPEN_DELAY,
     EVENT_DEVICE_TRIGGER,
@@ -78,6 +82,7 @@ from .const import (
     EXTERNAL_TEMPERATURE_PLATEAU_SECONDS,
     EXTERNAL_TEMPERATURE_PLATEAU_TOLERANCE,
     HEATING_LIMIT_AVERAGE_HOURS,
+    OUTDOOR_WARMER_HYSTERESIS,
     HEATING_LIMIT_MIN_FORECAST_POINTS,
     HUMIDITY_HIGH_PERCENT,
     HUMIDITY_HYSTERESIS,
@@ -315,6 +320,7 @@ from .logic import (
     schedule_comfort_temperature,
     decide_heating_target,
     evaluate_heating_limit,
+    evaluate_outdoor_warmer,
     evaluate_window_open,
     detect_temperature_drop,
     select_forecast_condition,
@@ -415,6 +421,7 @@ _REACH_MODES = frozenset({"comfort", "preheat", "boost", "away_reduced"})
 _NO_OFFSET_MODES = frozenset(
     {
         "season_off",
+        "outdoor_warm",
         "maintenance",
         "window",
         "quick_off",
@@ -503,6 +510,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._preheat_event: datetime | None = None
         # Kept between updates so the heating limit releases with hysteresis.
         self._heating_limit_reached = False
+        self._outdoor_warmer = False
         # Debounced window state, kept so the close delay can run out.
         self._window_open = False
         # Window detection from a temperature drop: recent room readings and
@@ -3179,7 +3187,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         failed = False
         # Outside the heating season the valve stays at its minimum, and
         # maintenance opens it fully: neither is calibrated or pushed.
-        calibrate = decision_mode not in ("season_off", "maintenance")
+        calibrate = decision_mode not in ("season_off", "outdoor_warm", "maintenance")
         sent = target
         band = self.config.get(CONF_AGGRESSIVE_RANGE)
         if calibrate and band is not None:
@@ -4017,7 +4025,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         room = result.get("room_temperature")
         demand = result.get("heat_demand")
         if (
-            result.get("mode") in ("window", "maintenance", "season_off")
+            result.get("mode") in ("window", "maintenance", "season_off", "outdoor_warm")
             or result.get("window_open")
         ):
             demand = 0
@@ -6271,6 +6279,25 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._heating_limit_reached,
                 HEATING_LIMIT_HYSTERESIS,
             )
+        if heating_season and not self._room_fallback and self.config.get(
+            CONF_OUTDOOR_WARMER_STOP, DEFAULT_OUTDOOR_WARMER_STOP
+        ):
+            # Judged by the current outdoor value, not the heating limit's
+            # average: a warm afternoon outside needs no heat inside.
+            self._outdoor_warmer = evaluate_outdoor_warmer(
+                outdoor_temperature,
+                room_temperature,
+                self._outdoor_warmer,
+                float(
+                    self.config.get(
+                        CONF_OUTDOOR_WARMER_MARGIN, DEFAULT_OUTDOOR_WARMER_MARGIN
+                    )
+                    or 0.0
+                ),
+                OUTDOOR_WARMER_HYSTERESIS,
+            )
+        else:
+            self._outdoor_warmer = False
 
         # Valve readings are not the room temperature: never learn from them.
         if not self._room_fallback:
@@ -6361,6 +6388,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 None if frost_value is None else float(frost_value)
             ),
             heating_season=heating_season,
+            outdoor_warmer=self._outdoor_warmer,
             off_temperature=off_temperature,
             boost_temperature=boost_temperature,
             maintenance_temperature=maintenance_temperature,
@@ -6517,6 +6545,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.quick_until.isoformat() if self.quick_until is not None else None
             ),
             "heating_limit_reached": self._heating_limit_reached,
+            "outdoor_warmer": self._outdoor_warmer,
             "heating_limit_basis": limit_basis,
             "heating_limit_source": limit_source,
             "paused_features": sorted(paused),

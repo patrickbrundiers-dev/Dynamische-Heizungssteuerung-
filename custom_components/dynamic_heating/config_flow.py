@@ -40,6 +40,8 @@ from .const import (
     CONF_FORCE_ECO_ENTITIES,
     CONF_HEATING_LIMIT_AVERAGE,
     CONF_HEATING_LIMIT_FALLBACK_OFF,
+    CONF_OUTDOOR_WARMER_MARGIN,
+    CONF_OUTDOOR_WARMER_STOP,
     CONF_HOUSE_CALENDAR,
     CONF_MAINTENANCE_DURATION,
     CONF_MAINTENANCE_HOUR,
@@ -53,6 +55,8 @@ from .const import (
     DEFAULT_DOOR_OPEN_DELAY,
     DEFAULT_FOLLOW_HOUSE_CALENDAR,
     DEFAULT_HEATING_LIMIT_AVERAGE,
+    DEFAULT_OUTDOOR_WARMER_MARGIN,
+    DEFAULT_OUTDOOR_WARMER_STOP,
     DEFAULT_ZONE_WINDOW_CLOSE_DELAY,
     DEFAULT_ZONE_WINDOW_OPEN_DELAY,
     MAINTENANCE_ANY_DAY,
@@ -957,6 +961,18 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             CONF_HEATING_LIMIT_FALLBACK_OFF,
             default=bool(current.get(CONF_HEATING_LIMIT_FALLBACK_OFF, False)),
         )] = selector.BooleanSelector()
+        schema[vol.Optional(
+            CONF_OUTDOOR_WARMER_STOP,
+            default=bool(
+                current.get(CONF_OUTDOOR_WARMER_STOP, DEFAULT_OUTDOOR_WARMER_STOP)
+            ),
+        )] = selector.BooleanSelector()
+        schema[vol.Optional(
+            CONF_OUTDOOR_WARMER_MARGIN,
+            default=float(
+                current.get(CONF_OUTDOOR_WARMER_MARGIN, DEFAULT_OUTDOOR_WARMER_MARGIN)
+            ),
+        )] = _degrees_selector(3, 0.5)
         schema[vol.Optional(CONF_NOTIFY_SERVICE)] = _notify_selector(self.hass)
         schema[
             vol.Optional(
@@ -1252,8 +1268,12 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             for key, default in (
                 (CONF_HEATING_LIMIT_AVERAGE, DEFAULT_HEATING_LIMIT_AVERAGE),
                 (CONF_HEATING_LIMIT_FALLBACK_OFF, False),
+                (CONF_OUTDOOR_WARMER_STOP, DEFAULT_OUTDOOR_WARMER_STOP),
             ):
                 current[key] = bool(user_input.get(key, default))
+            current[CONF_OUTDOOR_WARMER_MARGIN] = float(
+                user_input.get(CONF_OUTDOOR_WARMER_MARGIN, DEFAULT_OUTDOOR_WARMER_MARGIN)
+            )
             current[CONF_WINDOW_TEMPERATURE] = user_input.get(CONF_WINDOW_TEMPERATURE)
             current[CONF_WINDOW_DROP_DETECTION] = bool(
                 user_input.get(CONF_WINDOW_DROP_DETECTION, False)
