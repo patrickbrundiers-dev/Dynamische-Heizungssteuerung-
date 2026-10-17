@@ -435,3 +435,13 @@ def test_room_meter_does_not_fall_after_a_restart():
     assert sensor.native_value == 5.0
     coordinator.data = {"heat_energy_total": 5.3}
     assert sensor.native_value == 5.3
+
+
+def test_assist_never_blocks_setup_when_the_conversation_api_changes(hass):
+    from custom_components.dynamic_heating.assist import async_setup_assist
+
+    with patch(
+        "homeassistant.components.conversation.agent_manager.get_agent_manager",
+        side_effect=TypeError("changed"),
+    ):
+        assert async_setup_assist(hass) is None
