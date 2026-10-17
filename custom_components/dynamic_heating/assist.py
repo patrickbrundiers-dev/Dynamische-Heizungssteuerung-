@@ -308,6 +308,7 @@ def async_setup_assist(hass: HomeAssistant) -> CALLBACK_TYPE | None:
         )
         from homeassistant.components.conversation.trigger import TriggerDetails
     except ImportError:  # pragma: no cover - conversation is part of core
+        _LOGGER.warning("Fragen über Assist nicht verfügbar: Konversation fehlt")
         return None
 
     def handler(kind: str):
@@ -330,11 +331,20 @@ def async_setup_assist(hass: HomeAssistant) -> CALLBACK_TYPE | None:
 
         return handle
 
-    manager = get_agent_manager(hass)
-    removers = [
-        manager.register_trigger(TriggerDetails(sentences=sentences, callback=handler(kind)))
-        for kind, sentences in SENTENCES.items()
-    ]
+    try:
+        manager = get_agent_manager(hass)
+        removers = [
+            manager.register_trigger(
+                TriggerDetails(sentences=sentences, callback=handler(kind))
+            )
+            for kind, sentences in SENTENCES.items()
+        ]
+    except Exception:  # noqa: BLE001 - an internal API; never block setup
+        _LOGGER.warning(
+            "Fragen über Assist nicht verfügbar (Konversations-API geändert?)",
+            exc_info=True,
+        )
+        return None
 
     @callback
     def remove() -> None:
