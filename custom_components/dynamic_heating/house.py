@@ -191,7 +191,10 @@ class HouseManager:
         verdicts = dict(overrides or {})
         for room in self.rooms():
             if room.entry_id not in verdicts and room.enabled and room.data:
-                verdicts[room.entry_id] = room.data.get("radiator_supply")
+                # Only rooms asking for heat tell about the boiler.
+                verdicts[room.entry_id] = room.data.get(
+                    "supply_judged", room.data.get("radiator_supply")
+                )
         return house_supply(list(verdicts.values()))
 
     def supply_profile(self) -> SupplyProfile | None:
