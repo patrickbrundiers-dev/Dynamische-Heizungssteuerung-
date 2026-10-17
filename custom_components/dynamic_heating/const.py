@@ -687,3 +687,13 @@ PROXIMITY_SENSOR_KEYS: Final = (
     "proximity_approach_attempts",
     "proximity_confirmed_approaches",
 )
+
+# The room model drops an hour in which heat was asked for (from this heat
+# demand in %) while the boiler delivered nothing.
+MODEL_ASKING_DEMAND: Final = 50
+# The lowest setback that still gets the room warm in time changes only by
+# at least this much, so the status does not flicker between 19,2 and 19,3.
+SETBACK_FLOOR_STEP: Final = 0.2
+# A thermostat counts as unreachable only after this long: around a restart
+# every valve is unavailable for a moment.
+THERMOSTAT_UNREACHABLE_GRACE_SECONDS: Final = 180

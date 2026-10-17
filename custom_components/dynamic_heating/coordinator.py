@@ -147,6 +147,9 @@ from .const import (
     EXTERNAL_TEMPERATURE_VERIFY_SECONDS,
     EXTERNAL_TEMPERATURE_VERIFY_TOLERANCE,
     HEATING_WATCHDOG_GAP,
+    MODEL_ASKING_DEMAND,
+    SETBACK_FLOOR_STEP,
+    THERMOSTAT_UNREACHABLE_GRACE_SECONDS,
     HEATING_WATCHDOG_MIN_RISE,
     HEATING_WATCHDOG_SECONDS,
     IGNORED_PROBLEM_ENTITY_SUFFIXES,
@@ -351,8 +354,10 @@ from .radiator import (
     RadiatorTracker,
     RoomResponse,
     SupplyProfile,
+    IDLE,
     balance_verdict,
     combined_supply,
+    judged_supply,
     room_supply,
 )
 from .routine import (
@@ -711,6 +716,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._schedule_was_active: bool | None = None
         self._comfort_ended_at: datetime | None = None
         self._started_at = dt_util.utcnow()
+        self._setback_floor: float | None = None
+        # Thermostat -> since when it is unreachable.
+        self._unreachable_since: dict[str, datetime] = {}
         # Day (ISO) of the last comfort start told in the morning report.
         self._morning_reported: str | None = None
         self._comfort_started_at: datetime | None = None
@@ -2694,7 +2702,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for entity_id in self._thermostat_ids():
             found: list[str] = []
             if not self._valid(self.hass.states.get(entity_id)):
-                found.append("nicht erreichbar")
+                since = self._unreachable_since.setdefault(entity_id, dt_util.utcnow())
+                if (
+                    dt_util.utcnow() - since
+                ).total_seconds() >= THERMOSTAT_UNREACHABLE_GRACE_SECONDS:
+                    found.append("nicht erreichbar")
+            else:
+                self._unreachable_since.pop(entity_id, None)
             entry = registry.async_get(entity_id)
             device_entries = (
                 er.async_entries_for_device(registry, entry.device_id)
@@ -3277,8 +3291,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         again, so a room creeping up 0.1 °C an hour is caught too.
         """
         now = dt_util.utcnow()
+        last = self.data if isinstance(self.data, dict) else {}
+        # While the boiler delivers nothing (the whole house, or the usual
+        # night pause without a warm radiator here) the room cannot warm up;
+        # the house tells about the boiler itself.
+        boiler_off = last.get("radiator_supply") != SUPPLY_WARM and (
+            last.get("house_supply") == SUPPLY_COLD
+            or bool(last.get("supply_usually_off"))
+        )
         if (
             not watch
+            or boiler_off
             or target is None
             or target - room_temperature < HEATING_WATCHDOG_GAP
         ):
@@ -3412,23 +3435,38 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self.config.get(CONF_SHOWER_LEARNING, DEFAULT_SHOWER_LEARNING):
             return []
 
+        profile = self.supply_profile
+
+        def lead_start(minute: int) -> tuple[int, int | None]:
+            """Comfort start for a shower at ``minute``, and the hour the
+            boiler starts when it is later than the usual lead (heating
+            earlier would be in vain)."""
+            start = (minute - SHOWER_LEAD_MINUTES) % (24 * 60)
+            if not profile.usually_off(start // 60):
+                return start, None
+            on_hour = profile.next_on_hour(start // 60)
+            if on_hour is None or not start < on_hour * 60 <= minute:
+                return start, None
+            return on_hour * 60, on_hour
+
         def describe(when: str, clock: str, _label: str, days: int) -> str:
             hour, minute = (int(part) for part in clock.split(":"))
-            start = (hour * 60 + minute - SHOWER_LEAD_MINUTES) % (24 * 60)
-            return (
+            start, on_hour = lead_start(hour * 60 + minute)
+            text = (
                 f"{when} gegen {clock} Uhr wird geduscht ({days}× in "
                 f"{HABIT_DAYS // 7} Wochen) – Komfort im Bad ab "
                 f"{start // 60:02d}:{start % 60:02d} Uhr in den Zeitplan?"
             )
+            if on_hour is not None:
+                text += f" (die Zentralheizung liefert erst ab {on_hour}:00 Uhr)"
+            return text
 
         weekly = self._schedule_weekly.get(self.config.get(CONF_SCHEDULE_ENTITY) or "")
         return [
             item
             for item in self.showers.suggestions(now, describe)
             if not schedule_covers(
-                weekly,
-                item["weekend"],
-                (item["minute"] - SHOWER_LEAD_MINUTES) % (24 * 60),
+                weekly, item["weekend"], lead_start(item["minute"])[0]
             )
         ]
 
@@ -4050,16 +4088,23 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         result["room_response"] = response
         supply = combined_supply(room_supply(states), response)
+        asking = response != IDLE or any(
+            tracker.heating_since is not None
+            for entity_id, tracker in self._radiators.items()
+            if entity_id in sensors
+        )
+        judged = judged_supply(supply, asking)
+        result["supply_judged"] = judged
         now = dt_util.utcnow()
         local = dt_util.as_local(now)
         seconds = (
             0.0 if self._supply_at is None else (now - self._supply_at).total_seconds()
         )
         self._supply_at = now
-        learned = self.supply.observe(local.hour, supply, seconds)
+        learned = self.supply.observe(local.hour, judged, seconds)
         house = self._house()
         house_verdict = (
-            None if house is None else house.supply_verdict({self.entry_id: supply})
+            None if house is None else house.supply_verdict({self.entry_id: judged})
         )
         if SUPPLY_COLD not in (supply, house_verdict):
             # Without hot water in the house, cold radiators say nothing
@@ -4236,6 +4281,18 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._model_collector.reset()
             return False
         solar_kw, wind = self._weather_inputs()
+        radiators = result.get("radiator_supply")
+        # Heat asked for while the boiler delivers nothing (the house says so,
+        # or it is the usual night pause and nothing here got warm): such an
+        # hour shows the boiler, not the room.
+        no_heat = radiators == SUPPLY_COLD or (
+            float(demand) >= MODEL_ASKING_DEMAND
+            and radiators != SUPPLY_WARM
+            and (
+                result.get("house_supply") == SUPPLY_COLD
+                or bool(result.get("supply_usually_off"))
+            )
+        )
         sample = self._model_collector.observe(
             dt_util.utcnow().timestamp(),
             float(room),
@@ -4243,8 +4300,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             float(outdoor),
             solar_kw,
             wind,
-            result.get("radiator_supply") == SUPPLY_COLD,
-            result.get("radiator_supply") == SUPPLY_WARM,
+            no_heat,
+            radiators == SUPPLY_WARM,
         )
         return sample is not None and self.room_model.add(
             *sample, warm=self._model_collector.last_warm
@@ -6364,6 +6421,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             setback_floor = self._recovery_floor(
                 event_view, comfort_temperature, room_temperature, max_preheat * 60
             )
+            previous = self._setback_floor
+            if (
+                previous is not None
+                and abs(setback_floor - previous) < SETBACK_FLOOR_STEP - 1e-9
+            ):
+                setback_floor = previous
+        self._setback_floor = setback_floor
         decision = decide_heating_target(
             now=dt_util.now(),
             schedule_active=schedule_active,

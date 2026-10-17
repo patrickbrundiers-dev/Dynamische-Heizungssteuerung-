@@ -60,6 +60,9 @@ class RadiatorTracker:
     warm_at: float | None = None
     peak: float | None = None
     reported: bool = False
+    # A new reading arrived since heating started: a valve that reported
+    # "warm" long ago (it reports rarely while idle) proves nothing before.
+    fresh: bool = False
     # A period that just ended (or ran long enough), to be picked up once.
     period: HeatingPeriod | None = None
 
@@ -93,19 +96,23 @@ class RadiatorTracker:
             self.warm_at = None
             self.peak = None
             self.reported = False
+            self.fresh = False
         elif self.heating_since is None:
             self.heating_since = at
             self.baseline = device
+            self.fresh = False
         elif self.baseline is None:
             self.baseline = device
         if heating and device is not None and self.baseline is not None:
+            if device != self.baseline:
+                self.fresh = True
             rise = device - self.baseline
             self.peak = rise if self.peak is None else max(self.peak, rise)
         if heating and at - (self.heating_since or at) >= PERIOD_MAX_SECONDS:
             self._report(at)
         if device is None or room is None:
             return UNKNOWN
-        if device >= room + WARM_ABOVE_ROOM or (
+        if (device >= room + WARM_ABOVE_ROOM and (not heating or self.fresh)) or (
             self.baseline is not None and device - self.baseline >= WARM_RISE
         ):
             if heating and self.warm_at is None:
@@ -205,6 +212,17 @@ class RoomResponse:
         return WAITING
 
 
+def judged_supply(supply: str | None, asking: bool) -> str | None:
+    """The room's verdict as evidence about the central heating.
+
+    Only a room asking for heat says something about the boiler: an idle
+    room's valve may still read warm from hours ago.
+    """
+    if asking or supply is None:
+        return supply
+    return SUPPLY_IDLE
+
+
 def combined_supply(radiators: str | None, response: str) -> str | None:
     """The room's verdict from its radiators and its own warming.
 
@@ -242,8 +260,10 @@ def house_supply(verdicts: list[str | None]) -> str | None:
 SUPPLY_ALPHA = 0.3
 # Raised when the way the profile is learned changes: older profiles are
 # dropped. 2: the room's own warming counts (valve housings alone took a
-# boiler pause at night for delivery).
-SUPPLY_VERSION = 2
+# boiler pause at night for delivery). 3: only rooms asking for heat count,
+# a warm reading from before heating started does not (idle valves showed
+# the night pause as delivery).
+SUPPLY_VERSION = 3
 SUPPLY_MIN_SECONDS = 1200
 SUPPLY_OFF_BELOW = 0.3
 SUPPLY_ON_FROM = 0.5

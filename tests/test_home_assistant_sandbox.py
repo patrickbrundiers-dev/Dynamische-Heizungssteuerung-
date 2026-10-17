@@ -1849,6 +1849,10 @@ async def test_thermostat_problems_are_reported(hass, enable_custom_integrations
         "climate.living_room_trv",
         "climate.living_room_3",
     ]
+    # Unreachable counts only after a grace time (0.12.1: restarts).
+    coordinator._unreachable_since["climate.living_room_3"] = (
+        dt_util.utcnow() - timedelta(minutes=5)
+    )
     await coordinator.async_refresh()
     await hass.async_block_till_done()
 
