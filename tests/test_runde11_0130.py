@@ -407,3 +407,31 @@ async def test_assist_sentences(hass, enable_custom_integrations, sentence, star
     )
     speech = result.response.speech["plain"]["speech"]
     assert speech.startswith(start.format(room=room)), speech
+
+
+def test_house_meter_keeps_a_higher_total_when_a_room_restarts_behind():
+    from custom_components.dynamic_heating.sensor import HouseEnergySensor
+
+    room = SimpleNamespace(
+        room_name="Bad", entry_id="bad", data={"heat_energy_total": 4.8}
+    )
+    house = SimpleNamespace(rooms=lambda: [room])
+    sensor = HouseEnergySensor(house, SimpleNamespace(entry_id="house"), "heat_energy")
+    sensor._totals["bad"] = 5.0  # restored from before the restart
+    assert sensor.native_value == 5.0
+    room.data = {"heat_energy_total": 5.2}
+    assert sensor.native_value == 5.2
+
+
+def test_room_meter_does_not_fall_after_a_restart():
+    from custom_components.dynamic_heating.sensor import SENSORS, HeatEnergySensor
+
+    description = next(item for item in SENSORS if item.key == "heat_energy_total")
+    coordinator = SimpleNamespace(data={"heat_energy_total": 4.8})
+    sensor = HeatEnergySensor.__new__(HeatEnergySensor)
+    sensor.coordinator = coordinator
+    sensor.entity_description = description
+    sensor._floor = 5.0
+    assert sensor.native_value == 5.0
+    coordinator.data = {"heat_energy_total": 5.3}
+    assert sensor.native_value == 5.3

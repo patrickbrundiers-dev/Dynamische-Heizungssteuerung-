@@ -902,7 +902,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         hours = week["heating_s"] / 3600
         parts = [f"{hours:.0f} h geheizt".replace(".", ",")]
         today = dt_util.now().date()
-        energy = self.heat_stats.energy_between(today - timedelta(days=7), today)
+        energy = self.heat_stats.energy_between(today - timedelta(days=6), today)
         if energy >= 0.5:
             parts.append(f"ca. {energy:.0f} kWh Wärme (geschätzt)")
         if week["temperature_s"]:

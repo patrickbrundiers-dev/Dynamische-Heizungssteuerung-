@@ -410,6 +410,12 @@ async def async_setup_entry(
     entities: list[SensorEntity] = [
         HeatingSensor(coordinator, entry, description) for description in SENSORS
     ]
+    entities = [
+        HeatEnergySensor(coordinator, entry, description)
+        if description.key == "heat_energy_total"
+        else entity
+        for description, entity in zip(SENSORS, entities, strict=True)
+    ]
     entities.append(DayPlanSensor(coordinator, entry, DAY_PLAN))
     async_add_entities(entities)
 
@@ -587,6 +593,33 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
                 for entity_id, name in self.coordinator.schedule_options()
             ]
         }
+
+
+class HeatEnergySensor(HeatingSensor, RestoreEntity):
+    """The room's heat meter; never shows less than before a restart.
+
+    The room's total is saved every 15 minutes, so after a restart it can be
+    a little behind the last shown value; a falling meter would count as a
+    new one in the statistics.
+    """
+
+    _floor = 0.0
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        try:
+            self._floor = float(last.state) if last is not None else 0.0
+        except ValueError:
+            self._floor = 0.0
+
+    @property
+    def native_value(self) -> float | None:
+        value = super().native_value
+        if value is None:
+            return None
+        self._floor = max(self._floor, float(value))
+        return round(self._floor, 2)
 
 
 DAY_PLAN = HeatingSensorDescription(
@@ -777,7 +810,12 @@ class HouseEnergySensor(HouseEntity, SensorEntity, RestoreEntity):
             data = room.data
             if data and data.get("heat_energy_total") is not None:
                 rooms[room.room_name] = data
-                self._totals[room.entry_id] = float(data["heat_energy_total"])
+                # A room's own total can restart a little behind (it is saved
+                # every 15 minutes); the house total must not fall with it.
+                self._totals[room.entry_id] = max(
+                    self._totals.get(room.entry_id, 0.0),
+                    float(data["heat_energy_total"]),
+                )
         return rooms
 
     @property
