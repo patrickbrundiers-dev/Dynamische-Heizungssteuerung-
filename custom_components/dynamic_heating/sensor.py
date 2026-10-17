@@ -15,6 +15,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     EntityCategory,
+    UnitOfEnergy,
     UnitOfLength,
     UnitOfTemperature,
     UnitOfTime,
@@ -22,6 +23,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
@@ -320,6 +322,15 @@ SENSORS = (
         suggested_display_precision=2,
     ),
     HeatingSensorDescription(
+        key="heat_energy_total",
+        name="Wärmemenge",
+        icon="mdi:radiator",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=1,
+    ),
+    HeatingSensorDescription(
         key="solar_gain",
         name="Sonnengewinn je kW/m²",
         icon="mdi:white-balance-sunny",
@@ -386,6 +397,7 @@ async def async_setup_entry(
             HouseHeatDemandSensor(entry.runtime_data, entry, "heat_demand"),
             HouseSupplySensor(entry.runtime_data, entry, "central_heating"),
             HouseGeofenceSensor(entry.runtime_data, entry, "geofencing"),
+            HouseEnergySensor(entry.runtime_data, entry, "heat_energy"),
         ])
         return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
@@ -450,6 +462,15 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             return {
                 "preheat_correction_minutes": data.get("punctuality_bias"),
                 "mornings": data.get("punctuality_results"),
+            }
+        if self.entity_description.key == "heat_energy_total":
+            data = self.coordinator.data
+            return {
+                "today_kwh": data.get("heat_energy_today"),
+                "yesterday_kwh": data.get("heat_energy_yesterday"),
+                "last_7_days_kwh": data.get("heat_energy_7_days"),
+                "radiator_power_w": data.get("radiator_power_w"),
+                "estimated": True,
             }
         if self.entity_description.key == "schedule_suggestion":
             return {"suggestions": self.coordinator.data.get("schedule_suggestions")}
@@ -718,4 +739,68 @@ class HouseOverviewSensor(HouseEntity, SensorEntity):
             ),
             "rooms": rooms,
             "problems": [room["room"] for room in rooms if room["problem"]],
+        }
+
+
+class HouseEnergySensor(HouseEntity, SensorEntity, RestoreEntity):
+    """Estimated heat of all rooms, e.g. as gas source of the energy dashboard.
+
+    Each room's last total is kept (also over restarts): a room still starting
+    or reloading would otherwise make the sum drop, which the statistics take
+    for a new meter and count twice.
+    """
+
+    _attr_name = "Wärmemenge"
+    _attr_icon = "mdi:radiator"
+    _attr_should_poll = True
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, *args: Any) -> None:
+        super().__init__(*args)
+        self._totals: dict[str, float] = {}
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        stored = last.attributes.get("room_totals") if last is not None else None
+        if isinstance(stored, dict):
+            for entry_id, value in stored.items():
+                if isinstance(value, (int, float)) and value >= 0:
+                    self._totals[str(entry_id)] = float(value)
+
+    def _rooms(self) -> dict[str, dict[str, Any]]:
+        rooms = {}
+        for room in self.house.rooms():
+            data = room.data
+            if data and data.get("heat_energy_total") is not None:
+                rooms[room.room_name] = data
+                self._totals[room.entry_id] = float(data["heat_energy_total"])
+        return rooms
+
+    @property
+    def native_value(self) -> float | None:
+        self._rooms()
+        if not self._totals:
+            return None
+        return round(sum(self._totals.values()), 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rooms = self._rooms()
+
+        def total(key: str) -> float:
+            return round(sum(data.get(key) or 0.0 for data in rooms.values()), 2)
+
+        return {
+            "today_kwh": total("heat_energy_today"),
+            "yesterday_kwh": total("heat_energy_yesterday"),
+            "last_7_days_kwh": total("heat_energy_7_days"),
+            "rooms_last_7_days_kwh": {
+                name: data.get("heat_energy_7_days") for name, data in rooms.items()
+            },
+            "room_totals": dict(self._totals),
+            "estimated": True,
         }

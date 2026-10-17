@@ -158,6 +158,9 @@ from .const import (
     CONF_PREHEAT_EXTENSION,
     CONF_PUNCTUALITY,
     CONF_VALVE_FALLBACK,
+    CONF_RADIATOR_POWER,
+    RADIATOR_POWER_PER_THERMOSTAT_W,
+    SAVINGS_DAYS,
     CONF_VALVE_SENSOR_CALIBRATION,
     CONF_HOLD_BEFORE_PAUSE,
     CONF_MORNING_REPORT,
@@ -378,6 +381,9 @@ from .plan import (
     Block,
     blocks_from_schedule,
     blocks_switched_at,
+    compare_plans,
+    shifted_blocks,
+    savings_text,
     simulate,
     summary as plan_summary,
     temperature_at,
@@ -895,6 +901,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         week = self._week
         hours = week["heating_s"] / 3600
         parts = [f"{hours:.0f} h geheizt".replace(".", ",")]
+        today = dt_util.now().date()
+        energy = self.heat_stats.energy_between(today - timedelta(days=7), today)
+        if energy >= 0.5:
+            parts.append(f"ca. {energy:.0f} kWh Wärme (geschätzt)")
         if week["temperature_s"]:
             average = week["temperature_sum"] / week["temperature_s"]
             parts.append(f"Ø {average:.1f} °C".replace(".", ","))
@@ -3898,6 +3908,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def room_name(self) -> str:
         return self._room_name()
 
+    @property
+    def radiator_power_w(self) -> int:
+        """Output of the room's radiators at full demand (for the heat meter)."""
+        configured = int(self.config.get(CONF_RADIATOR_POWER) or 0)
+        if configured > 0:
+            return configured
+        return RADIATOR_POWER_PER_THERMOSTAT_W * max(1, len(self._thermostat_ids()))
+
     def _house_target(
         self,
         *,
@@ -4802,6 +4820,100 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         info["text"] = str(info.get("text") or "")[:250]
         return points, info
 
+    async def async_estimate_savings(
+        self,
+        *,
+        comfort: float | None = None,
+        eco: float | None = None,
+        shift_minutes: int = 0,
+    ) -> dict[str, Any]:
+        """Spar-Rechner: the next days with other temperatures or times.
+
+        Both variants are replayed on the learned room model like the day
+        plan (schedule, central heating's pauses, weather forecast); presence,
+        windows and the sun are left out. Nothing is changed.
+        """
+        result = self.data or {}
+        room = result.get("room_temperature")
+        outdoor = result.get("outdoor_temperature")
+        base_comfort = float(
+            self.config.get(CONF_COMFORT_TEMPERATURE, DEFAULT_COMFORT_TEMPERATURE)
+        )
+        base_eco = float(self.config.get(CONF_ECO_TEMPERATURE, DEFAULT_ECO_TEMPERATURE))
+        new_comfort = base_comfort if comfort is None else float(comfort)
+        new_eco = base_eco if eco is None else float(eco)
+        answer: dict[str, Any] = {
+            "room": self.room_name,
+            "comfort": base_comfort,
+            "eco": base_eco,
+            "new_comfort": new_comfort,
+            "new_eco": new_eco,
+            "shift_minutes": int(shift_minutes),
+        }
+        if new_eco >= new_comfort:
+            answer["text"] = "Eco muss unter der Komforttemperatur liegen."
+            return answer
+        view = self._model_view(None if outdoor is None else float(outdoor), 0.0, 0.0)
+        if room is None or outdoor is None:
+            answer["text"] = "Raum- oder Außentemperatur fehlt – keine Rechnung möglich."
+            return answer
+        if view is None:
+            answer["text"] = "Das Raummodell lernt noch – der Spar-Rechner folgt."
+            return answer
+        now = dt_util.utcnow()
+        local = dt_util.as_local(now)
+        days = SAVINGS_DAYS
+        schedule_id = self.active_schedule or ""
+        blocks = await self._schedule_blocks(now)
+        weekly = self._schedule_weekly.get(schedule_id)
+        if schedule_id.startswith("schedule.") and isinstance(weekly, dict):
+            blocks = blocks_from_schedule(
+                weekly, local, schedule_comfort_temperature, hours=days * 24
+            )
+        else:
+            days = 1
+        if blocks is None:
+            answer["text"] = "Zeitplan nicht lesbar – keine Rechnung möglich."
+            return answer
+        delta = new_comfort - base_comfort
+        new_blocks = shifted_blocks(
+            [
+                Block(
+                    block.start,
+                    block.end,
+                    None if block.temperature is None else block.temperature + delta,
+                )
+                for block in blocks
+            ],
+            int(shift_minutes),
+        )
+        profile = self.supply_profile
+        settings = {
+            "view": view,
+            "now": local,
+            "room": float(room),
+            "outdoor_at": self._outdoor_at(float(outdoor)),
+            "supply_off": lambda at: profile.usually_off(dt_util.as_local(at).hour),
+            "max_preheat_minutes": int(
+                self.config.get(CONF_MAX_PREHEAT_MINUTES, DEFAULT_MAX_PREHEAT_MINUTES)
+            )
+            + self._preheat_extension_minutes(),
+            "hours": days * 24,
+            "lead_bias_minutes": self._lead_bias(),
+        }
+        base = simulate(comfort=base_comfort, eco=base_eco, blocks=blocks, **settings)
+        other = simulate(
+            comfort=new_comfort, eco=new_eco, blocks=new_blocks, **settings
+        )
+        comparison = compare_plans(base, blocks, other, new_blocks, local)
+        power_kw = self.radiator_power_w / 1000
+        answer.update(comparison)
+        answer["days"] = days
+        answer["base_kwh"] = round(comparison["base_full_load_hours"] * power_kw, 1)
+        answer["kwh"] = round(comparison["full_load_hours"] * power_kw, 1)
+        answer["text"] = savings_text(answer)
+        return answer
+
     def plan_attributes(self) -> dict[str, Any]:
         """The day plan for dashboards: times, target and expected temperature."""
         return {
@@ -5305,8 +5417,25 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Punctuality and long-term figures; True when a morning was judged."""
         now = dt_util.now()
         demand = result.get("heat_demand") if self.enabled else None
-        self.heat_stats.observe(now, demand, result.get("outdoor_temperature"))
+        self.heat_stats.observe(
+            now,
+            demand,
+            result.get("outdoor_temperature"),
+            power_kw=self.radiator_power_w / 1000,
+            supplied=SUPPLY_COLD
+            not in (result.get("radiator_supply"), result.get("house_supply")),
+        )
         result["heating_hours_total"] = round(self.heat_stats.heating_hours, 2)
+        today = now.date()
+        result["heat_energy_total"] = round(self.heat_stats.energy_kwh, 2)
+        result["heat_energy_today"] = self.heat_stats.energy_between(today, today)
+        result["heat_energy_yesterday"] = self.heat_stats.energy_between(
+            today - timedelta(days=1), today - timedelta(days=1)
+        )
+        result["heat_energy_7_days"] = self.heat_stats.energy_between(
+            today - timedelta(days=6), today
+        )
+        result["radiator_power_w"] = self.radiator_power_w
         result["degree_days_total"] = round(self.heat_stats.degree_days, 2)
         result["hours_per_degree_day"] = self.heat_stats.hours_per_degree_day(
             now.date()

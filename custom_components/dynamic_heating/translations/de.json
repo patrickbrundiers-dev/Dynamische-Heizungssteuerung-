@@ -177,7 +177,8 @@
           "aggressive_range": "Aggressiv-Modus: Bereich (°C, optional)",
           "aggressive_offset": "Aggressiv-Modus: Versatz",
           "valve_fallback": "Notprogramm im Ventil beim Herunterfahren",
-          "valve_sensor_calibration": "Ventilfühler auf Raumtemperatur kalibrieren"
+          "valve_sensor_calibration": "Ventilfühler auf Raumtemperatur kalibrieren",
+          "radiator_power": "Heizkörperleistung für den Wärmezähler"
         },
         "data_description": {
           "calibration": "Das Thermostat misst direkt am Heizkörper. Ist dies aktiv, wird sein Sollwert um die Differenz zwischen Thermostat- und Raumtemperatur verschoben (wie die zieltemperaturbasierte Kalibrierung von Better Thermostat), damit es nach dem Raumfühler regelt. Die Abweichung wird höchstens alle 10 Minuten neu berechnet. Nicht einschalten, wenn das gewählte Thermostat bereits ein Better-Thermostat ist.",
@@ -193,7 +194,8 @@
           "aggressive_range": "Liegt der Raum um mehr als diesen Wert unter oder über dem Soll, wird Soll plus bzw. minus Versatz gesendet, damit träge Ventile deutlich öffnen oder schließen. Leer lassen zum Abschalten.",
           "aggressive_offset": "Um so viel wird der gesendete Sollwert außerhalb des Bereichs angehoben oder abgesenkt.",
           "valve_fallback": "Beim Herunterfahren von Home Assistant bekommen Ventile mit eigenem Zeitplan (z. B. Aqara E1) die Komfort- und Eco-Zeiten von heute und regeln auf ihren eigenen Fühler. Nach dem Start schaltet die Integration das wieder aus. Bei Stromausfall oder Absturz greift es nicht.",
-          "valve_sensor_calibration": "Für Ventile ohne Eingang für die Raumtemperatur (z. B. Tuya): die Integration stellt die Kalibrierung im Ventil so ein, dass es ungefähr die Raumtemperatur misst. Wichtig für das Notprogramm im Ventil."
+          "valve_sensor_calibration": "Für Ventile ohne Eingang für die Raumtemperatur (z. B. Tuya): die Integration stellt die Kalibrierung im Ventil so ein, dass es ungefähr die Raumtemperatur misst. Wichtig für das Notprogramm im Ventil.",
+          "radiator_power": "Leistung aller Heizkörper des Raums bei voll offenem Ventil, z. B. vom Typenschild oder Datenblatt (bei Zentralheizung eher 60 % der Normleistung). 0 = geschätzt mit 1000 W je Thermostat. Der Wärmezähler ist eine Schätzung, kein geeichter Zähler."
         }
       },
       "modes": {
@@ -448,6 +450,30 @@
       "window_opened": "Fenster geöffnet (nach Verzögerung)",
       "window_closed": "Fenster geschlossen (nach Verzögerung)",
       "humidity_high": "Luftfeuchte hoch (ab 60 %)"
+    }
+  },
+  "services": {
+    "estimate_savings": {
+      "name": "Spar-Rechner",
+      "description": "Rechnet mit dem gelernten Raummodell aus, was andere Temperaturen oder Zeiten in den nächsten 7 Tagen an Wärme sparen und ob der Raum trotzdem pünktlich warm ist. Ändert nichts.",
+      "fields": {
+        "entity_id": {
+          "name": "Raum",
+          "description": "Eine Entität des Raums, z. B. seine Betriebsart."
+        },
+        "comfort_temperature": {
+          "name": "Komforttemperatur",
+          "description": "Neue Komforttemperatur (leer = wie jetzt). Block-Temperaturen im Zeitplan verschieben sich um denselben Betrag."
+        },
+        "eco_temperature": {
+          "name": "Eco-Temperatur",
+          "description": "Neue Eco-Temperatur (leer = wie jetzt)."
+        },
+        "shift_minutes": {
+          "name": "Komfortbeginn verschieben",
+          "description": "Minuten, die jede Komfortzeit später (positiv) oder früher (negativ) beginnt."
+        }
+      }
     }
   }
 }

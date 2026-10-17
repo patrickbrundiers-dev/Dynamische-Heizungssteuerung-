@@ -177,7 +177,8 @@
           "aggressive_range": "Aggressive mode: range (°C, optional)",
           "aggressive_offset": "Aggressive mode: offset",
           "valve_fallback": "Fallback schedule in the valve on shutdown",
-          "valve_sensor_calibration": "Calibrate the valve sensor to the room temperature"
+          "valve_sensor_calibration": "Calibrate the valve sensor to the room temperature",
+          "radiator_power": "Radiator output for the heat meter"
         },
         "data_description": {
           "calibration": "The thermostat measures right at the radiator. When enabled, its setpoint is shifted by the difference between thermostat and room temperature (like Better Thermostat's target-temperature calibration) so it regulates on the room sensor. The difference is recomputed at most every 10 minutes. Do not enable when the selected thermostat already is a Better Thermostat.",
@@ -193,7 +194,8 @@
           "aggressive_range": "When the room is more than this below or above the target, target plus or minus the offset is sent so sluggish valves open or close decisively. Leave empty to turn off.",
           "aggressive_offset": "How far the sent setpoint is raised or lowered outside the range.",
           "valve_fallback": "When Home Assistant shuts down, valves with their own schedule (e.g. Aqara E1) get today's comfort and eco times and use their own sensor. After the start this is switched off again. Does not help on power loss or a crash.",
-          "valve_sensor_calibration": "For valves without an input for the room temperature (e.g. Tuya): the integration sets the valve's own calibration so it reads about the room temperature. Matters for the fallback schedule in the valve."
+          "valve_sensor_calibration": "For valves without an input for the room temperature (e.g. Tuya): the integration sets the valve's own calibration so it reads about the room temperature. Matters for the fallback schedule in the valve.",
+          "radiator_power": "Output of all radiators of the room with fully open valves, e.g. from the data sheet. 0 = estimated at 1000 W per thermostat. The heat meter is an estimate, not a calibrated meter."
         }
       },
       "modes": {
@@ -448,6 +450,30 @@
       "window_opened": "Window opened (after delay)",
       "window_closed": "Window closed (after delay)",
       "humidity_high": "Humidity high (60 % or more)"
+    }
+  },
+  "services": {
+    "estimate_savings": {
+      "name": "Savings calculator",
+      "description": "Uses the learned room model to work out how much heat other temperatures or times would save over the next 7 days and whether the room is still warm on time. Changes nothing.",
+      "fields": {
+        "entity_id": {
+          "name": "Room",
+          "description": "Any entity of the room, e.g. its operating mode."
+        },
+        "comfort_temperature": {
+          "name": "Comfort temperature",
+          "description": "New comfort temperature (empty = as now). Block temperatures of the schedule move by the same amount."
+        },
+        "eco_temperature": {
+          "name": "Eco temperature",
+          "description": "New eco temperature (empty = as now)."
+        },
+        "shift_minutes": {
+          "name": "Shift comfort start",
+          "description": "Minutes each comfort time starts later (positive) or earlier (negative)."
+        }
+      }
     }
   }
 }

@@ -88,6 +88,7 @@ from .const import (
     CONF_PREHEAT_EXTENSION,
     CONF_PUNCTUALITY,
     CONF_VALVE_FALLBACK,
+    CONF_RADIATOR_POWER,
     CONF_VALVE_SENSOR_CALIBRATION,
     CONF_HOLD_BEFORE_PAUSE,
     CONF_MANUAL_MAX_DURATION,
@@ -103,6 +104,7 @@ from .const import (
     DEFAULT_PREHEAT_EXTENSION,
     DEFAULT_PUNCTUALITY,
     DEFAULT_VALVE_FALLBACK,
+    DEFAULT_RADIATOR_POWER,
     DEFAULT_VALVE_SENSOR_CALIBRATION,
     DEFAULT_HOLD_BEFORE_PAUSE,
     DEFAULT_MORNING_REPORT,
@@ -799,6 +801,14 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                     )
                 ),
             ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_RADIATOR_POWER,
+                default=int(current.get(CONF_RADIATOR_POWER, DEFAULT_RADIATOR_POWER)),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0, max=10000, step=50, mode="box", unit_of_measurement="W"
+                )
+            ),
         })
 
     def _modes_schema(self, current: dict) -> vol.Schema:
@@ -1128,6 +1138,9 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 user_input.get(
                     CONF_VALVE_SENSOR_CALIBRATION, DEFAULT_VALVE_SENSOR_CALIBRATION
                 )
+            )
+            current[CONF_RADIATOR_POWER] = int(
+                user_input.get(CONF_RADIATOR_POWER, DEFAULT_RADIATOR_POWER) or 0
             )
             return await self.async_step_init()
         return self._show_step("valves", self._valves_schema(current), current)
