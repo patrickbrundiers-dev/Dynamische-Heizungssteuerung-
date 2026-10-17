@@ -415,22 +415,33 @@ STATS_MAX_GAP_SECONDS = 900
 
 @dataclass(slots=True)
 class HeatStats:
-    """Running totals of full-load heating hours and degree days."""
+    """Running totals of full-load heating hours, degree days and heat."""
 
     heating_hours: float = 0.0
     degree_days: float = 0.0
-    # Per local day: [full-load hours, degree days].
+    # Estimated heat given off by the radiators in kWh.
+    energy_kwh: float = 0.0
+    # Per local day: [full-load hours, degree days, kWh].
     days: dict[str, list[float]] = field(default_factory=dict)
     last_at: datetime | None = None
     last_demand: float | None = None
     last_outdoor: float | None = None
+    last_power_kw: float = 0.0
+    last_supplied: bool = True
 
     def observe(
-        self, now: datetime, demand: float | None, outdoor: float | None
+        self,
+        now: datetime,
+        demand: float | None,
+        outdoor: float | None,
+        power_kw: float = 0.0,
+        supplied: bool = True,
     ) -> None:
         """Add the time since the last cycle at the previous readings.
 
-        ``now`` is local time, ``demand`` the heat demand in % (0..100).
+        ``now`` is local time, ``demand`` the heat demand in % (0..100),
+        ``power_kw`` the radiators' output at full demand and ``supplied``
+        False while they stay cold (no heat although the valves are open).
         """
         if self.last_at is not None:
             seconds = (now - self.last_at).total_seconds()
@@ -441,17 +452,35 @@ class HeatStats:
                     hours = max(0.0, min(self.last_demand, 100.0)) / 100 * seconds / 3600
                 if self.last_outdoor is not None and self.last_outdoor < DEGREE_LIMIT:
                     degrees = (DEGREE_INDOOR - self.last_outdoor) * seconds / 86400
+                energy = hours * self.last_power_kw if self.last_supplied else 0.0
                 self.heating_hours = round(self.heating_hours + hours, 4)
                 self.degree_days = round(self.degree_days + degrees, 4)
-                day = self.days.setdefault(self.last_at.date().isoformat(), [0.0, 0.0])
+                self.energy_kwh = round(self.energy_kwh + energy, 4)
+                day = self.days.setdefault(
+                    self.last_at.date().isoformat(), [0.0, 0.0, 0.0]
+                )
                 day[0] = round(day[0] + hours, 4)
                 day[1] = round(day[1] + degrees, 4)
+                day[2] = round(day[2] + energy, 4)
                 if len(self.days) > STATS_DAYS:
                     for key in sorted(self.days)[: len(self.days) - STATS_DAYS]:
                         del self.days[key]
         self.last_at = now
         self.last_demand = demand
         self.last_outdoor = outdoor
+        self.last_power_kw = max(0.0, power_kw)
+        self.last_supplied = supplied
+
+    def energy_between(self, first: date, last: date) -> float:
+        """Estimated kWh of the local days ``first`` to ``last``."""
+        total = 0.0
+        day = first
+        while day <= last:
+            item = self.days.get(day.isoformat())
+            if item is not None:
+                total += item[2]
+            day += timedelta(days=1)
+        return round(total, 2)
 
     def hours_per_degree_day(self, today: date) -> float | None:
         """Full-load hours per degree day over the last complete days."""
@@ -470,6 +499,7 @@ class HeatStats:
         return {
             "heating_hours": self.heating_hours,
             "degree_days": self.degree_days,
+            "energy_kwh": self.energy_kwh,
             "days": {key: list(value) for key, value in self.days.items()},
         }
 
@@ -478,7 +508,7 @@ class HeatStats:
         result = cls()
         if not isinstance(data, dict):
             return result
-        for key in ("heating_hours", "degree_days"):
+        for key in ("heating_hours", "degree_days", "energy_kwh"):
             value = data.get(key)
             if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:
                 setattr(result, key, float(value))
@@ -488,10 +518,13 @@ class HeatStats:
                 if (
                     isinstance(key, str)
                     and isinstance(value, list)
-                    and len(value) == 2
+                    and len(value) in (2, 3)
                     and all(isinstance(item, (int, float)) for item in value)
                 ):
-                    result.days[key] = [float(value[0]), float(value[1])]
+                    # Days before the heat meter (0.13.0) have no kWh.
+                    result.days[key] = [float(item) for item in value] + [0.0] * (
+                        3 - len(value)
+                    )
         return result
 
 

@@ -52,6 +52,8 @@ class PlanPoint:
     preheat: bool
     # The central heating usually delivers nothing at this time.
     supply_off: bool = False
+    # Share of full heat output the room takes in this step (0..1).
+    demand: float = 0.0
 
 
 def _parse_time(raw: object) -> time | None:
@@ -88,7 +90,7 @@ def blocks_from_schedule(
         return []
     end_of_plan = now + timedelta(hours=hours)
     blocks: list[Block] = []
-    for offset in (-1, 0, 1):
+    for offset in range(-1, hours // 24 + 2):
         day = (now + timedelta(days=offset)).date()
         items = weekly.get(_WEEKDAYS[day.weekday()]) or []
         if not isinstance(items, list):
@@ -202,12 +204,10 @@ def simulate(
             # open in vain; preheating goes on once it delivers again.
             target, preheat = eco, False
         heating = not off and temperature < target - 0.05
-        points.append(
-            PlanPoint(
-                at, round(target, 1), round(temperature, 2), heating, preheat, off
-            )
-        )
+        demand = 0.0
+        start_temperature = temperature
         if heating:
+            demand = 1.0
             temperature = min(
                 weather.temperature_after(temperature, step_hours, 1.0), target
             )
@@ -217,12 +217,39 @@ def simulate(
                 # Without heat (or above the target) the room cools, but with
                 # the central heating on it never falls below the target.
                 temperature = cooled if off else max(cooled, target)
+                if not off and cooled < target:
+                    demand = _hold_demand(weather, target) * (
+                        (target - cooled) / max(start_temperature - cooled, 0.01)
+                    )
             else:
                 # At the target: the valves hold it if the radiators can.
                 hold = weather.rate(target, 1.0) >= 0
                 temperature = target if hold else cooled
+                if hold:
+                    demand = _hold_demand(weather, target)
+        points.append(
+            PlanPoint(
+                at,
+                round(target, 1),
+                round(start_temperature, 2),
+                heating,
+                preheat,
+                off,
+                round(min(1.0, max(0.0, demand)), 3),
+            )
+        )
         at += step
     return points
+
+
+def _hold_demand(view: ModelView, target: float) -> float:
+    """Share of full output that keeps the room at ``target``."""
+    if view.heat_output <= 0:
+        return 0.0
+    needed = view.effective_loss * (target - view.outdoor) - (
+        view.solar_gain * view.solar_kw
+    )
+    return min(1.0, max(0.0, needed / view.heat_output))
 
 
 def _clock(moment: datetime) -> str:
@@ -315,3 +342,150 @@ def temperature_at(points: list[PlanPoint], at: datetime) -> float | None:
     if best is None or abs((best.at - at).total_seconds()) > STEP_MINUTES * 60:
         return None
     return best.temperature
+
+
+# --- What-if: the same days with other temperatures or times ------------------
+
+# Within this of the target counts as warm.
+WARM_MARGIN = 0.2
+
+
+def shifted_blocks(blocks: list[Block], minutes: int) -> list[Block]:
+    """Blocks starting ``minutes`` later (earlier when negative), same end."""
+    if not minutes:
+        return list(blocks)
+    shift = timedelta(minutes=minutes)
+    return [
+        Block(block.start + shift, block.end, block.temperature)
+        for block in blocks
+        if block.start + shift < block.end
+    ]
+
+
+def full_load_hours(points: list[PlanPoint]) -> float:
+    """Heat the plan takes, in hours of full radiator output."""
+    return sum(point.demand for point in points[:-1]) * STEP_MINUTES / 60
+
+
+def warm_delays(
+    points: list[PlanPoint], blocks: list[Block], now: datetime
+) -> list[int | None]:
+    """Per comfort block ahead: minutes after its start until the room is
+    warm (0 = on time), None when it does not get warm within the block."""
+    delays: list[int | None] = []
+    end_of_plan = points[-1].at if points else now
+    for block in blocks:
+        if block.start <= now or block.start >= end_of_plan:
+            continue
+        delay: int | None = None
+        for point in points:
+            if point.at < block.start:
+                continue
+            if point.at >= block.end:
+                break
+            if point.temperature >= point.target - WARM_MARGIN:
+                delay = round((point.at - block.start).total_seconds() / 60)
+                break
+        delays.append(delay)
+    return delays
+
+
+def compare_plans(
+    base: list[PlanPoint],
+    base_blocks: list[Block],
+    other: list[PlanPoint],
+    other_blocks: list[Block],
+    now: datetime,
+) -> dict:
+    """Heat and punctuality of ``other`` compared with ``base``."""
+    base_hours = full_load_hours(base)
+    other_hours = full_load_hours(other)
+    saving = (
+        round(1 - other_hours / base_hours, 3) if base_hours > 0.05 else None
+    )
+
+    def punctuality(delays: list[int | None]) -> dict:
+        reached = [delay for delay in delays if delay is not None]
+        return {
+            "blocks": len(delays),
+            "missed": len(delays) - len(reached),
+            "average_delay_minutes": (
+                round(sum(reached) / len(reached)) if reached else None
+            ),
+            "late": sum(1 for delay in reached if delay > STEP_MINUTES),
+        }
+
+    return {
+        "base_full_load_hours": round(base_hours, 2),
+        "full_load_hours": round(other_hours, 2),
+        "saving": saving,
+        "base_punctuality": punctuality(warm_delays(base, base_blocks, now)),
+        "punctuality": punctuality(warm_delays(other, other_blocks, now)),
+    }
+
+
+def _kwh(value: float) -> str:
+    return f"{value:.0f}" if value >= 10 else _degrees(value)
+
+
+def savings_text(answer: dict) -> str:
+    """One or two sentences for the Spar-Rechner (see ``compare_plans``)."""
+    changes = []
+    if answer["new_eco"] != answer["eco"]:
+        changes.append(
+            f"Eco {_degrees(answer['new_eco'])} statt {_degrees(answer['eco'])} °C"
+        )
+    if answer["new_comfort"] != answer["comfort"]:
+        changes.append(
+            f"Komfort {_degrees(answer['new_comfort'])} statt "
+            f"{_degrees(answer['comfort'])} °C"
+        )
+    shift = answer.get("shift_minutes") or 0
+    if shift:
+        changes.append(
+            f"Komfort {abs(shift)} Minuten {'später' if shift > 0 else 'früher'}"
+        )
+    period = "in 7 Tagen" if answer.get("days", 1) >= 7 else "in 24 Stunden"
+    if not changes:
+        return (
+            f"So wie jetzt eingestellt braucht der Raum {period} etwa "
+            f"{_kwh(answer['base_kwh'])} kWh."
+        )
+    saving = answer.get("saving")
+    if saving is None:
+        effect = "kaum Heizbedarf in dieser Zeit, keine Ersparnis messbar"
+    else:
+        difference = abs(answer["base_kwh"] - answer["kwh"])
+        if saving >= 0.005:
+            effect = (
+                f"ca. {round(saving * 100)} % weniger Wärme (etwa {_kwh(difference)} kWh "
+                f"weniger {period})"
+            )
+        elif saving <= -0.005:
+            effect = (
+                f"ca. {round(-saving * 100)} % mehr Wärme (etwa {_kwh(difference)} kWh "
+                f"mehr {period})"
+            )
+        else:
+            effect = "kaum Unterschied beim Verbrauch"
+    base = answer["base_punctuality"]
+    other = answer["punctuality"]
+    if other["missed"] > base["missed"]:
+        warm = (
+            f"An {other['missed']} von {other['blocks']} Komfortzeiten wird es "
+            f"nicht ganz warm (bisher {base['missed']})."
+        )
+    elif (
+        other["average_delay_minutes"] is not None
+        and base["average_delay_minutes"] is not None
+        and other["average_delay_minutes"] - base["average_delay_minutes"] >= 10
+    ):
+        warm = (
+            f"Warm wird es im Schnitt {other['average_delay_minutes']} Minuten "
+            f"nach Komfortbeginn (bisher {base['average_delay_minutes']})."
+        )
+    elif other["blocks"] and other["missed"] == 0 and other["late"] == 0:
+        warm = "Trotzdem pünktlich warm."
+    else:
+        warm = "Warm wie bisher."
+    return f"{', '.join(changes)}: {effect}. {warm}"

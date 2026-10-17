@@ -290,11 +290,13 @@ def test_week_summary_names_saving_and_cold_hours():
     from custom_components.dynamic_heating.coordinator import (
         DynamicHeatingCoordinator,
     )
+    from custom_components.dynamic_heating.routine import HeatStats
 
     class Room:
         room_name = "Wohnzimmer"
         room_model = RoomModel()
         config = {}
+        heat_stats = HeatStats()
         _week = {
             **DynamicHeatingCoordinator._empty_week(),
             "heating_s": 36000.0,

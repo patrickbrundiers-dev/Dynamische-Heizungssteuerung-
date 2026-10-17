@@ -28,7 +28,12 @@ const SUFFIXES = {
   heatingProblem: "_heizproblem",
   thermostatProblem: "_thermostat_problem",
   demand: "_warmebedarf",
+  comfort: "_komforttemperatur",
+  eco: "_eco_temperatur",
+  energy: "_warmemenge",
 };
+// Spar-Rechner: how much later (or earlier) comfort may start.
+const SHIFTS = [-30, -15, 0, 15, 30, 60];
 const DAYS = [
   ["monday", "Mo"], ["tuesday", "Di"], ["wednesday", "Mi"], ["thursday", "Do"],
   ["friday", "Fr"], ["saturday", "Sa"], ["sunday", "So"],
@@ -95,7 +100,9 @@ function findRelated(hass, config) {
   for (const [key, suffix] of Object.entries(SUFFIXES)) {
     found[key] = candidates.find((id) => id.endsWith(suffix)
       && (key !== "status" || id.startsWith("sensor."))
-      && (key !== "duration" || id.startsWith("select.")));
+      && (key !== "duration" || id.startsWith("select."))
+      && (!["comfort", "eco"].includes(key) || id.startsWith("number."))
+      && (key !== "energy" || id.startsWith("sensor.")));
   }
   let name = config.name;
   if (!name && deviceId) {
@@ -417,6 +424,83 @@ class DynamicHeatingScheduleCard extends HTMLElement {
     }
     this._touch();
     this._message = "Kopiert. Zum Übernehmen noch speichern.";
+  }
+
+  _toggleSavings(related) {
+    this._showSavings = !this._showSavings;
+    this._savingsAnswer = null;
+    if (!this._showSavings) {
+      this._savingsBox.innerHTML = "";
+      this._render();
+      return;
+    }
+    const value = (id) => {
+      const state = id ? this._hass.states[id] : undefined;
+      return state && !isNaN(Number(state.state)) ? Number(state.state) : "";
+    };
+    this._savingsBox.innerHTML = `
+      <div class="hint">Spar-Rechner: rechnet die nächsten 7 Tage mit dem gelernten Raummodell durch. Es wird nichts geändert, bis du auf „Übernehmen“ tippst.</div>
+      <label>Eco-Temperatur <input type="number" step="0.5" min="5" max="30" name="eco" value="${value(related.eco)}"></label>
+      <label>Komforttemperatur <input type="number" step="0.5" min="5" max="30" name="comfort" value="${value(related.comfort)}"></label>
+      <label>Komfortbeginn <select name="shift">${SHIFTS.map((minutes) => `
+        <option value="${minutes}" ${minutes === 0 ? "selected" : ""}>${minutes === 0 ? "wie im Zeitplan" : `${Math.abs(minutes)} min ${minutes > 0 ? "später" : "früher"}`}</option>`).join("")}
+      </select></label>
+      <div class="row"><button data-action="savings-run">Rechnen</button></div>
+      <div class="answer"></div>`;
+    this._render();
+  }
+
+  _savingsInput() {
+    const read = (name) => this._savingsBox.querySelector(`[name="${name}"]`)?.value;
+    const data = { shift_minutes: Number(read("shift") || 0) };
+    if (read("eco") !== "") data.eco_temperature = Number(read("eco"));
+    if (read("comfort") !== "") data.comfort_temperature = Number(read("comfort"));
+    return data;
+  }
+
+  async _runSavings(related) {
+    const box = this._savingsBox.querySelector(".answer");
+    if (!box) return;
+    box.textContent = "Wird gerechnet …";
+    const input = this._savingsInput();
+    try {
+      const result = await this._hass.callWS({
+        type: "call_service",
+        domain: "dynamic_heating",
+        service: "estimate_savings",
+        service_data: { entity_id: this._config.entity, ...input },
+        return_response: true,
+      });
+      this._savingsAnswer = { input, response: result.response };
+      const response = result.response || {};
+      const changed = (response.new_eco !== response.eco || response.new_comfort !== response.comfort)
+        && related.eco && related.comfort;
+      box.innerHTML = `<div>${escape(response.text || "Keine Antwort.")}</div>
+        ${changed ? '<div class="row"><button data-action="savings-apply">Übernehmen</button></div>' : ""}
+        ${input.shift_minutes ? '<div class="hint">Die Zeiten änderst du im Zeitplan.</div>' : ""}`;
+    } catch (err) {
+      box.textContent = `Rechnen ging nicht: ${err?.message || err}`;
+    }
+  }
+
+  async _applySavings(related) {
+    const answer = this._savingsAnswer?.response;
+    if (!answer) return;
+    const box = this._savingsBox.querySelector(".answer");
+    try {
+      // Lower eco first and raise comfort last, so eco stays below comfort.
+      const steps = [];
+      if (answer.new_eco !== answer.eco) steps.push([related.eco, answer.new_eco]);
+      if (answer.new_comfort !== answer.comfort) steps.push([related.comfort, answer.new_comfort]);
+      if (answer.new_eco > answer.eco) steps.reverse();
+      for (const [entity, value] of steps) {
+        await this._hass.callService("number", "set_value", { entity_id: entity, value });
+      }
+      if (box) box.innerHTML = '<div>Übernommen.</div>';
+      this._savingsAnswer = null;
+    } catch (err) {
+      if (box) box.textContent = `Übernehmen ging nicht: ${err?.message || err}`;
+    }
   }
 
   _click(event) {
@@ -823,10 +907,16 @@ class DynamicHeatingCard extends HTMLElement {
           .foot .info { flex: 1 1 auto; }
           .toggle { flex: 0 0 auto; }
           .missing { padding: 8px; }
-          .schedule:not(:empty) { border-top: 1px solid var(--divider-color); margin-top: 12px; padding-top: 8px; }
+          .schedule:not(:empty), .savings:not(:empty) { border-top: 1px solid var(--divider-color); margin-top: 12px; padding-top: 8px; }
+          .savings label { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 6px 0; }
+          .savings input, .savings select { width: 7em; font: inherit; padding: 4px 6px; border-radius: 6px;
+            border: 1px solid var(--divider-color); background: var(--card-background-color); color: var(--primary-text-color); }
+          .savings .answer { margin: 8px 0; line-height: 1.4; }
+          .savings .hint { color: var(--secondary-text-color); font-size: 0.85em; }
         </style>
-        <ha-card><div class="main"></div><div class="schedule"></div></ha-card>`;
+        <ha-card><div class="main"></div><div class="savings"></div><div class="schedule"></div></ha-card>`;
       this._main = this.shadowRoot.querySelector(".main");
+      this._savingsBox = this.shadowRoot.querySelector(".savings");
       this._scheduleBox = this.shadowRoot.querySelector(".schedule");
       this.shadowRoot.addEventListener("click", (event) => this._click(event));
     }
@@ -862,6 +952,83 @@ class DynamicHeatingCard extends HTMLElement {
     this._render();
   }
 
+  _toggleSavings(related) {
+    this._showSavings = !this._showSavings;
+    this._savingsAnswer = null;
+    if (!this._showSavings) {
+      this._savingsBox.innerHTML = "";
+      this._render();
+      return;
+    }
+    const value = (id) => {
+      const state = id ? this._hass.states[id] : undefined;
+      return state && !isNaN(Number(state.state)) ? Number(state.state) : "";
+    };
+    this._savingsBox.innerHTML = `
+      <div class="hint">Spar-Rechner: rechnet die nächsten 7 Tage mit dem gelernten Raummodell durch. Es wird nichts geändert, bis du auf „Übernehmen“ tippst.</div>
+      <label>Eco-Temperatur <input type="number" step="0.5" min="5" max="30" name="eco" value="${value(related.eco)}"></label>
+      <label>Komforttemperatur <input type="number" step="0.5" min="5" max="30" name="comfort" value="${value(related.comfort)}"></label>
+      <label>Komfortbeginn <select name="shift">${SHIFTS.map((minutes) => `
+        <option value="${minutes}" ${minutes === 0 ? "selected" : ""}>${minutes === 0 ? "wie im Zeitplan" : `${Math.abs(minutes)} min ${minutes > 0 ? "später" : "früher"}`}</option>`).join("")}
+      </select></label>
+      <div class="row"><button data-action="savings-run">Rechnen</button></div>
+      <div class="answer"></div>`;
+    this._render();
+  }
+
+  _savingsInput() {
+    const read = (name) => this._savingsBox.querySelector(`[name="${name}"]`)?.value;
+    const data = { shift_minutes: Number(read("shift") || 0) };
+    if (read("eco") !== "") data.eco_temperature = Number(read("eco"));
+    if (read("comfort") !== "") data.comfort_temperature = Number(read("comfort"));
+    return data;
+  }
+
+  async _runSavings(related) {
+    const box = this._savingsBox.querySelector(".answer");
+    if (!box) return;
+    box.textContent = "Wird gerechnet …";
+    const input = this._savingsInput();
+    try {
+      const result = await this._hass.callWS({
+        type: "call_service",
+        domain: "dynamic_heating",
+        service: "estimate_savings",
+        service_data: { entity_id: this._config.entity, ...input },
+        return_response: true,
+      });
+      this._savingsAnswer = { input, response: result.response };
+      const response = result.response || {};
+      const changed = (response.new_eco !== response.eco || response.new_comfort !== response.comfort)
+        && related.eco && related.comfort;
+      box.innerHTML = `<div>${escape(response.text || "Keine Antwort.")}</div>
+        ${changed ? '<div class="row"><button data-action="savings-apply">Übernehmen</button></div>' : ""}
+        ${input.shift_minutes ? '<div class="hint">Die Zeiten änderst du im Zeitplan.</div>' : ""}`;
+    } catch (err) {
+      box.textContent = `Rechnen ging nicht: ${err?.message || err}`;
+    }
+  }
+
+  async _applySavings(related) {
+    const answer = this._savingsAnswer?.response;
+    if (!answer) return;
+    const box = this._savingsBox.querySelector(".answer");
+    try {
+      // Lower eco first and raise comfort last, so eco stays below comfort.
+      const steps = [];
+      if (answer.new_eco !== answer.eco) steps.push([related.eco, answer.new_eco]);
+      if (answer.new_comfort !== answer.comfort) steps.push([related.comfort, answer.new_comfort]);
+      if (answer.new_eco > answer.eco) steps.reverse();
+      for (const [entity, value] of steps) {
+        await this._hass.callService("number", "set_value", { entity_id: entity, value });
+      }
+      if (box) box.innerHTML = '<div>Übernommen.</div>';
+      this._savingsAnswer = null;
+    } catch (err) {
+      if (box) box.textContent = `Übernehmen ging nicht: ${err?.message || err}`;
+    }
+  }
+
   _click(event) {
     // Clicks inside the schedule editor are handled there.
     if (this._editor && event.composedPath().includes(this._editor)) return;
@@ -877,6 +1044,12 @@ class DynamicHeatingCard extends HTMLElement {
       this._call("switch", "toggle", { entity_id: related.enabled });
     } else if (action === "schedule") {
       this._toggleSchedule();
+    } else if (action === "savings") {
+      this._toggleSavings(related);
+    } else if (action === "savings-run") {
+      this._runSavings(related);
+    } else if (action === "savings-apply") {
+      this._applySavings(related);
     } else if (action === "more") {
       const moreInfo = new Event("hass-more-info", { bubbles: true, composed: true });
       moreInfo.detail = { entityId: value };
@@ -899,6 +1072,7 @@ class DynamicHeatingCard extends HTMLElement {
     const room = state(related.room)?.state;
     const target = state(related.target)?.state ?? attributes.target_temperature;
     const demand = state(related.demand)?.state;
+    const energy = state(related.energy)?.attributes?.today_kwh;
     const duration = state(related.duration);
     const enabled = state(related.enabled)?.state === "on";
     const problem = state(related.heatingProblem)?.state === "on"
@@ -942,7 +1116,8 @@ class DynamicHeatingCard extends HTMLElement {
       ${durationButtons ? `<div class="row">${durationButtons}</div>` : ""}
       ${valveRows}
       <div class="foot">
-        <span class="info">${next ? `Nächster Wechsel ${next} Uhr` : ""}${demand !== undefined ? ` · Wärmebedarf ${number(demand, 0)} %` : ""}</span>
+        <span class="info">${next ? `Nächster Wechsel ${next} Uhr` : ""}${demand !== undefined ? ` · Wärmebedarf ${number(demand, 0)} %` : ""}${energy !== undefined && energy !== null ? ` · heute ca. ${number(energy)} kWh` : ""}</span>
+        ${related.eco ? `<button class="toggle chip ${this._showSavings ? "active" : ""}" data-action="savings">Sparen?</button>` : ""}
         ${scheduleButton ? `<button class="toggle chip ${this._showSchedule ? "active" : ""}" data-action="schedule">Zeitplan</button>` : ""}
         ${related.enabled ? `<button class="toggle chip ${enabled ? "active" : ""}" data-action="toggle">${enabled ? "Regelung an" : "Regelung aus"}</button>` : ""}
       </div>`;
@@ -960,7 +1135,7 @@ if (!window.customCards.some((card) => card.type === "dynamic-heating-card")) {
   window.customCards.push({
     type: "dynamic-heating-card",
     name: "Dynamische Heizung",
-    description: "Raumkarte mit Ist/Soll, Betriebsart, Dauer, Ventilen, Regelung und Zeitplan.",
+    description: "Raumkarte mit Ist/Soll, Betriebsart, Dauer, Ventilen, Regelung, Zeitplan und Spar-Rechner.",
   });
 }
 if (!window.customCards.some((card) => card.type === "dynamic-heating-schedule-card")) {

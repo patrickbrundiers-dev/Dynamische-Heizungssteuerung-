@@ -697,3 +697,13 @@ SETBACK_FLOOR_STEP: Final = 0.2
 # A thermostat counts as unreachable only after this long: around a restart
 # every valve is unavailable for a moment.
 THERMOSTAT_UNREACHABLE_GRACE_SECONDS: Final = 180
+
+# Runde 11 (0.13.0)
+# Output of the room's radiators at full demand in W, for the heat meter;
+# 0 = estimated from the number of thermostats.
+CONF_RADIATOR_POWER: Final = "radiator_power"
+DEFAULT_RADIATOR_POWER: Final = 0
+RADIATOR_POWER_PER_THERMOSTAT_W: Final = 1000
+# Spar-Rechner: days simulated for a what-if.
+SAVINGS_DAYS: Final = 7
+SERVICE_ESTIMATE_SAVINGS: Final = "estimate_savings"

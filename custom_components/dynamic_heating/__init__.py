@@ -6,7 +6,15 @@ from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
-from homeassistant.core import Event, HomeAssistant
+import voluptuous as vol
+from homeassistant.core import (
+    Event,
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+)
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -25,7 +33,9 @@ from .const import (
     HOUSE_DATA_KEY,
     HOUSE_PLATFORMS,
     PLATFORMS,
+    SERVICE_ESTIMATE_SAVINGS,
 )
+from .assist import async_setup_assist
 from .coordinator import DynamicHeatingCoordinator
 from .house import HouseManager
 
@@ -35,8 +45,57 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 CARD_URL = "/dynamic_heating/dynamic-heating-card.js"
 
 
+SAVINGS_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Optional("comfort_temperature"): vol.All(
+            vol.Coerce(float), vol.Range(min=5, max=30)
+        ),
+        vol.Optional("eco_temperature"): vol.All(
+            vol.Coerce(float), vol.Range(min=5, max=30)
+        ),
+        vol.Optional("shift_minutes", default=0): vol.All(
+            vol.Coerce(int), vol.Range(min=-240, max=240)
+        ),
+    }
+)
+
+
+def _room_of(hass: HomeAssistant, entity_id: str) -> DynamicHeatingCoordinator:
+    """The room an entity of the integration belongs to."""
+    entry = er.async_get(hass).async_get(entity_id)
+    room = (
+        hass.data.get(DOMAIN, {}).get(entry.config_entry_id)
+        if entry is not None and entry.config_entry_id
+        else None
+    )
+    if not isinstance(room, DynamicHeatingCoordinator):
+        raise ServiceValidationError(
+            f"{entity_id} gehört zu keinem Raum der Dynamischen Heizung."
+        )
+    return room
+
+
+async def _estimate_savings(call: ServiceCall) -> ServiceResponse:
+    """Spar-Rechner: what other temperatures or times would do (changes nothing)."""
+    room = _room_of(call.hass, call.data["entity_id"])
+    return await room.async_estimate_savings(
+        comfort=call.data.get("comfort_temperature"),
+        eco=call.data.get("eco_temperature"),
+        shift_minutes=call.data.get("shift_minutes", 0),
+    )
+
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Serve the room card so it shows up in the card picker."""
+    """Spar-Rechner, Assist questions, and the room card for the card picker."""
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ESTIMATE_SAVINGS,
+        _estimate_savings,
+        schema=SAVINGS_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    async_setup_assist(hass)
     if hass.http is None:
         return True
     from homeassistant.components.frontend import DATA_EXTRA_MODULE_URL, add_extra_js_url
