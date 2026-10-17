@@ -445,3 +445,31 @@ def test_assist_never_blocks_setup_when_the_conversation_api_changes(hass):
         side_effect=TypeError("changed"),
     ):
         assert async_setup_assist(hass) is None
+
+
+def test_assist_uses_keyword_triggers_on_newer_home_assistant(hass, monkeypatch):
+    """HA 2026.10 dropped TriggerDetails; register_trigger takes keywords."""
+    from homeassistant.components.conversation import trigger
+
+    from custom_components.dynamic_heating.assist import (
+        SENTENCES,
+        async_setup_assist,
+    )
+
+    monkeypatch.delattr(trigger, "TriggerDetails", raising=False)
+    calls = []
+
+    class Manager:
+        def register_trigger(self, *, sentences, trigger_callback):
+            calls.append((sentences, trigger_callback))
+            return lambda: calls.remove((sentences, trigger_callback))
+
+    with patch(
+        "homeassistant.components.conversation.agent_manager.get_agent_manager",
+        return_value=Manager(),
+    ):
+        remove = async_setup_assist(hass)
+    assert remove is not None
+    assert [sentences for sentences, _ in calls] == list(SENTENCES.values())
+    remove()
+    assert calls == []

@@ -306,10 +306,13 @@ def async_setup_assist(hass: HomeAssistant) -> CALLBACK_TYPE | None:
         from homeassistant.components.conversation.agent_manager import (
             get_agent_manager,
         )
-        from homeassistant.components.conversation.trigger import TriggerDetails
     except ImportError:  # pragma: no cover - conversation is part of core
         _LOGGER.warning("Fragen über Assist nicht verfügbar: Konversation fehlt")
         return None
+    try:  # up to HA 2026.x: one TriggerDetails argument
+        from homeassistant.components.conversation.trigger import TriggerDetails
+    except ImportError:  # newer HA: sentences and callback as keywords
+        TriggerDetails = None
 
     def handler(kind: str):
         async def handle(_user_input: Any, result: Any) -> str:
@@ -336,6 +339,10 @@ def async_setup_assist(hass: HomeAssistant) -> CALLBACK_TYPE | None:
         removers = [
             manager.register_trigger(
                 TriggerDetails(sentences=sentences, callback=handler(kind))
+            )
+            if TriggerDetails is not None
+            else manager.register_trigger(
+                sentences=sentences, trigger_callback=handler(kind)
             )
             for kind, sentences in SENTENCES.items()
         ]
