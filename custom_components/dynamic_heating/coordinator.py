@@ -375,6 +375,7 @@ from .routine import (
     fallback_schedule,
     tuya_week_schedule,
 )
+from .pending_push import hold_if_missing
 from .plan import (
     CHECK_ALPHA,
     CHECK_HOURS,
@@ -6073,6 +6074,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Call a service; log and return False instead of raising."""
         if domain in ("climate", "number", "select", "switch"):
             await self._pace()
+        if hold_if_missing(self.hass, domain, service, data):
+            return True
         try:
             await self.hass.services.async_call(domain, service, data, blocking=True)
         except HomeAssistantError as err:

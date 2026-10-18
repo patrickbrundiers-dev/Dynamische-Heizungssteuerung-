@@ -35,6 +35,7 @@ from .const import (
     QUICK_MORNING_HOUR,
     QUICK_SLEEP,
 )
+from .pending_push import hold_if_missing
 from .radiator import (
     SUPPLY_COLD,
     SUPPLY_VERSION,
@@ -150,13 +151,12 @@ class HouseManager:
             domain, _, name = service.partition(".")
             if not name:
                 domain, name = "notify", domain
+            data = {"title": "Wochenbericht Heizung", "message": self.report_text()}
             try:
-                await self.hass.services.async_call(
-                    domain,
-                    name,
-                    {"title": "Wochenbericht Heizung", "message": self.report_text()},
-                    blocking=True,
-                )
+                if not hold_if_missing(self.hass, domain, name, data):
+                    await self.hass.services.async_call(
+                        domain, name, data, blocking=True
+                    )
                 sent = True
             except HomeAssistantError as err:
                 _LOGGER.warning("Weekly report could not be sent: %s", err)
@@ -275,13 +275,11 @@ class HouseManager:
         domain, _, name = service.partition(".")
         if not name:
             domain, name = "notify", domain
+        data = {"title": "Heizung Haus", "message": message}
+        if hold_if_missing(self.hass, domain, name, data):
+            return True
         try:
-            await self.hass.services.async_call(
-                domain,
-                name,
-                {"title": "Heizung Haus", "message": message},
-                blocking=True,
-            )
+            await self.hass.services.async_call(domain, name, data, blocking=True)
         except HomeAssistantError as err:
             _LOGGER.warning("House notification could not be sent: %s", err)
             return False

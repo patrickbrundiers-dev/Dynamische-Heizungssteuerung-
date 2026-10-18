@@ -3241,3 +3241,69 @@ async def test_room_thermostat_shows_humidity(hass, enable_custom_integrations):
         "climate", DOMAIN, f"{entry.entry_id}_room_climate"
     )
     assert hass.states.get(climate_id).attributes["current_humidity"] == 54.0
+
+
+@pytest.mark.asyncio
+async def test_trend_and_projection_are_published_rounded(
+    hass, enable_custom_integrations
+):
+    """Values moving in their last digits must not write a state every update."""
+    _set_up_test_entities(hass)
+    entry, coordinator = await _setup_integration(hass)
+    now = dt_util.utcnow()
+    coordinator._trend_samples = [
+        (now - timedelta(minutes=20), 17.0),
+        (now - timedelta(minutes=10), 17.04),
+    ]
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    registry = er.async_get(hass)
+    trend_id = registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{entry.entry_id}_temperature_trend"
+    )
+    trend = coordinator.data["temperature_trend"]
+    assert trend is not None
+    assert float(hass.states.get(trend_id).state) == round(trend, 1)
+    assert "temperature_trend" not in hass.states.get("climate.living_room").attributes
+
+    projected_id = registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{entry.entry_id}_projected_temperature"
+    )
+    coordinator.data["projected_temperature"] = 19.4369015892465
+    coordinator.async_update_listeners()
+    await hass.async_block_till_done()
+    assert hass.states.get(projected_id).state == "19.4"
+
+
+@pytest.mark.asyncio
+async def test_push_waits_for_the_notify_service_after_a_restart(
+    hass, enable_custom_integrations
+):
+    """The mobile app registers its notify service late; the push is not lost."""
+    _set_up_test_entities(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["notify_service"] = "notify.mobile_app_late"
+    sent = []
+
+    async def capture(call):
+        sent.append(call.data["message"])
+
+    await coordinator._push_room("Zeitplan-Vorschlag")
+    await hass.async_block_till_done()
+    assert sent == []
+    hass.services.async_register("notify", "mobile_app_late", capture)
+    await hass.async_block_till_done()
+    assert sent == ["Zeitplan-Vorschlag"]
+
+    # Later pushes go straight out; one for a service that comes too late is dropped.
+    await coordinator._push_room("Direkt")
+    assert sent[-1] == "Direkt"
+    coordinator.config["notify_service"] = "notify.mobile_app_never"
+    await coordinator._push_room("Zu spät")
+    with patch(
+        "custom_components.dynamic_heating.pending_push.dt_util.utcnow",
+        return_value=dt_util.utcnow() + timedelta(minutes=11),
+    ):
+        hass.services.async_register("notify", "mobile_app_never", capture)
+        await hass.async_block_till_done()
+    assert "Zu spät" not in sent
