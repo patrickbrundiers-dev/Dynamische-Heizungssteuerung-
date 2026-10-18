@@ -128,7 +128,6 @@ class RoomClimate(CoordinatorEntity[DynamicHeatingCoordinator], ClimateEntity):
             "manual": self.coordinator.current_quick_mode == QUICK_MANUAL,
             "until": until,
             "room_offset": self._data.get("room_offset"),
-            "temperature_trend": self._data.get("temperature_trend"),
             "last_change_source": self._data.get("last_change_source"),
             "last_change_at": self._data.get("last_change_at"),
         }

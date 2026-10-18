@@ -41,6 +41,9 @@ class HeatingSensorDescription(SensorEntityDescription):
     """Describe a coordinator-backed sensor."""
 
     key: str
+    # Published rounded: a value that moves in its last digits would write a
+    # new state to the database on every update.
+    round_digits: int | None = None
 
 
 SENSORS = (
@@ -62,6 +65,7 @@ SENSORS = (
         icon="mdi:chart-line-variant",
         native_unit_of_measurement="°C/h",
         state_class=SensorStateClass.MEASUREMENT,
+        round_digits=1,
     ),
     HeatingSensorDescription(
         key="outdoor_temperature",
@@ -90,6 +94,7 @@ SENSORS = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
+        round_digits=1,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     HeatingSensorDescription(
@@ -442,7 +447,11 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
         """Return the latest controller value."""
         if not self.coordinator.data:
             return None
-        return self.coordinator.data.get(self.entity_description.key)
+        value = self.coordinator.data.get(self.entity_description.key)
+        digits = self.entity_description.round_digits
+        if digits is not None and isinstance(value, (int, float)):
+            return round(value, digits)
+        return value
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
