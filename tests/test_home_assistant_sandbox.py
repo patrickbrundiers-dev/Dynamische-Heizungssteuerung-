@@ -3307,3 +3307,23 @@ async def test_push_waits_for_the_notify_service_after_a_restart(
         hass.services.async_register("notify", "mobile_app_never", capture)
         await hass.async_block_till_done()
     assert "Zu spät" not in sent
+
+
+@pytest.mark.asyncio
+async def test_held_push_is_dropped_when_its_room_unloads(
+    hass, enable_custom_integrations
+):
+    """A reload (e.g. another notify service chosen) must not send old pushes."""
+    _set_up_test_entities(hass)
+    entry, coordinator = await _setup_integration(hass)
+    coordinator.config["notify_service"] = "notify.mobile_app_old"
+    sent = []
+
+    async def capture(call):
+        sent.append(call.data["message"])
+
+    await coordinator._push_room("Alt")
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    hass.services.async_register("notify", "mobile_app_old", capture)
+    await hass.async_block_till_done()
+    assert sent == []

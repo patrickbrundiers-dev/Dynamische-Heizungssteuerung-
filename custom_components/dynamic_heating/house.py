@@ -153,7 +153,7 @@ class HouseManager:
                 domain, name = "notify", domain
             data = {"title": "Wochenbericht Heizung", "message": self.report_text()}
             try:
-                if not hold_if_missing(self.hass, domain, name, data):
+                if not hold_if_missing(self.hass, self.entry.entry_id, domain, name, data):
                     await self.hass.services.async_call(
                         domain, name, data, blocking=True
                     )
@@ -276,7 +276,7 @@ class HouseManager:
         if not name:
             domain, name = "notify", domain
         data = {"title": "Heizung Haus", "message": message}
-        if hold_if_missing(self.hass, domain, name, data):
+        if hold_if_missing(self.hass, self.entry.entry_id, domain, name, data):
             return True
         try:
             await self.hass.services.async_call(domain, name, data, blocking=True)

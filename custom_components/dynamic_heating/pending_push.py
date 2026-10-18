@@ -31,15 +31,19 @@ class PendingPushes:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
-        self._items: list[tuple[datetime, str, str, dict[str, Any]]] = []
+        self._items: list[tuple[datetime, str, str, str, dict[str, Any]]] = []
         self._unsub: Any = None
 
     def __len__(self) -> int:
         return len(self._items)
 
-    def add(self, domain: str, service: str, data: dict[str, Any]) -> None:
+    def add(
+        self, owner: str, domain: str, service: str, data: dict[str, Any]
+    ) -> None:
         del self._items[: max(0, len(self._items) - PENDING_MAX_ITEMS + 1)]
-        self._items.append((dt_util.utcnow() + PENDING_MAX_AGE, domain, service, data))
+        self._items.append(
+            (dt_util.utcnow() + PENDING_MAX_AGE, owner, domain, service, data)
+        )
         if self._unsub is None:
             self._unsub = self.hass.bus.async_listen(
                 EVENT_SERVICE_REGISTERED, self._async_registered
@@ -52,7 +56,7 @@ class PendingPushes:
         now = dt_util.utcnow()
         keep = []
         for item in self._items:
-            deadline, item_domain, item_service, data = item
+            deadline, _, item_domain, item_service, data = item
             if deadline < now:
                 _LOGGER.info(
                     "Push dropped, %s.%s never appeared: %s",
@@ -65,6 +69,15 @@ class PendingPushes:
             else:
                 keep.append(item)
         self._items = keep
+        self._stop_if_empty()
+
+    @callback
+    def discard(self, owner: str) -> None:
+        """Drop an entry's pushes: it unloads, maybe with another service."""
+        self._items = [item for item in self._items if item[1] != owner]
+        self._stop_if_empty()
+
+    def _stop_if_empty(self) -> None:
         if not self._items and self._unsub is not None:
             self._unsub()
             self._unsub = None
@@ -85,7 +98,7 @@ def pending_pushes(hass: HomeAssistant) -> PendingPushes:
 
 
 def hold_if_missing(
-    hass: HomeAssistant, domain: str, service: str, data: dict[str, Any]
+    hass: HomeAssistant, owner: str, domain: str, service: str, data: dict[str, Any]
 ) -> bool:
     """Queue a push to a notify service that is not registered yet.
 
@@ -94,5 +107,5 @@ def hold_if_missing(
     if domain != "notify" or hass.services.has_service(domain, service):
         return False
     _LOGGER.debug("%s.%s not there yet, push held", domain, service)
-    pending_pushes(hass).add(domain, service, data)
+    pending_pushes(hass).add(owner, domain, service, data)
     return True

@@ -6074,7 +6074,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Call a service; log and return False instead of raising."""
         if domain in ("climate", "number", "select", "switch"):
             await self._pace()
-        if hold_if_missing(self.hass, domain, service, data):
+        if hold_if_missing(self.hass, self.entry_id, domain, service, data):
             return True
         try:
             await self.hass.services.async_call(domain, service, data, blocking=True)

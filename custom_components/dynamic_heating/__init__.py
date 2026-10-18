@@ -38,6 +38,7 @@ from .const import (
 from .assist import async_setup_assist
 from .coordinator import DynamicHeatingCoordinator
 from .house import HouseManager
+from .pending_push import pending_pushes
 
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -246,6 +247,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not await hass.config_entries.async_unload_platforms(entry, HOUSE_PLATFORMS):
             return False
         house = entry.runtime_data
+        pending_pushes(hass).discard(entry.entry_id)
         await house.async_unload()
         hass.data.get(DOMAIN, {}).pop(HOUSE_DATA_KEY, None)
         # Without the house the rooms go back to their own control.
@@ -254,6 +256,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return True
     if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         return False
+    pending_pushes(hass).discard(entry.entry_id)
     # Thermostats must not keep regulating on a room value nobody updates.
     await entry.runtime_data.async_release_external_temperature()
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
