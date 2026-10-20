@@ -34,6 +34,8 @@ from .const import (
     HOUSE_PLATFORMS,
     PLATFORMS,
     SERVICE_ESTIMATE_SAVINGS,
+    SERVICE_HEAT_LOAD,
+    HEAT_LOAD_OUTDOOR,
 )
 from .assist import async_setup_assist
 from .coordinator import DynamicHeatingCoordinator
@@ -87,6 +89,25 @@ async def _estimate_savings(call: ServiceCall) -> ServiceResponse:
     )
 
 
+HEAT_LOAD_SCHEMA = vol.Schema(
+    {
+        vol.Optional("outdoor_temperature", default=HEAT_LOAD_OUTDOOR): vol.All(
+            vol.Coerce(float), vol.Range(min=-30, max=15)
+        ),
+    }
+)
+
+
+async def _heat_load(call: ServiceCall) -> ServiceResponse:
+    """Heizlast: what the house needs on a cold day (changes nothing)."""
+    house = call.hass.data.get(DOMAIN, {}).get(HOUSE_DATA_KEY)
+    if not isinstance(house, HouseManager):
+        raise ServiceValidationError(
+            "Die Heizlast braucht den Haus-Eintrag der Dynamischen Heizung."
+        )
+    return house.heat_load(call.data["outdoor_temperature"])
+
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Spar-Rechner, Assist questions, and the room card for the card picker."""
     hass.services.async_register(
@@ -94,6 +115,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         SERVICE_ESTIMATE_SAVINGS,
         _estimate_savings,
         schema=SAVINGS_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_HEAT_LOAD,
+        _heat_load,
+        schema=HEAT_LOAD_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
     async_setup_assist(hass)
