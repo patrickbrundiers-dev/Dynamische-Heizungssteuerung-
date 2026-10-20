@@ -17,7 +17,12 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
+from .battery import describe_days
 from .const import (
+    BATTERY_BUNDLE_DAYS,
+    BATTERY_NOTIFY_DAYS,
+    BATTERY_NOTIFY_INTERVAL_DAYS,
+    HEAT_LOAD_OUTDOOR,
     CALENDAR_TEMPERATURE_KEY,
     CONF_HOUSE_CALENDAR,
     HOUSE_CALENDAR_COMFORT_KEYS,
@@ -81,6 +86,8 @@ class HouseManager:
         self._supply_at: datetime | None = None
         self._cold_since: datetime | None = None
         self._cold_sent = False
+        # Local day of the last battery push (persisted).
+        self.battery_notified: str | None = None
 
     def rooms(self) -> list[DynamicHeatingCoordinator]:
         """All rooms that are set up right now."""
@@ -101,6 +108,8 @@ class HouseManager:
             raw = stored.get("vacation_until")
             parsed = dt_util.parse_datetime(raw) if isinstance(raw, str) else None
             self.vacation_until = dt_util.as_utc(parsed) if parsed else None
+            raw_notified = stored.get("battery_notified")
+            self.battery_notified = raw_notified if isinstance(raw_notified, str) else None
             if stored.get("supply_version") == SUPPLY_VERSION:
                 self.supply = SupplyProfile.from_list(stored.get("supply_profile"))
         self._unsubs = [
@@ -123,7 +132,92 @@ class HouseManager:
 
     async def _async_weekly(self, now: datetime) -> None:
         if dt_util.as_local(now).weekday() == REPORT_WEEKDAY:
+            # The report names the batteries itself.
             await self.async_send_report(reset=True)
+        else:
+            await self.async_battery_notice()
+
+    def batteries_due(self, within_days: int = BATTERY_BUNDLE_DAYS) -> list[tuple[str, int]]:
+        """Batteries of all rooms due within ``within_days`` (label, days),
+        soonest first."""
+        due = []
+        for room in self.rooms():
+            for battery in (room.data or {}).get("batteries") or []:
+                days = battery.get("days_left")
+                if days is not None and days <= within_days:
+                    due.append((f"{room.room_name}: {battery['name']}", days))
+        return sorted(due, key=lambda item: item[1])
+
+    def heat_load(self, outdoor: float = HEAT_LOAD_OUTDOOR) -> dict[str, Any]:
+        """Heat load of every room with a learned model at ``outdoor``."""
+        rooms = [
+            load
+            for room in sorted(self.rooms(), key=lambda room: room.room_name)
+            if (load := room.heat_load(outdoor)) is not None
+        ]
+        total = round(sum(item["load_kw"] for item in rooms), 1)
+
+        def number(value: float) -> str:
+            return f"{value:.1f}".replace(".", ",").replace("-", "−")
+
+        if rooms:
+            text = (
+                f"Bei {number(outdoor)} °C braucht das Haus etwa {number(total)} kW: "
+                + ", ".join(f"{item['room']} {number(item['load_kw'])} kW" for item in rooms)
+                + "."
+            )
+            short = [item for item in rooms if item["share_percent"] > 100]
+            tight = [item for item in rooms if 60 < item["share_percent"] <= 100]
+            if short:
+                text += " Zu schwach: " + ", ".join(
+                    f"{item['room']} (hält {number(item['comfort_temperature'])} °C "
+                    f"nur bis {number(item['holds_comfort_down_to'])} °C)"
+                    for item in short
+                ) + "."
+            if tight:
+                text += " Mit niedrigerer Vorlauftemperatur knapp: " + ", ".join(
+                    item["room"] for item in tight
+                ) + "."
+            if not short and not tight:
+                text += " Alle Heizkörper reichen auch mit niedrigerer Vorlauftemperatur."
+        else:
+            text = "Noch kein Raum hat genug gelernt, um die Heizlast zu schätzen."
+        return {
+            "outdoor_temperature": outdoor,
+            "total_kw": total,
+            "rooms": rooms,
+            "text": text,
+        }
+
+    def battery_text(self) -> str | None:
+        due = self.batteries_due()
+        if not due:
+            return None
+        return "Batterien fällig: " + ", ".join(
+            f"{label} {describe_days(days)}" for label, days in due
+        )
+
+    async def async_battery_notice(self) -> bool:
+        """One push for all batteries due soon, once the first is due within
+        two weeks; at most once a week so they are changed together."""
+        due = self.batteries_due()
+        if not due or due[0][1] > BATTERY_NOTIFY_DAYS:
+            return False
+        today = dt_util.now().date()
+        if self.battery_notified is not None:
+            try:
+                last = datetime.fromisoformat(self.battery_notified).date()
+            except ValueError:
+                last = None
+            if last is not None and (today - last).days < BATTERY_NOTIFY_INTERVAL_DAYS:
+                return False
+        lines = [f"{label} {describe_days(days)}" for label, days in due]
+        message = "Am besten alle auf einmal tauschen:\n" + "\n".join(lines)
+        if not await self._async_push("Batterien bald leer", message):
+            return False
+        self.battery_notified = today.isoformat()
+        await self._async_save()
+        return True
 
     def _notify_service(self) -> str | None:
         """The house's notify service, else the first room's."""
@@ -140,30 +234,37 @@ class HouseManager:
         lines = [room.week_summary() for room in sorted(
             self.rooms(), key=lambda room: room.room_name
         )]
+        if batteries := self.battery_text():
+            lines.append(batteries)
         lines.append(f"Hausmodus: {labels.get(self.mode, self.mode)}")
         return "\n".join(lines)
 
     async def async_send_report(self, *, reset: bool) -> bool:
         """Push the weekly report; afterwards a new week starts if ``reset``."""
-        service = (self._notify_service() or "").strip()
-        sent = False
-        if service and self.rooms():
-            domain, _, name = service.partition(".")
-            if not name:
-                domain, name = "notify", domain
-            data = {"title": "Wochenbericht Heizung", "message": self.report_text()}
-            try:
-                if not hold_if_missing(self.hass, self.entry.entry_id, domain, name, data):
-                    await self.hass.services.async_call(
-                        domain, name, data, blocking=True
-                    )
-                sent = True
-            except HomeAssistantError as err:
-                _LOGGER.warning("Weekly report could not be sent: %s", err)
+        sent = bool(self.rooms()) and await self._async_push(
+            "Wochenbericht Heizung", self.report_text()
+        )
         if reset:
             for room in self.rooms():
                 room.reset_week()
         return sent
+
+    async def _async_push(self, title: str, message: str) -> bool:
+        """Send a push through the house's notify service."""
+        service = (self._notify_service() or "").strip()
+        if not service:
+            return False
+        domain, _, name = service.partition(".")
+        if not name:
+            domain, name = "notify", domain
+        data = {"title": title, "message": message}
+        try:
+            if not hold_if_missing(self.hass, self.entry.entry_id, domain, name, data):
+                await self.hass.services.async_call(domain, name, data, blocking=True)
+        except HomeAssistantError as err:
+            _LOGGER.warning("%s could not be sent: %s", title, err)
+            return False
+        return True
 
     @callback
     def async_add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
@@ -179,6 +280,7 @@ class HouseManager:
                 ),
                 "supply_profile": self.supply.as_list(),
                 "supply_version": SUPPLY_VERSION,
+                "battery_notified": self.battery_notified,
             }
         )
 

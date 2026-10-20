@@ -474,6 +474,16 @@
           "description": "Minuten, die jede Komfortzeit später (positiv) oder früher (negativ) beginnt."
         }
       }
+    },
+    "heat_load": {
+      "name": "Heizlast",
+      "description": "Schätzt aus dem gelernten Raummodell, wie viel Leistung jeder Raum und das ganze Haus an einem sehr kalten Tag brauchen und ob die Heizkörper dafür reichen, auch mit niedrigerer Vorlauftemperatur wie bei einer Wärmepumpe. Ändert nichts.",
+      "fields": {
+        "outdoor_temperature": {
+          "name": "Außentemperatur",
+          "description": "Der kalte Tag, für den gerechnet wird."
+        }
+      }
     }
   }
 }

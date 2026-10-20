@@ -702,6 +702,8 @@ async def test_house_editor_copies_settings_to_other_rooms(
     assert target.options["window_open_delay"] == 120
     # Not set in the source: the target goes back to the default.
     assert "door_open_delay" not in target.options
+    # Let the reloads the copy started finish before Home Assistant stops.
+    await hass.async_block_till_done()
 
 
 @pytest.mark.asyncio

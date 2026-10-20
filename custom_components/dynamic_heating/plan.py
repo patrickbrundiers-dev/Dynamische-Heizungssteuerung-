@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 from .model import ModelView
 
@@ -169,6 +169,9 @@ def simulate(
     step_hours = STEP_MINUTES / 60
     points: list[PlanPoint] = []
     temperature = room
+    # Steps are counted in UTC so a clock change neither skips nor repeats an
+    # hour; ``at`` stays in local time for the labels.
+    cursor = now.astimezone(UTC)
     at = now
     # Once preheating for a block started it goes on until the block starts,
     # like the controller (the remaining lead shrinks while the room warms).
@@ -194,7 +197,8 @@ def simulate(
                     else min(needed, max_preheat_minutes / 60)
                 )
                 if preheating_for is upcoming or (
-                    lead > 0 and upcoming.start - at <= timedelta(hours=lead)
+                    lead > 0
+                    and upcoming.start.timestamp() - at.timestamp() <= lead * 3600
                 ):
                     target, preheat = goal, True
                     preheating_for = upcoming
@@ -238,7 +242,8 @@ def simulate(
                 round(min(1.0, max(0.0, demand)), 3),
             )
         )
-        at += step
+        cursor += step
+        at = cursor.astimezone(now.tzinfo)
     return points
 
 
@@ -334,12 +339,13 @@ def summary(points: list[PlanPoint], blocks: list[Block], now: datetime) -> dict
 def temperature_at(points: list[PlanPoint], at: datetime) -> float | None:
     """The planned room temperature at ``at`` (nearest step)."""
     best = None
+    wanted = at.timestamp()
     for point in points:
-        if best is None or abs((point.at - at).total_seconds()) < abs(
-            (best.at - at).total_seconds()
+        if best is None or abs(point.at.timestamp() - wanted) < abs(
+            best.at.timestamp() - wanted
         ):
             best = point
-    if best is None or abs((best.at - at).total_seconds()) > STEP_MINUTES * 60:
+    if best is None or abs(best.at.timestamp() - wanted) > STEP_MINUTES * 60:
         return None
     return best.temperature
 

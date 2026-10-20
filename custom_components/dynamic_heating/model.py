@@ -716,3 +716,44 @@ class CoolingCorrection:
         if isinstance(samples, int) and not isinstance(samples, bool) and samples >= 0:
             result.samples = samples
         return result
+
+
+# Heat load check (0.14.0): below this share of today's radiator output the
+# room also stays warm with a lower flow temperature (e.g. a heat pump).
+LOW_FLOW_SHARE = 0.6
+
+
+@dataclass(frozen=True)
+class HeatLoad:
+    """What a room needs on a cold day compared with what its radiators give."""
+
+    # Share of full radiator output that holds ``comfort`` at ``outdoor``.
+    share: float
+    # Lowest outdoor temperature at which full output still holds ``comfort``.
+    holds_down_to: float
+    comfort: float
+    outdoor: float
+
+    @property
+    def verdict(self) -> str:
+        if self.share > 1.0:
+            return "reicht nicht"
+        if self.share > LOW_FLOW_SHARE:
+            return "reicht, mit niedrigerer Vorlauftemperatur knapp"
+        return "reicht, auch mit niedrigerer Vorlauftemperatur"
+
+
+def heat_load(view: ModelView, comfort: float, outdoor: float) -> HeatLoad | None:
+    """The learned equation at ``outdoor`` without sun or wind.
+
+    The radiators' output was learned at today's flow temperatures; on a cold
+    day most boilers run hotter, so the share is on the safe side.
+    """
+    if view.heat_output <= 0 or view.loss <= 0:
+        return None
+    return HeatLoad(
+        share=view.loss * (comfort - outdoor) / view.heat_output,
+        holds_down_to=comfort - view.heat_output / view.loss,
+        comfort=comfort,
+        outdoor=outdoor,
+    )

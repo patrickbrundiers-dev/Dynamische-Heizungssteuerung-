@@ -516,8 +516,10 @@ async def test_warm_up_raises_for_an_hour_and_stacks(hass, enable_custom_integra
         assert coordinator.last_change_source == "Kurz wärmer"
 
 
+# The schedule helper keeps its own timer for the next block running.
+@pytest.mark.parametrize("expected_lingering_timers", [True])
 @pytest.mark.asyncio
-async def test_day_plan_reads_a_real_schedule_helper(hass, enable_custom_integrations):
+async def test_day_plan_reads_a_real_schedule_helper(expected_lingering_timers, hass, enable_custom_integrations):
     from homeassistant.setup import async_setup_component
 
     assert await async_setup_component(

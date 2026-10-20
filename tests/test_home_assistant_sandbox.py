@@ -2228,6 +2228,12 @@ async def test_heating_watchdog_flags_a_room_that_does_not_warm_up(
             force_update=True,
             timestamp=at.timestamp(),
         )
+        # Comfort stays ahead, as it would while the clock runs.
+        hass.states.async_set(
+            "schedule.living_room_comfort",
+            "off",
+            {"next_event": (at + timedelta(minutes=30)).isoformat()},
+        )
         with patch(
             "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
             return_value=at,
