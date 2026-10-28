@@ -153,6 +153,16 @@ INFERRED_HEATING_MARGIN: Final = 0.5
 
 # A thermostat battery at or below this level is reported as a warning.
 LOW_BATTERY_PERCENT: Final = 20
+# Battery forecast (0.14.0): levels read back from the recorder at the start,
+# one push for all batteries once the first is due within the notify days.
+BATTERY_HISTORY_DAYS: Final = 90
+BATTERY_NOTIFY_DAYS: Final = 14
+BATTERY_BUNDLE_DAYS: Final = 45
+BATTERY_NOTIFY_INTERVAL_DAYS: Final = 7
+
+# Heat load check (0.14.0): a very cold day for the house.
+HEAT_LOAD_OUTDOOR: Final = -10.0
+SERVICE_HEAT_LOAD: Final = "heat_load"
 
 # Feed the room sensor into thermostats that accept an external temperature
 # (e.g. Aqara E1 via Zigbee2MQTT: a "sensor" select internal/external and an

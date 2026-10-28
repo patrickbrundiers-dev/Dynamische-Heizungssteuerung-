@@ -406,7 +406,9 @@ async def test_device_triggers_and_change_source(hass, enable_custom_integration
     _set_up_test_entities(hass, room_temperature="20.0")
     _comfort_now(hass)
     entry, coordinator = await _setup_integration(hass)
-    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, entry.entry_id), entry.entry_id
+    )
     from custom_components.dynamic_heating.device_trigger import async_get_triggers
 
     triggers = await async_get_triggers(hass, device.id)

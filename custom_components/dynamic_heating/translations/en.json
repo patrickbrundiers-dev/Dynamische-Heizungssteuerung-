@@ -474,6 +474,16 @@
           "description": "Minutes each comfort time starts later (positive) or earlier (negative)."
         }
       }
+    },
+    "heat_load": {
+      "name": "Heat load",
+      "description": "Estimates from the learned room model how much power each room and the whole house need on a very cold day and whether the radiators suffice, also at a lower flow temperature as with a heat pump. Changes nothing.",
+      "fields": {
+        "outdoor_temperature": {
+          "name": "Outdoor temperature",
+          "description": "The cold day to calculate for."
+        }
+      }
     }
   }
 }

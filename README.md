@@ -60,15 +60,16 @@ Wenn etwas nicht plausibel aussieht, bitte nicht sofort den Regler aktivieren. D
 
 Das Repository enthält Integrationstests mit pytest-homeassistant-custom-component. Die Tests starten eine isolierte Home-Assistant-Testinstanz, legen simulierte Entitäten an und prüfen das echte Setup der Integration, die Vorheizentscheidung, Fenster-/Anwesenheitslogik, Sensorfehler, Thermostatgrenzen, fehlgeschlagene Thermostat-Serviceaufrufe samt Wiederholungsversuch und ob Sollwerte nur nach Aktivierung gesetzt werden. Dafür wird weder Zugriff auf die echte Heizung noch ein Token aus deiner produktiven Installation benötigt.
 
-Automatische Tests laufen bei Push, Pull Request und manuellem Start in GitHub Actions. Lokal:
+Automatische Tests laufen bei Push, Pull Request und manuellem Start in GitHub Actions, immer gegen die aktuell veröffentlichte Home-Assistant-Version. Zusätzlich laufen sie jeden Montag gegen die neueste Version samt Beta; schlägt das fehl, legt GitHub ein Issue an, bevor das Update bei dir ankommt. Lokal (Python 3.14):
 
 ~~~bash
-python -m venv .venv
+python3.14 -m venv .venv
 # Windows:
 .venv\Scripts\activate
 # Linux/macOS:
 source .venv/bin/activate
-python -m pip install -r requirements_test.txt
+python -m pip install -r requirements_test.txt "$(python scripts/ha_test_versions.py harness stable)"
+python -m pip install $(python scripts/ha_test_versions.py requirements conversation)
 pytest -q
 ruff check .
 ~~~
@@ -367,6 +368,13 @@ Ein frisch gelerntes Raummodell steuert nur das Vorheizen. Absenkungsgrenzen, �
 - **Zeiten der Zentralheizung**: Der Raum lernt je Stunde des Tages, ob die Zentralheizung liefert (Attribute `supply_off_hours` und `supply_today` am Sensor *Heizkörper*). Bleiben die Heizkörper zu einer Zeit kalt, in der das üblich ist (z. B. Nachtabsenkung im Mietshaus), sagt der Sensor, ab wann sie meist wieder liefert, und die Heizproblem-Meldung bleibt aus. Sonst nennt die Meldung die Zentralheizung als Ursache statt allgemein Ventile und Vorlauf.
 - **Raummodell lernt nur aus Stunden mit Wärme**: Stunden, in denen geheizt werden sollte, die Heizkörper aber kalt blieben, zählen nicht mehr. Bisher lernte das Modell daraus eine viel zu kleine Heizleistung und plante beim Vorheizen immer die volle Zeit. Ein mit 0.9.2 oder älter gelerntes Modell wird einmal verworfen und neu aus dem Recorder angelernt (dann mit den Gehäusetemperaturen).
 - **Wochenbericht**: nennt zusätzlich die geschätzte Ersparnis gegenüber Dauer-Komfort (aus der Temperaturdifferenz zu draußen, nach der sich der Wärmeverlust richtet), die Stunden mit kalten Heizkörpern trotz Heizbedarf und wie gut das Raummodell liegt.
+
+## Version 0.14.0: Zeitumstellung, Batterie-Vorhersage und Heizlast
+
+- **Zeitumstellung**: Die Minuten bis zum nächsten Komfortbeginn werden in UTC gezählt. Bisher rechnete die Regelung in der Nacht der Zeitumstellung mit der Wanduhr: Im Herbst begann das Vorheizen eine Stunde zu früh, im Frühjahr eine Stunde zu spät. Auch der Tagesplan läuft jetzt in gleichmäßigen 15-Minuten-Schritten durch die doppelte bzw. fehlende Stunde. Die Pünktlichkeit zählt in dieser Nacht die echten Minuten.
+- **Batterie-Vorhersage**: Jeder Raum merkt sich je Batterie (Ventile und Raumfühler) den niedrigsten Stand des Tages, beim ersten Start auch rückwirkend aus der Langzeitstatistik. Aus dem Verlauf der letzten Wochen sagt der Diagnose-Sensor *Batterie fällig in* (Tage), wann die Batterie die Warnschwelle von 20 % erreicht; das Attribut `batteries` nennt jede Batterie einzeln. Eine neue Batterie (Sprung nach oben) startet den Verlauf neu, grobe Stufen wie 100/50 % reichen für keine Vorhersage. Ist die erste Batterie in zwei Wochen fällig, kommt eine Meldung mit allen Batterien, die in den nächsten 45 Tagen fällig werden, damit du sie zusammen tauschst (höchstens einmal pro Woche). Der Wochenbericht nennt sie auch.
+- **Heizlast**: Sensor *Heizlast* am Haus und die Aktion `dynamic_heating.heat_load` (mit Antwort, Außentemperatur wählbar, Standard −10 °C) rechnen mit dem gelernten Raummodell aus, welchen Anteil der Heizkörperleistung jeder Raum an einem sehr kalten Tag braucht, in kW nach der Heizkörperleistung des Wärmezählers, und bis zu welcher Außentemperatur der Raum warm bleibt. Liegt der Bedarf unter 60 % der heutigen Leistung, reicht der Heizkörper auch mit niedrigerer Vorlauftemperatur (z. B. Wärmepumpe). Die Leistung wurde bei den heutigen Vorlauftemperaturen gelernt, an kalten Tagen liefert die Therme meist mehr; die Werte sind also eher vorsichtig. Es bleibt eine Schätzung, keine Heizlastberechnung nach Norm.
+- **Tests gegen die aktuelle Home-Assistant-Version**: Die automatischen Tests liefen bisher gegen Home Assistant 2026.2; jetzt laufen sie mit Python 3.14 gegen die neueste veröffentlichte Version und jeden Montag zusätzlich gegen die neueste Beta. Schlägt der Montagslauf fehl, legt GitHub ein Issue an.
 
 ## Version 0.13.0: Wärmezähler, Spar-Rechner und Fragen über Assist
 

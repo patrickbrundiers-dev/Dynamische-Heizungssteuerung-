@@ -17,6 +17,7 @@ from homeassistant.const import (
     EntityCategory,
     UnitOfEnergy,
     UnitOfLength,
+    UnitOfPower,
     UnitOfTemperature,
     UnitOfTime,
 )
@@ -336,6 +337,13 @@ SENSORS = (
         suggested_display_precision=1,
     ),
     HeatingSensorDescription(
+        key="battery_days_left",
+        name="Batterie fällig in",
+        icon="mdi:battery-clock",
+        native_unit_of_measurement=UnitOfTime.DAYS,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    HeatingSensorDescription(
         key="solar_gain",
         name="Sonnengewinn je kW/m²",
         icon="mdi:white-balance-sunny",
@@ -403,6 +411,7 @@ async def async_setup_entry(
             HouseSupplySensor(entry.runtime_data, entry, "central_heating"),
             HouseGeofenceSensor(entry.runtime_data, entry, "geofencing"),
             HouseEnergySensor(entry.runtime_data, entry, "heat_energy"),
+            HouseHeatLoadSensor(entry.runtime_data, entry, "heat_load"),
         ])
         return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
@@ -487,6 +496,8 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
                 "radiator_power_w": data.get("radiator_power_w"),
                 "estimated": True,
             }
+        if self.entity_description.key == "battery_days_left":
+            return {"batteries": self.coordinator.data.get("batteries")}
         if self.entity_description.key == "schedule_suggestion":
             return {"suggestions": self.coordinator.data.get("schedule_suggestions")}
         if self.entity_description.key == "selftest":
@@ -748,6 +759,32 @@ class HouseHeatDemandSensor(HouseEntity, SensorEntity):
         return {
             "average": round(sum(demands.values()) / len(demands)) if demands else 0,
             "rooms": demands,
+        }
+
+
+class HouseHeatLoadSensor(HouseEntity, SensorEntity):
+    """What the house needs at -10 °C, from the rooms' learned models."""
+
+    _attr_name = "Heizlast"
+    _attr_icon = "mdi:home-thermometer"
+    _attr_should_poll = True
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_suggested_display_precision = 1
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self) -> float | None:
+        load = self.house.heat_load()
+        return load["total_kw"] if load["rooms"] else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        load = self.house.heat_load()
+        return {
+            "outdoor_temperature": load["outdoor_temperature"],
+            "rooms": load["rooms"],
+            "text": load["text"],
+            "estimated": True,
         }
 
 

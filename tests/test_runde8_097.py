@@ -42,7 +42,9 @@ async def test_default_entity_ids_follow_the_named_device(hass, enable_custom_in
     entry, _coordinator = await _setup_integration(hass)
     registry = er.async_get(hass)
     assert registry.async_get("sensor.dynamische_heizungssteuerung_status") is not None
-    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, entry.entry_id), entry.entry_id
+    )
     dr.async_get(hass).async_update_device(device.id, name_by_user="Schlafzimmer Heizung")
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()

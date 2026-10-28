@@ -27,3 +27,13 @@ estimate_savings:
           max: 240
           step: 15
           unit_of_measurement: min
+heat_load:
+  fields:
+    outdoor_temperature:
+      default: -10
+      selector:
+        number:
+          min: -30
+          max: 15
+          step: 1
+          unit_of_measurement: "°C"

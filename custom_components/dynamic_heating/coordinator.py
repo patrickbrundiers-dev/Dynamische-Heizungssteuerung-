@@ -7,7 +7,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from collections.abc import Callable
 from typing import Any
 
@@ -154,6 +154,7 @@ from .const import (
     HEATING_WATCHDOG_SECONDS,
     IGNORED_PROBLEM_ENTITY_SUFFIXES,
     LOW_BATTERY_PERCENT,
+    BATTERY_HISTORY_DAYS,
     CONF_NOTIFY_AWAY,
     CONF_PREHEAT_EXTENSION,
     CONF_PUNCTUALITY,
@@ -341,6 +342,7 @@ from .model import (
     RoomModel,
     SampleCollector,
     UsageProfile,
+    heat_load,
     seed_room_model,
     solar_to_kw,
     wind_to_ms,
@@ -363,6 +365,7 @@ from .radiator import (
     judged_supply,
     room_supply,
 )
+from .battery import BatteryWatch
 from .routine import (
     HABIT_DAYS,
     TUYA_DAYS,
@@ -741,6 +744,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.habits = Habits()
         # Showers seen in the room's humidity (bathrooms, runde 10).
         self.showers = Habits()
+        self.batteries = BatteryWatch()
+        self._battery_seed_at: datetime | None = None
         self._showers_seeded = False
         self._shower_watch = ShowerWatch(
             SHOWER_RISE_PERCENT, SHOWER_RISE_WINDOW_SECONDS, SHOWER_COOLDOWN_SECONDS
@@ -1165,6 +1170,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.punctuality = Punctuality.from_dict(stored.get("punctuality"))
         self.habits = Habits.from_dict(stored.get("habits"))
         self.showers = Habits.from_dict(stored.get("showers"))
+        self.batteries = BatteryWatch.from_dict(stored.get("batteries"))
         self._showers_seeded = bool(stored.get("showers_seeded"))
         raw_maintenance = self._stored_string(stored.get("valve_maintenance_last"))
         parsed_maintenance = (
@@ -1839,6 +1845,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "habits": self.habits.as_dict(),
                 "showers": self.showers.as_dict(),
                 "showers_seeded": self._showers_seeded,
+                "batteries": self.batteries.as_dict(),
             }
         )
 
@@ -2748,6 +2755,145 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if found:
                 warnings[entity_id] = found
         return warnings
+
+    def _battery_entities(self) -> dict[str, str]:
+        """Battery level sensors on the devices of the room's valves and room
+        sensor (entity id -> name)."""
+        registry = er.async_get(self.hass)
+        sources = list(self._thermostat_ids())
+        if room_sensor := self.config.get(CONF_ROOM_TEMPERATURE_ENTITY):
+            sources.append(room_sensor)
+        found: dict[str, str] = {}
+        for source in sources:
+            entry = registry.async_get(source)
+            if entry is None or not entry.device_id:
+                continue
+            for device_entry in er.async_entries_for_device(registry, entry.device_id):
+                if device_entry.domain != "sensor":
+                    continue
+                state = self.hass.states.get(device_entry.entity_id)
+                # The registry keeps the class while the sensor is unavailable.
+                device_class = (
+                    device_entry.device_class
+                    or device_entry.original_device_class
+                    or (state.attributes.get("device_class") if state else None)
+                )
+                if device_class != "battery":
+                    continue
+                found[device_entry.entity_id] = str(
+                    (state.attributes.get("friendly_name") if state else None)
+                    or device_entry.entity_id
+                )
+        return found
+
+    def _observe_batteries(self, result: dict[str, Any]) -> bool:
+        """Battery levels and when each will need changing; True when the
+        stored history changed."""
+        entities = self._battery_entities()
+        changed = bool(set(self.batteries.days) - set(entities))
+        self.batteries.forget_others(set(entities))
+        today = dt_util.now().date()
+        batteries = []
+        for entity_id, name in sorted(entities.items()):
+            level = _as_float(self.hass.states.get(entity_id))
+            if level is not None and 0 <= level <= 100:
+                changed = self.batteries.observe(entity_id, today, level) or changed
+            batteries.append(
+                {
+                    "entity_id": entity_id,
+                    "name": name,
+                    "level": level,
+                    "days_left": self.batteries.days_left(
+                        entity_id, today, LOW_BATTERY_PERCENT
+                    ),
+                }
+            )
+        result["batteries"] = batteries
+        if any(entity_id not in self.batteries.seeded for entity_id in entities) and (
+            self._battery_seed_at is None
+            or (dt_util.utcnow() - self._battery_seed_at).total_seconds() >= 3600
+        ):
+            # A valve that shows up after the start gets its history too.
+            self._battery_seed_at = dt_util.utcnow()
+            self.hass.async_create_task(self.async_seed_batteries())
+        result["battery_days_left"] = min(
+            (item["days_left"] for item in batteries if item["days_left"] is not None),
+            default=None,
+        )
+        return changed
+
+    async def async_seed_batteries(self) -> None:
+        """Battery levels of the last months from the recorder, once per
+        battery, so the forecast does not wait weeks."""
+        self._battery_seed_at = dt_util.utcnow()
+        entity_ids = [
+            entity_id
+            for entity_id in self._battery_entities()
+            if entity_id not in self.batteries.seeded
+        ]
+        if not entity_ids or "recorder" not in self.hass.config.components:
+            return
+        from homeassistant.components.recorder import get_instance, history
+        from homeassistant.components.recorder.statistics import (
+            statistics_during_period,
+        )
+
+        end = dt_util.utcnow()
+        start = end - timedelta(days=BATTERY_HISTORY_DAYS)
+        recorder = get_instance(self.hass)
+        try:
+            # Long-term statistics outlive the recorder's few days of states.
+            daily = await recorder.async_add_executor_job(
+                statistics_during_period,
+                self.hass,
+                start,
+                end,
+                set(entity_ids),
+                "day",
+                None,
+                {"min"},
+            )
+            missing = [entity_id for entity_id in entity_ids if not daily.get(entity_id)]
+            states = (
+                await recorder.async_add_executor_job(
+                    history.get_significant_states,
+                    self.hass,
+                    start,
+                    end,
+                    missing,
+                    None,
+                    True,
+                    False,
+                    False,
+                    True,
+                )
+                if missing
+                else {}
+            )
+        except Exception:  # noqa: BLE001 - history is a bonus, never fatal
+            _LOGGER.debug("Battery history not available", exc_info=True)
+            return
+        for entity_id in entity_ids:
+            # What was seen live already goes on top of the recorder's days.
+            live = self.batteries.days.pop(entity_id, [])
+            readings: list[tuple[date, float | None]] = [
+                (
+                    dt_util.as_local(dt_util.utc_from_timestamp(row["start"])).date(),
+                    _as_number(row.get("min")),
+                )
+                for row in daily.get(entity_id, [])
+            ] + [
+                (dt_util.as_local(state.last_changed).date(), _as_float(state))
+                for state in states.get(entity_id, [])
+                if isinstance(state, State)
+            ]
+            for day, level in readings:
+                if level is not None and 0 <= level <= 100:
+                    self.batteries.observe(entity_id, day, level)
+            for day, level in live:
+                self.batteries.observe(entity_id, date.fromisoformat(day), level)
+            self.batteries.seeded.add(entity_id)
+        await self._save_learning()
 
     def _room_temperature(self) -> float | None:
         """The room sensor's reading, or None when it failed or went silent.
@@ -3916,6 +4062,32 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if configured > 0:
             return configured
         return RADIATOR_POWER_PER_THERMOSTAT_W * max(1, len(self._thermostat_ids()))
+
+    def heat_load(self, outdoor: float) -> dict[str, Any] | None:
+        """The room's heat load at ``outdoor`` from the learned model, in kW
+        of the configured radiator power; None until the model is ready."""
+        if not self.room_model.ready:
+            return None
+        comfort = _as_number((self.data or {}).get("comfort_temperature"))
+        if comfort is None:
+            comfort = float(
+                self.config.get(CONF_COMFORT_TEMPERATURE, DEFAULT_COMFORT_TEMPERATURE)
+            )
+        load = heat_load(self.room_model.view(outdoor), comfort, outdoor)
+        if load is None:
+            return None
+        power_kw = self.radiator_power_w / 1000
+        return {
+            "room": self.room_name,
+            "comfort_temperature": comfort,
+            "load_kw": round(load.share * power_kw, 2),
+            "radiator_kw": round(power_kw, 2),
+            "share_percent": round(load.share * 100),
+            "holds_comfort_down_to": round(load.holds_down_to, 1),
+            "verdict": load.verdict,
+            # Below the trusted mark the figures are still rough.
+            "trusted": self.room_model.trusted,
+        }
 
     def _house_target(
         self,
@@ -5250,7 +5422,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or decision.mode != "comfort"
         ):
             return decision
-        minutes_left = (next_event - dt_util.now()).total_seconds() / 60
+        minutes_left = (next_event - dt_util.utcnow()).total_seconds() / 60
         if minutes_left <= 0 or minutes_left > seconds / 60:
             return decision
         lowest = comfort_temperature - EARLY_STOP_DROP
@@ -5394,6 +5566,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         routine_learned = self._observe_routine(result)
         await self._morning_report(result)
         shower_seen = self._observe_shower(result)
+        batteries_changed = self._observe_batteries(result)
         habit = self._update_habits(result)
         await self._maybe_selftest(result)
         await self._send_notifications(result)
@@ -5407,6 +5580,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or supply_learned
             or routine_learned
             or shower_seen
+            or batteries_changed
         ):
             await self._save_learning()
         self._fire_triggers(result)
@@ -5449,8 +5623,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         judged = False
         if self.enabled and self._punctual() and not self._room_fallback:
+            # In UTC: minutes early or late stay right across a clock change.
             late = self.punctuality.observe(
-                now,
+                dt_util.as_utc(now),
                 room=result.get("room_temperature"),
                 mode=result.get("mode"),
                 next_event=(
@@ -6509,11 +6684,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._next_event = next_event
         if self._preheat_event is not None and self._preheat_event != next_event:
             self._preheat_event = None
+        # Durations to the next block are taken in UTC: two local times on
+        # either side of a clock change subtract to the wrong length.
+        utc_now = dt_util.utcnow()
         forecast_condition = select_forecast_condition(
-            forecast_items, next_event, dt_util.now()
+            forecast_items, next_event, utc_now
         )
         forecast_temperature = select_forecast_temperature(
-            forecast_items, next_event, dt_util.now()
+            forecast_items, next_event, utc_now
         )
         if forecast_temperature is not None and next_event is not None:
             forecast_temperature = round(
@@ -6561,7 +6739,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 setback_floor = previous
         self._setback_floor = setback_floor
         decision = decide_heating_target(
-            now=dt_util.now(),
+            now=utc_now,
             schedule_active=schedule_active,
             next_event=next_event,
             room_temperature=room_temperature,

@@ -1,4 +1,4 @@
-pytest-homeassistant-custom-component
+# The Home Assistant test harness is picked per run by
+# scripts/ha_test_versions.py (released or beta Home Assistant), see
+# .github/workflows/tests.yml.
 ruff
-hassil==3.5.0
-home-assistant-intents==2026.1.28
