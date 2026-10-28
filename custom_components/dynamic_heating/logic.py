@@ -25,6 +25,39 @@ class HeatingDecision:
     projected_temperature: float | None = None
     forecast_condition: str | None = None
     solar_adjustment_minutes: int = 0
+    # How the preheat time came about (see ``preheat_parts``).
+    preheat_parts: dict | None = None
+
+
+def preheat_parts_text(parts: dict) -> str:
+    """One line such as "Raummodell 62 min (18,4 → 21,0 °C, außen 3,0 °C), …"."""
+
+    def number(value: float) -> str:
+        return f"{value:.1f}".replace(".", ",")
+
+    def signed(value: int) -> str:
+        return f"+{value}" if value > 0 else f"−{-value}"
+
+    source = "Raummodell" if parts.get("source") == "model" else "Aufheizrate"
+    text = f"{source} {parts['base_minutes']} min"
+    details = [f"{number(parts['start_temperature'])} → {number(parts['target'])} °C"]
+    if parts.get("outdoor") is not None:
+        details.append(f"außen {number(parts['outdoor'])} °C")
+    text += f" ({', '.join(details)})"
+    for key, label in (
+        ("overshoot_minutes", "Überschwingen"),
+        ("punctuality_minutes", "Pünktlichkeit"),
+        ("sun_minutes", "Sonne"),
+    ):
+        value = int(parts.get(key) or 0)
+        if value:
+            text += f", {label} {signed(value)}"
+    if parts.get("supply_wait_until"):
+        text += f", wartet auf die Zentralheizung bis {parts['supply_wait_until']} Uhr"
+    text += f" → {parts['final_minutes']} min"
+    if parts.get("limited"):
+        text += f" (gedeckelt auf {parts['limit_minutes']})"
+    return text
 
 
 def calculate_lead_minutes(
@@ -318,22 +351,29 @@ def _decide(
         else room_temperature
     )
     lead_target = comfort_temperature - max(0.0, overshoot)
-    if room_model is not None:
-        lead = model_lead_minutes(
-            room_model, temperature_for_lead, lead_target, max_preheat_minutes
-        )
-    else:
-        lead = calculate_lead_minutes(
+    lead_outdoor = (
+        forecast_temperature if forecast_temperature is not None else outdoor_temperature
+    )
+
+    def base_lead(target: float) -> int:
+        if room_model is not None:
+            return model_lead_minutes(
+                room_model, temperature_for_lead, target, max_preheat_minutes
+            )
+        return calculate_lead_minutes(
             temperature_for_lead,
-            lead_target,
+            target,
             heating_rate_c_per_hour,
-            forecast_temperature
-            if forecast_temperature is not None
-            else outdoor_temperature,
+            lead_outdoor,
             max_preheat_minutes,
         )
+
+    lead = base_lead(lead_target)
+    without_overshoot = base_lead(comfort_temperature) if overshoot > 0 else lead
+    after_overshoot = lead
     if lead > 0 and lead_bias_minutes:
         lead = max(0, min(lead + int(lead_bias_minutes), max_preheat_minutes))
+    after_bias = lead
 
     solar_adjustment = 0
     if (
@@ -344,6 +384,22 @@ def _decide(
         lead, solar_adjustment = apply_forecast_solar_adjustment(
             lead, forecast_condition, next_event
         )
+    parts: dict | None = None
+    if minutes_until_event is not None and without_overshoot > 0:
+        parts = {
+            "source": "model" if room_model is not None else "rate",
+            "start_temperature": round(temperature_for_lead, 1),
+            "target": round(comfort_temperature, 1),
+            "outdoor": None if lead_outdoor is None else round(float(lead_outdoor), 1),
+            "base_minutes": without_overshoot,
+            "overshoot_minutes": after_overshoot - without_overshoot,
+            "punctuality_minutes": after_bias - after_overshoot,
+            "sun_minutes": -int(solar_adjustment),
+            "limit_minutes": max_preheat_minutes,
+            "limited": without_overshoot >= max_preheat_minutes
+            or after_bias >= max_preheat_minutes,
+            "final_minutes": lead,
+        }
 
     if minutes_until_event is not None:
         should_preheat = minutes_until_event > 0 and (
@@ -362,6 +418,7 @@ def _decide(
                 projected_temperature,
                 forecast_condition,
                 solar_adjustment,
+                parts,
             )
 
     if setback > eco_temperature:
@@ -375,6 +432,7 @@ def _decide(
             projected_temperature,
             forecast_condition,
             solar_adjustment,
+            parts,
         )
     return HeatingDecision(
         "Energiesparbetrieb",
@@ -384,6 +442,7 @@ def _decide(
         projected_temperature,
         forecast_condition,
         solar_adjustment,
+        parts,
     )
 
 
@@ -946,3 +1005,73 @@ def match_schedule(schedules: list[tuple[str, str]], name: str | None) -> str | 
         if text in schedule_name.casefold() or schedule_name.casefold() in text:
             return entity_id
     return None
+
+
+def _vapour_pressure(temperature: float) -> float:
+    """Saturation vapour pressure over water in hPa (Magnus, WMO)."""
+    return 6.112 * math.exp(17.62 * temperature / (243.12 + temperature))
+
+
+def absolute_humidity(temperature: float, relative: float) -> float:
+    """Water in the air in g/m³ from temperature (°C) and humidity (%)."""
+    return 216.7 * relative / 100 * _vapour_pressure(temperature) / (273.15 + temperature)
+
+
+def dew_point(temperature: float, relative: float) -> float:
+    """Dew point in °C (Magnus formula)."""
+    gamma = math.log(max(relative, 0.1) / 100) + 17.62 * temperature / (
+        243.12 + temperature
+    )
+    return 243.12 * gamma / (17.62 - gamma)
+
+
+def airing_advice(
+    indoor: float | None,
+    indoor_humidity: float | None,
+    outdoor: float | None,
+    outdoor_humidity: float | None,
+    *,
+    humid_percent: float,
+    min_difference: float,
+) -> dict | None:
+    """Is airing worth it for the humidity? Display only, nothing is changed.
+
+    Indoor air above ``humid_percent`` is worth drying. Airing helps when the
+    outdoor air holds at least ``min_difference`` g/m³ less water; then it
+    also says how humid the room would be with the outdoor air warmed up and
+    how long to air in the cold. ``None`` without indoor readings.
+    """
+    if indoor is None or indoor_humidity is None:
+        return None
+    inside = absolute_humidity(indoor, indoor_humidity)
+    result: dict = {
+        "relative_humidity": round(indoor_humidity),
+        "absolute_humidity": round(inside, 1),
+        "dew_point": round(dew_point(indoor, indoor_humidity), 1),
+        "outdoor_absolute_humidity": None,
+        "humidity_after_airing": None,
+    }
+    if outdoor is not None and outdoor_humidity is not None:
+        outside = absolute_humidity(outdoor, outdoor_humidity)
+        result["outdoor_absolute_humidity"] = round(outside, 1)
+        # Outdoor air warmed up to the room: its relative humidity there.
+        result["humidity_after_airing"] = round(
+            min(100.0, outside / inside * indoor_humidity)
+        )
+    else:
+        outside = None
+    if indoor_humidity <= humid_percent:
+        result["state"] = "not_needed"
+        result["text"] = "Nicht nötig"
+    elif outside is None:
+        result["state"] = "unknown"
+        result["text"] = "Luft feucht – Außenfeuchte fehlt"
+    elif outside <= inside - min_difference:
+        minutes = 5 if outdoor < 5 else 10 if outdoor < 15 else 15
+        result["state"] = "helps"
+        result["text"] = f"Lüften hilft – {minutes} Minuten stoßlüften"
+        result["minutes"] = minutes
+    else:
+        result["state"] = "useless"
+        result["text"] = "Lüften bringt nichts – draußen ähnlich feucht"
+    return result

@@ -318,7 +318,8 @@
           "heating_limit_fallback_off": "Ohne Außentemperatur nicht heizen",
           "notify_away": "Push, wenn niemand zuhause erkannt wird",
           "outdoor_warmer_stop": "Nicht heizen, wenn es außen wärmer ist",
-          "outdoor_warmer_margin": "Außen wärmer: Puffer"
+          "outdoor_warmer_margin": "Außen wärmer: Puffer",
+          "outdoor_humidity_entity": "Luftfeuchte draußen (optional, sonst aus der Wetter-Entität)"
         },
         "data_description": {
           "window_entity": "EIN erzwingt Absenkung. Ist ein ausgewählter Fensterkontakt nicht verfügbar, wird kein neuer Sollwert geschrieben.",
@@ -392,7 +393,9 @@
           "preheat_extension": "Vorheizen darf so viel länger dauern (0 = nie)",
           "morning_report": "Morgenmeldung, wenn es zum Komfortbeginn nicht warm war",
           "hold_before_supply_pause": "Abends bis zur Pause der Zentralheizung warm halten",
-          "shower_learning": "Duschzeiten lernen (Bad)"
+          "shower_learning": "Duschzeiten lernen (Bad)",
+          "homecoming_preheat": "Zur üblichen Heimkehr vorheizen, wenn niemand zuhause ist",
+          "cold_comfort_boost": "Komfort bei Frost anheben um bis zu (0 = aus)"
         },
         "data_description": {
           "recovery_limit": "Außerhalb der Komfortzeit muss der Raum innerhalb der maximalen Vorheizzeit wieder warm werden.",
@@ -402,7 +405,9 @@
           "preheat_extension": "Zusätzlich zur maximalen Vorheizzeit, nur wenn die Zentralheizung in dieser Zeit nicht üblicherweise aus ist.",
           "morning_report": "Eine Push-Nachricht um 7 Uhr, nur wenn der Raum zum Komfortbeginn mindestens 0,5 °C unter dem Ziel lag, mit dem Grund (z. B. Zentralheizung lieferte noch nicht).",
           "hold_before_supply_pause": "Endet der Komfort kurz vor der üblichen Nachtpause der Zentralheizung, bleibt der Raum bis zum Beginn der Pause auf Komfort. Er startet dann morgens wärmer, kostet aber etwas Wärme.",
-          "shower_learning": "Erkennt Duschen am schnellen Anstieg der Luftfeuchte, schlägt passende Komfortzeiten vor und lernt das Raummodell nicht aus der Stunde danach."
+          "shower_learning": "Erkennt Duschen am schnellen Anstieg der Luftfeuchte, schlägt passende Komfortzeiten vor und lernt das Raummodell nicht aus der Stunde danach.",
+          "homecoming_preheat": "Die Integration lernt aus den Personen, wann an welchem Wochentag jemand nach Hause kommt (Sensor „Übliche Heimkehr“ am Haus). Ist niemand zuhause und hat der Zeitplan dann Komfortzeit, ist der Raum zu dieser Zeit warm. Kommt ihr früher, greift die Anwesenheit wie bisher.",
+          "cold_comfort_boost": "Bei Frost sind die Wände kälter und es fühlt sich kühler an. Ab +5 °C außen steigt die Komforttemperatur gleichmäßig bis zu diesem Wert bei −10 °C. Eco bleibt gleich."
         }
       }
     },
@@ -449,7 +454,8 @@
       "target_reached": "Zieltemperatur erreicht",
       "window_opened": "Fenster geöffnet (nach Verzögerung)",
       "window_closed": "Fenster geschlossen (nach Verzögerung)",
-      "humidity_high": "Luftfeuchte hoch (ab 60 %)"
+      "humidity_high": "Luftfeuchte hoch (ab 60 %)",
+      "preheat_started": "Vorheizen beginnt"
     }
   },
   "services": {

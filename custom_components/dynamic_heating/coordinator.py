@@ -98,6 +98,21 @@ from .const import (
     TRIGGER_HEATING_STARTED,
     TRIGGER_HEATING_STOPPED,
     TRIGGER_HUMIDITY_HIGH,
+    TRIGGER_PREHEAT_STARTED,
+    CONF_HOMECOMING_PREHEAT,
+    DEFAULT_HOMECOMING_PREHEAT,
+    HOMECOMING_HOLD_MINUTES,
+    HOMECOMING_HISTORY_DAYS,
+    CONF_COLD_COMFORT_BOOST,
+    DEFAULT_COLD_COMFORT_BOOST,
+    COLD_COMFORT_MAX,
+    COLD_COMFORT_FROM,
+    COLD_COMFORT_FULL,
+    AIRING_HUMIDITY_PERCENT,
+    AIRING_MIN_DIFFERENCE,
+    CONF_OUTDOOR_HUMIDITY_ENTITY,
+    LEVEL_KEYS,
+    LEVELS,
     TRIGGER_TARGET_REACHED,
     TRIGGER_WINDOW_CLOSED,
     TRIGGER_WINDOW_OPENED,
@@ -317,6 +332,7 @@ from .logic import (
     paused_features,
     plausible_temperature,
     calendar_temperature,
+    description_value,
     temperature_trend,
     aggressive_setpoint,
     select_schedule,
@@ -324,6 +340,9 @@ from .logic import (
     calibration_offset,
     fallback_room_temperature,
     calculate_lead_minutes,
+    model_lead_minutes,
+    preheat_parts_text,
+    airing_advice,
     schedule_comfort_temperature,
     decide_heating_target,
     evaluate_heating_limit,
@@ -370,7 +389,9 @@ from .routine import (
     HABIT_DAYS,
     TUYA_DAYS,
     Habits,
+    Homecoming,
     ShowerWatch,
+    homecomings_from_history,
     schedule_covers,
     showers_from_history,
     HeatStats,
@@ -386,6 +407,7 @@ from .plan import (
     blocks_from_schedule,
     blocks_switched_at,
     compare_plans,
+    plan_segments,
     shifted_blocks,
     savings_text,
     simulate,
@@ -432,7 +454,11 @@ class _WrittenSetpoint:
 _INVALID_STATES = {"unknown", "unavailable", None}
 # Targets that the room offset leaves alone: protection and fixed setpoints.
 # Modes that aim for comfort; the status tells when comfort is out of reach.
-_REACH_MODES = frozenset({"comfort", "preheat", "boost", "away_reduced"})
+_REACH_MODES = frozenset(
+    {"comfort", "preheat", "boost", "away_reduced", "homecoming"}
+)
+# Modes that warm the room up ahead of time (device trigger "preheat_started").
+_PREHEAT_MODES = frozenset({"preheat", "homecoming"})
 _NO_OFFSET_MODES = frozenset(
     {
         "season_off",
@@ -705,7 +731,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._plan_at: datetime | None = None
         self._plan_key: tuple | None = None
         self._schedule_week: list[Block] | None = None
-        self._schedule_week_key: tuple[str | None, str] | None = None
+        self._schedule_week_key: tuple | None = None
         self._schedule_week_at: datetime | None = None
         self._plan_checks: dict[datetime, float] = {}
         self._plan_check_hour: int | None = None
@@ -741,12 +767,21 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._learn_run_target: float | None = None
         # Warm on time, modes picked by hand, long-term figures (persisted).
         self.punctuality = Punctuality()
+        # (outdoor at the next comfort start, degrees to warm up) for the
+        # correction from similar mornings; set every cycle.
+        self._bias_context: tuple[float | None, float | None] = (None, None)
         self.habits = Habits()
         # Showers seen in the room's humidity (bathrooms, runde 10).
         self.showers = Habits()
         self.batteries = BatteryWatch()
         self._battery_seed_at: datetime | None = None
         self._showers_seeded = False
+        # Usual homecoming per weekday (persisted), seeded once from the
+        # recorder; the day preheating for it began (runtime).
+        self.homecoming = Homecoming()
+        self._airing_state: str | None = None
+        self._homecoming_seeded = False
+        self._homecoming_day: date | None = None
         self._shower_watch = ShowerWatch(
             SHOWER_RISE_PERCENT, SHOWER_RISE_WINDOW_SECONDS, SHOWER_COOLDOWN_SECONDS
         )
@@ -1172,6 +1207,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.showers = Habits.from_dict(stored.get("showers"))
         self.batteries = BatteryWatch.from_dict(stored.get("batteries"))
         self._showers_seeded = bool(stored.get("showers_seeded"))
+        self.homecoming = Homecoming.from_dict(stored.get("homecoming"))
+        self._homecoming_seeded = bool(stored.get("homecoming_seeded"))
         raw_maintenance = self._stored_string(stored.get("valve_maintenance_last"))
         parsed_maintenance = (
             dt_util.parse_datetime(raw_maintenance) if raw_maintenance else None
@@ -1303,6 +1340,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if active
                 else None
             )
+            if active and temperature is None:
+                name = description_value(state.attributes.get("description"), LEVEL_KEYS)
+                temperature = self._level_temperature(name)
             return active, next_event, temperature
         temperature = (
             schedule_comfort_temperature(
@@ -1311,7 +1351,41 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if active
             else None
         )
+        if active and temperature is None:
+            temperature = self._block_level(state.attributes)
         return active, self._parse_next_event(state), temperature
+
+    def _level_temperature(self, name: object) -> float | None:
+        """Temperature of a level such as "abend", kept by the house."""
+        if not isinstance(name, str) or not name.strip():
+            return None
+        key = name.strip().casefold()
+        house = self._house()
+        if house is not None:
+            return house.level(key)
+        item = LEVELS.get(key)
+        return None if item is None else item[1]
+
+    def _levels_key(self) -> tuple[float | None, ...]:
+        """The current level temperatures, so caches notice a change."""
+        return tuple(self._level_temperature(key) for key in LEVELS)
+
+    def level_options(self) -> list[dict[str, Any]]:
+        """The temperature levels for the schedule editor."""
+        return [
+            {"key": key, "name": name, "temperature": self._level_temperature(key)}
+            for key, (name, _default) in LEVELS.items()
+        ]
+
+    def _block_level(self, data: object) -> float | None:
+        """Temperature of the level a schedule block names (``stufe: abend``)."""
+        if not hasattr(data, "get"):
+            return None
+        for key in LEVEL_KEYS:
+            value = data.get(key)
+            if value is not None:
+                return self._level_temperature(str(value))
+        return None
 
     def _contact_groups(self) -> list[tuple[str, list[str], bool, int, int]]:
         """(name, contacts, main required, open delay, close delay) per group.
@@ -1474,7 +1548,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         eco = float(self.config.get(CONF_ECO_TEMPERATURE, DEFAULT_ECO_TEMPERATURE))
         now = dt_util.utcnow()
-        key = (schedule_id, comfort, eco)
+        key = (schedule_id, comfort, eco, self._levels_key())
         if (
             key == self._week_written_key
             and self._week_written_at is not None
@@ -1518,7 +1592,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except (AttributeError, TypeError, ValueError):
                 step = 0.5
             week = tuya_week_schedule(
-                weekly, comfort, eco, step, schedule_comfort_temperature
+                weekly, comfort, eco, step, schedule_comfort_temperature, self._block_level
             )
             for day, text_id in texts.items():
                 current = self.hass.states.get(text_id)
@@ -1845,6 +1919,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "habits": self.habits.as_dict(),
                 "showers": self.showers.as_dict(),
                 "showers_seeded": self._showers_seeded,
+                "homecoming": self.homecoming.as_dict(),
+                "homecoming_seeded": self._homecoming_seeded,
                 "batteries": self.batteries.as_dict(),
             }
         )
@@ -3699,6 +3775,219 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._log(f"{len(found)}× Duschen aus dem Verlauf erkannt")
         await self._save_learning()
 
+    def _outdoor_humidity(self) -> float | None:
+        """Outdoor humidity in %: own sensor, else the weather entity's."""
+        value = _as_float(self._state(CONF_OUTDOOR_HUMIDITY_ENTITY))
+        if value is None:
+            weather_id = self.config.get(CONF_WEATHER_ENTITY)
+            weather = self.hass.states.get(weather_id) if weather_id else None
+            if self._valid(weather):
+                try:
+                    value = float(weather.attributes.get("humidity"))
+                except (TypeError, ValueError):
+                    value = None
+        if value is None or not math.isfinite(value) or not 0 < value <= 100:
+            return None
+        return value
+
+    def _update_airing(self, result: dict[str, Any]) -> None:
+        """Airing advice from indoor and outdoor humidity (display only)."""
+        humidity = _as_float(self._state(CONF_HUMIDITY_ENTITY))
+        room = result.get("room_temperature")
+        if humidity is not None and not 0 < humidity <= 100:
+            humidity = None
+        # Once humid, the room counts as humid until 5 points below the limit.
+        limit = AIRING_HUMIDITY_PERCENT - (
+            HUMIDITY_HYSTERESIS
+            if self._airing_state in ("helps", "useless", "unknown")
+            else 0
+        )
+        advice = airing_advice(
+            None if room is None or result.get("room_temperature_source") != "sensor"
+            else float(room),
+            humidity,
+            result.get("outdoor_temperature"),
+            self._outdoor_humidity(),
+            humid_percent=limit,
+            min_difference=AIRING_MIN_DIFFERENCE,
+        )
+        self._airing_state = None if advice is None else advice["state"]
+        result["airing"] = None if advice is None else advice["text"]
+        result["airing_details"] = advice
+
+    def _cold_comfort_raise(self, outdoor: float | None) -> float:
+        """How much comfort rises in the cold (walls feel colder), 0 = off.
+
+        Nothing above ``COLD_COMFORT_FROM`` outdoors, the full set raise at
+        ``COLD_COMFORT_FULL`` and below, evenly in between (0.1 °C steps).
+        """
+        try:
+            raise_by = float(
+                self.config.get(CONF_COLD_COMFORT_BOOST, DEFAULT_COLD_COMFORT_BOOST) or 0
+            )
+        except (TypeError, ValueError):
+            return 0.0
+        raise_by = max(0.0, min(COLD_COMFORT_MAX, raise_by))
+        if not raise_by or outdoor is None:
+            return 0.0
+        share = (COLD_COMFORT_FROM - float(outdoor)) / (COLD_COMFORT_FROM - COLD_COMFORT_FULL)
+        return round(raise_by * max(0.0, min(1.0, share)), 1)
+
+    def _people(self) -> list[str]:
+        people = self.config.get(CONF_PERSON_ENTITIES) or []
+        return [people] if isinstance(people, str) else list(people)
+
+    def _observe_homecoming(self, result: dict[str, Any]) -> bool:
+        """Learn the usual homecoming; True when one was recorded."""
+        learned = False
+        people = self._people()
+        states = [self.hass.states.get(entity_id) for entity_id in people]
+        if people and all(self._valid(state) for state in states):
+            home = any(state.state == "home" for state in states)
+            learned = self.homecoming.observe(dt_util.now(), home)
+            if learned:
+                self._log("Heimkehr gelernt")
+        today = dt_util.now()
+        minute = self.homecoming.usual(today.weekday(), today.date())
+        result["homecoming_today"] = (
+            None if minute is None else f"{minute // 60:02d}:{minute % 60:02d}"
+        )
+        result["homecoming_week"] = self.homecoming.week(today.date())
+        result["homecoming_count"] = self.homecoming.count()
+        return learned
+
+    async def async_seed_homecoming(self) -> None:
+        """Homecomings of the last weeks from the people's history, once."""
+        people = self._people()
+        if (
+            self._homecoming_seeded
+            or not people
+            or "recorder" not in self.hass.config.components
+        ):
+            return
+        from homeassistant.components.recorder import get_instance, history
+
+        end = dt_util.utcnow()
+        start = end - timedelta(days=HOMECOMING_HISTORY_DAYS)
+        try:
+            states = await get_instance(self.hass).async_add_executor_job(
+                history.get_significant_states,
+                self.hass,
+                start,
+                end,
+                people,
+                None,
+                True,
+                False,
+                False,
+                True,
+            )
+        except Exception:  # noqa: BLE001 - history is a bonus, never fatal
+            _LOGGER.debug("Person history not available", exc_info=True)
+            return
+        changes = []
+        for entity_id in people:
+            for state in states.get(entity_id, []):
+                if not isinstance(state, State) or state.state in _INVALID_STATES:
+                    continue
+                changes.append(
+                    (dt_util.as_local(state.last_changed), entity_id, state.state == "home")
+                )
+        seeded = homecomings_from_history(changes, len(people))
+        for items in seeded.arrivals.values():
+            for day, minute in items:
+                moment = datetime.combine(
+                    date.fromisoformat(day),
+                    datetime.min.time(),
+                    dt_util.get_default_time_zone(),
+                ) + timedelta(minutes=minute)
+                self.homecoming.record(moment)
+        self._homecoming_seeded = True
+        if seeded.count():
+            self._log(f"{seeded.count()}× Heimkehr aus dem Verlauf gelernt")
+        await self._save_learning()
+
+    def _homecoming_preheat(
+        self,
+        decision: HeatingDecision,
+        *,
+        room_temperature: float,
+        outdoor_temperature: float | None,
+        comfort_temperature: float,
+        schedule_active: bool,
+        next_event: datetime | None,
+        view: ModelView | None,
+        max_preheat: int,
+    ) -> HeatingDecision:
+        """While nobody is home, be warm again by the usual homecoming.
+
+        Only when the schedule asks for comfort at that time. Until then the
+        room keeps the away setback; it starts as late as the room needs
+        (room model, else the heating rate) and stays warm for a while after
+        the usual time. Coming home earlier is handled by presence as before.
+        """
+        if (
+            not self.config.get(CONF_HOMECOMING_PREHEAT, DEFAULT_HOMECOMING_PREHEAT)
+            or self._absence != "house_empty"
+            or decision.mode not in ("away", "away_reduced")
+        ):
+            self._homecoming_day = None
+            return decision
+        local = dt_util.now()
+        minute = self.homecoming.usual(local.weekday(), local.date())
+        if minute is None:
+            return decision
+        arrival = local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
+            minutes=minute
+        )
+        until = arrival + timedelta(minutes=HOMECOMING_HOLD_MINUTES)
+        if local >= until:
+            return decision
+        if schedule_active:
+            comfort_then = next_event is None or dt_util.as_utc(next_event) > dt_util.as_utc(
+                arrival
+            )
+        else:
+            comfort_then = next_event is not None and dt_util.as_utc(
+                next_event
+            ) <= dt_util.as_utc(arrival)
+        if not comfort_then:
+            return decision
+        goal = comfort_temperature - max(0.0, self.overshoot)
+        if view is not None:
+            lead = model_lead_minutes(view, room_temperature, goal, max_preheat)
+        else:
+            lead = calculate_lead_minutes(
+                room_temperature,
+                goal,
+                self.effective_heating_rate,
+                outdoor_temperature,
+                max_preheat,
+            )
+        minutes = (dt_util.as_utc(arrival) - dt_util.utcnow()).total_seconds() / 60
+        started = self._homecoming_day == local.date()
+        last = self.data if isinstance(self.data, dict) else {}
+        if (
+            self.supply_profile.usually_off(local.hour)
+            and SUPPLY_WARM not in (last.get("house_supply"), last.get("radiator_supply"))
+        ):
+            # No heat from the central heating now: open valves would not help.
+            return decision
+        if not started and (
+            minutes > lead or room_temperature >= comfort_temperature - 0.2
+        ):
+            return decision
+        self._homecoming_day = local.date()
+        when = arrival.strftime("%H:%M")
+        status = (
+            f"Vorheizen zur üblichen Heimkehr ({when} Uhr)"
+            if minutes > 0
+            else f"Heimkehr erwartet (meist {when} Uhr) – warm gehalten"
+        )
+        return HeatingDecision(
+            status, "homecoming", comfort_temperature, max(0, lead)
+        )
+
     async def async_start_learn_run(self, at: datetime | None = None) -> None:
         """Plan the calibration run for ``at``, or start it now."""
         now = dt_util.utcnow()
@@ -4640,12 +4929,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         key = (
             schedule_id,
             tomorrow_id,
+            self._levels_key(),
             dt_util.as_local(now).strftime("%Y-%m-%d %H"),
         )
         if (
             self._schedule_week is not None
             and self._schedule_week_key is not None
-            and self._schedule_week_key[:2] == key[:2]
+            and self._schedule_week_key[:3] == key[:3]
             and self._schedule_week_at is not None
             and now - self._schedule_week_at < SCHEDULE_WEEK_INTERVAL
         ):
@@ -4688,7 +4978,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if isinstance(weekly, dict):
                     self._schedule_weekly[schedule_id] = weekly
                 blocks = blocks_from_schedule(
-                    weekly, local, schedule_comfort_temperature
+                    weekly, local, schedule_comfort_temperature, level_of=self._block_level
                 )
             elif schedule_id.startswith("calendar."):
                 response = await self.hass.services.async_call(
@@ -4982,6 +5272,14 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             lead_bias_minutes=self._lead_bias(),
         )
         info = plan_summary(points, blocks, local)
+        info["segments"] = plan_segments(points, eco)
+        if self.config.get(CONF_HOMECOMING_PREHEAT, DEFAULT_HOMECOMING_PREHEAT):
+            minute = self.homecoming.usual(local.weekday(), local.date())
+            if minute is not None:
+                info["homecoming"] = f"{minute // 60:02d}:{minute % 60:02d}"
+                info["text"] = (
+                    f"{info['text']} · Heimkehr meist {info['homecoming']} Uhr"
+                )
         if self._tomorrow_note:
             info["text"] = f"{info['text']} ({self._tomorrow_note})"
         if self.plan_error is not None and self.plan_checked >= 3:
@@ -5041,7 +5339,11 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         weekly = self._schedule_weekly.get(schedule_id)
         if schedule_id.startswith("schedule.") and isinstance(weekly, dict):
             blocks = blocks_from_schedule(
-                weekly, local, schedule_comfort_temperature, hours=days * 24
+                weekly,
+                local,
+                schedule_comfort_temperature,
+                hours=days * 24,
+                level_of=self._block_level,
             )
         else:
             days = 1
@@ -5312,8 +5614,17 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return bool(self.config.get(CONF_PUNCTUALITY, DEFAULT_PUNCTUALITY))
 
     def _lead_bias(self) -> int:
-        """The learned preheat correction in minutes (0 when switched off)."""
-        return round(self.punctuality.bias_minutes) if self._punctual() else 0
+        """The learned preheat correction in minutes (0 when switched off).
+
+        Taken from earlier mornings like the next one (outdoor temperature at
+        the comfort start, degrees to warm up), see ``Punctuality.bias_for``.
+        """
+        if not self._punctual():
+            return 0
+        outdoor, gap = self._bias_context
+        return round(
+            self.punctuality.bias_for(outdoor, gap, dt_util.as_local(dt_util.utcnow()).date())
+        )
 
     def _preheat_extension_minutes(self) -> int:
         if not self._punctual():
@@ -5372,8 +5683,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             next_hour = profile.next_on_hour(hour)
             # Timed afresh once the central heating delivers again.
             self._preheat_event = None
+            parts = decision.preheat_parts
+            if parts is not None and next_hour is not None:
+                parts = {**parts, "supply_wait_until": f"{next_hour:02d}:00"}
             return replace(
                 decision,
+                preheat_parts=parts,
                 status="Vorheizen wartet auf die Zentralheizung"
                 + (
                     f" (liefert meist ab {next_hour}:00 Uhr)"
@@ -5564,8 +5879,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         supply_learned = self._observe_cooling(result) or supply_learned
         await self._update_plan(result)
         routine_learned = self._observe_routine(result)
+        routine_learned = self._observe_homecoming(result) or routine_learned
         await self._morning_report(result)
         shower_seen = self._observe_shower(result)
+        self._update_airing(result)
         batteries_changed = self._observe_batteries(result)
         habit = self._update_habits(result)
         await self._maybe_selftest(result)
@@ -5635,6 +5952,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 supply_cold=SUPPLY_COLD
                 in (result.get("radiator_supply"), result.get("house_supply"))
                 or bool(result.get("supply_usually_off")),
+                outdoor=self._bias_context[0],
+                bias=self._lead_bias(),
             )
             if late is not None:
                 judged = True
@@ -5646,6 +5965,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._log("Komfortbeginn: pünktlich warm")
         result["punctuality"] = self.punctuality.summary()
         result["punctuality_bias"] = self._lead_bias()
+        result["punctuality_running_bias"] = round(self.punctuality.bias_minutes)
+        result["punctuality_similar"] = self.punctuality.similar_ready()
+        result["punctuality_mornings"] = len(self.punctuality.history)
         result["punctuality_results"] = [
             {"date": day, "minutes_late": late}
             for day, late in self.punctuality.results
@@ -6202,6 +6524,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 else room >= float(target) - TARGET_REACHED_MARGIN
             ),
             "window": bool(result.get("window_open")),
+            "preheat": (
+                result.get("mode") in _PREHEAT_MODES if self.enabled else None
+            ),
         }
         humidity = _as_float(self._state(CONF_HUMIDITY_ENTITY))
         if humidity is not None:
@@ -6215,6 +6540,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "reached": (TRIGGER_TARGET_REACHED, None),
             "window": (TRIGGER_WINDOW_OPENED, TRIGGER_WINDOW_CLOSED),
             "humid": (TRIGGER_HUMIDITY_HIGH, None),
+            "preheat": (TRIGGER_PREHEAT_STARTED, None),
         }
         # "Reached" only counts when the room warmed up to an unchanged
         # target, not when the target dropped below the room.
@@ -6508,6 +6834,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 slot_comfort = house_temperature
         if slot_comfort is not None:
             comfort_temperature = slot_comfort
+        cold_raise = self._cold_comfort_raise(outdoor_temperature)
+        comfort_temperature += cold_raise
         now_utc = dt_util.utcnow()
         if not schedule_active:
             self._comfort_started_at = None
@@ -6738,6 +7066,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ):
                 setback_floor = previous
         self._setback_floor = setback_floor
+        self._bias_context = (
+            forecast_temperature
+            if forecast_temperature is not None
+            else outdoor_temperature,
+            max(0.0, comfort_temperature - room_temperature),
+        )
         decision = decide_heating_target(
             now=utc_now,
             schedule_active=schedule_active,
@@ -6807,6 +7141,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 decision,
                 status=f"Heizgrenze erreicht (Ø {span} {value} °C) – abgesenkt",
             )
+        if cold_raise and decision.mode in ("comfort", "preheat", "homecoming"):
+            decision = replace(
+                decision,
+                status=f"{decision.status} (+"
+                + f"{cold_raise:.1f}".replace(".", ",")
+                + " °C wegen Kälte)",
+            )
         decision = self._early_stop(
             decision,
             room_temperature=room_temperature,
@@ -6849,6 +7190,16 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             comfort_temperature=comfort_temperature,
             eco_temperature=eco_temperature,
             schedule_active=schedule_active,
+        )
+        decision = self._homecoming_preheat(
+            decision,
+            room_temperature=room_temperature,
+            outdoor_temperature=outdoor_temperature,
+            comfort_temperature=comfort_temperature,
+            schedule_active=schedule_active,
+            next_event=next_event,
+            view=event_view,
+            max_preheat=preheat_limit,
         )
         if decision.mode == "preheat":
             self._preheat_event = next_event
@@ -6893,6 +7244,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "forecast_condition": forecast_condition,
             "forecast_temperature": forecast_temperature,
             "solar_adjustment_minutes": decision.solar_adjustment_minutes,
+            "preheat_parts": decision.preheat_parts,
+            "cold_comfort_raise": cold_raise,
+            "preheat_breakdown": (
+                preheat_parts_text(decision.preheat_parts)
+                if decision.preheat_parts
+                else None
+            ),
             "schedule_active": schedule_active,
             "active_schedule": schedule_id,
             "eco_temperature": eco_temperature,

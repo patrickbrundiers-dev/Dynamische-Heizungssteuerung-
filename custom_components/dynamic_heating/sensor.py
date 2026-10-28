@@ -28,7 +28,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_ENTRY_TYPE, DOMAIN, ENTRY_TYPE_HOUSE
+from .const import CONF_ENTRY_TYPE, CONF_HUMIDITY_ENTITY, DOMAIN, ENTRY_TYPE_HOUSE
 from .select import device_info
 from .coordinator import DynamicHeatingCoordinator
 from .house_entities import HouseEntity
@@ -210,13 +210,6 @@ SENSORS = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-    ),
-    HeatingSensorDescription(
-        key="preheat_minutes",
-        name="Geschätzte Vorheizzeit",
-        icon="mdi:timer-outline",
-        native_unit_of_measurement="min",
-        state_class=SensorStateClass.MEASUREMENT,
     ),
     HeatingSensorDescription(
         key="heat_demand",
@@ -412,6 +405,7 @@ async def async_setup_entry(
             HouseGeofenceSensor(entry.runtime_data, entry, "geofencing"),
             HouseEnergySensor(entry.runtime_data, entry, "heat_energy"),
             HouseHeatLoadSensor(entry.runtime_data, entry, "heat_load"),
+            HouseHomecomingSensor(entry.runtime_data, entry, "homecoming"),
         ])
         return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
@@ -431,6 +425,9 @@ async def async_setup_entry(
         for description, entity in zip(SENSORS, entities, strict=True)
     ]
     entities.append(DayPlanSensor(coordinator, entry, DAY_PLAN))
+    entities.append(PreheatSensor(coordinator, entry, PREHEAT))
+    if coordinator.config.get(CONF_HUMIDITY_ENTITY):
+        entities.append(AiringSensor(coordinator, entry, AIRING))
     async_add_entities(entities)
 
 
@@ -485,6 +482,9 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             data = self.coordinator.data
             return {
                 "preheat_correction_minutes": data.get("punctuality_bias"),
+                "running_correction_minutes": data.get("punctuality_running_bias"),
+                "from_similar_mornings": data.get("punctuality_similar"),
+                "mornings_with_weather": data.get("punctuality_mornings"),
                 "mornings": data.get("punctuality_results"),
             }
         if self.entity_description.key == "heat_energy_total":
@@ -611,7 +611,9 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "schedules": [
                 {"entity_id": entity_id, "name": name}
                 for entity_id, name in self.coordinator.schedule_options()
-            ]
+            ],
+            # Levels a block can name instead of a temperature ("stufe: abend").
+            "levels": self.coordinator.level_options(),
         }
 
 
@@ -653,13 +655,88 @@ class DayPlanSensor(HeatingSensor):
     """What the room will do in the next 24 hours; the curve in the attributes."""
 
     # The curve changes every 15 minutes and is only useful live.
-    _unrecorded_attributes = frozenset({"forecast", "calculated_at"})
+    _unrecorded_attributes = frozenset({"forecast", "calculated_at", "segments"})
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         if not self.coordinator.data:
             return None
         return self.coordinator.plan_attributes()
+
+
+PREHEAT = HeatingSensorDescription(
+    key="preheat_minutes",
+    name="Geschätzte Vorheizzeit",
+    icon="mdi:timer-outline",
+    native_unit_of_measurement="min",
+    state_class=SensorStateClass.MEASUREMENT,
+)
+
+
+class PreheatSensor(HeatingSensor):
+    """Minutes of preheating; how they came about in the attributes."""
+
+    # The parts move with the room temperature and are only useful live.
+    _unrecorded_attributes = frozenset({"parts", "breakdown"})
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        if not self.coordinator.data:
+            return None
+        data = self.coordinator.data
+        return {
+            "breakdown": data.get("preheat_breakdown"),
+            "parts": data.get("preheat_parts"),
+        }
+
+
+AIRING = HeatingSensorDescription(
+    key="airing",
+    name="Lüften",
+    icon="mdi:window-open-variant",
+)
+
+
+class AiringSensor(HeatingSensor):
+    """Is airing worth it for the humidity? Display only."""
+
+    _unrecorded_attributes = frozenset(
+        {
+            "relative_humidity",
+            "absolute_humidity",
+            "dew_point",
+            "outdoor_absolute_humidity",
+            "humidity_after_airing",
+        }
+    )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        if not self.coordinator.data:
+            return None
+        details = self.coordinator.data.get("airing_details") or {}
+        return {key: value for key, value in details.items() if key != "text"}
+
+
+class HouseHomecomingSensor(HouseEntity, SensorEntity):
+    """When somebody usually comes home today; every weekday in the attributes."""
+
+    _attr_name = "Übliche Heimkehr"
+    _attr_icon = "mdi:home-import-outline"
+    _attr_should_poll = True
+
+    @property
+    def native_value(self) -> str | None:
+        return self.house.homecoming()["today"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        info = self.house.homecoming()
+        return {
+            "weekdays": info["week"],
+            "homecomings_seen": info["count"],
+            "learned_in": info["room"],
+        }
 
 
 class HouseSupplySensor(HouseEntity, SensorEntity):

@@ -266,6 +266,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_create_background_task(
         hass, coordinator.async_seed_showers(), "dynamic_heating_seed_showers"
     )
+    entry.async_create_background_task(
+        hass, coordinator.async_seed_homecoming(), "dynamic_heating_seed_homecoming"
+    )
     return True
 
 

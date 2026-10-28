@@ -18,6 +18,12 @@ from .const import (
     CONF_EARLY_STOP,
     CONF_LEARN_USAGE,
     CONF_PREHEAT_WHEN_HOME,
+    CONF_HOMECOMING_PREHEAT,
+    DEFAULT_HOMECOMING_PREHEAT,
+    CONF_COLD_COMFORT_BOOST,
+    DEFAULT_COLD_COMFORT_BOOST,
+    COLD_COMFORT_MAX,
+    CONF_OUTDOOR_HUMIDITY_ENTITY,
     CONF_RECOVERY_LIMIT,
     CONF_ROOM_EMPTY_GRACE,
     CONF_ROOM_EMPTY_RECOVERY,
@@ -955,6 +961,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             self._entity_field(CONF_OUTDOOR_TEMPERATURE_ENTITY, "sensor", current),
             self._entity_field(CONF_WEATHER_ENTITY, "weather", current),
             self._entity_field(CONF_HUMIDITY_ENTITY, "sensor", current),
+            self._entity_field(CONF_OUTDOOR_HUMIDITY_ENTITY, "sensor", current),
             self._entity_field(
                 CONF_HEATING_SEASON_ENTITY, ["binary_sensor", "input_boolean"], current
             ),
@@ -1008,6 +1015,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         schema[item[0]] = item[1]
         for key, default in (
             (CONF_PREHEAT_WHEN_HOME, DEFAULT_PREHEAT_WHEN_HOME),
+            (CONF_HOMECOMING_PREHEAT, DEFAULT_HOMECOMING_PREHEAT),
             (CONF_LEARN_USAGE, DEFAULT_LEARN_USAGE),
         ):
             schema[vol.Optional(key, default=bool(current.get(key, default)))] = (
@@ -1033,6 +1041,12 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             CONF_PREHEAT_EXTENSION, current, DEFAULT_PREHEAT_EXTENSION
         )
         schema[item[0]] = item[1]
+        schema[vol.Optional(
+            CONF_COLD_COMFORT_BOOST,
+            default=float(
+                current.get(CONF_COLD_COMFORT_BOOST, DEFAULT_COLD_COMFORT_BOOST) or 0
+            ),
+        )] = _degrees_selector(COLD_COMFORT_MAX, 0.1)
         return vol.Schema(schema)
 
     def _show_step(
@@ -1262,7 +1276,8 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         if user_input is not None:
             current.update(user_input)
             for key in (CONF_WINDOW_ENTITY, CONF_OUTDOOR_TEMPERATURE_ENTITY, CONF_WEATHER_ENTITY,
-                        CONF_HEATING_SEASON_ENTITY, CONF_HUMIDITY_ENTITY):
+                        CONF_HEATING_SEASON_ENTITY, CONF_HUMIDITY_ENTITY,
+                        CONF_OUTDOOR_HUMIDITY_ENTITY):
                 current[key] = user_input.get(key) or None
             current[CONF_ADDITIONAL_WINDOW_ENTITIES] = [
                 entity_id
@@ -1318,6 +1333,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 (CONF_ROOM_MODEL, DEFAULT_ROOM_MODEL),
                 (CONF_RECOVERY_LIMIT, DEFAULT_RECOVERY_LIMIT),
                 (CONF_PREHEAT_WHEN_HOME, DEFAULT_PREHEAT_WHEN_HOME),
+                (CONF_HOMECOMING_PREHEAT, DEFAULT_HOMECOMING_PREHEAT),
                 (CONF_LEARN_USAGE, DEFAULT_LEARN_USAGE),
                 (CONF_PUNCTUALITY, DEFAULT_PUNCTUALITY),
                 (CONF_MORNING_REPORT, DEFAULT_MORNING_REPORT),
@@ -1330,6 +1346,9 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
             for key in (CONF_SOLAR_RADIATION_ENTITY, CONF_WIND_SPEED_ENTITY):
                 current[key] = user_input.get(key) or None
+            current[CONF_COLD_COMFORT_BOOST] = float(
+                user_input.get(CONF_COLD_COMFORT_BOOST) or 0
+            )
             return await self.async_step_init()
 
         return self._show_step(

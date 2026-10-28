@@ -318,7 +318,8 @@
           "heating_limit_fallback_off": "No heating without outdoor temperature",
           "notify_away": "Push when nobody is detected at home",
           "outdoor_warmer_stop": "No heating when it is warmer outside",
-          "outdoor_warmer_margin": "Warmer outside: margin"
+          "outdoor_warmer_margin": "Warmer outside: margin",
+          "outdoor_humidity_entity": "Outdoor humidity (optional, else from the weather entity)"
         },
         "data_description": {
           "window_entity": "When ON, setback is enforced. If configured but unavailable, the controller avoids writing a new target.",
@@ -392,7 +393,9 @@
           "preheat_extension": "Preheating may take this much longer (0 = never)",
           "morning_report": "Morning push when the room was not warm at comfort start",
           "hold_before_supply_pause": "Keep comfort in the evening until the central heating pauses",
-          "shower_learning": "Learn shower times (bathroom)"
+          "shower_learning": "Learn shower times (bathroom)",
+          "homecoming_preheat": "Preheat for the usual homecoming while nobody is home",
+          "cold_comfort_boost": "Raise comfort in frost by up to (0 = off)"
         },
         "data_description": {
           "recovery_limit": "Outside comfort time the room must get warm again within the maximum preheat time.",
@@ -402,7 +405,9 @@
           "preheat_extension": "On top of the maximum preheat time, only when the central heating is not usually off then.",
           "morning_report": "One push at 7 am, only when the room was at least 0.5 °C below its target at comfort start, with the reason (e.g. the central heating was not delivering yet).",
           "hold_before_supply_pause": "When comfort ends shortly before the central heating's usual night pause, the room keeps comfort until the pause starts. It starts warmer in the morning but uses some more heat.",
-          "shower_learning": "Detects showers from a fast humidity rise, suggests comfort times and keeps the room model from learning the hour after."
+          "shower_learning": "Detects showers from a fast humidity rise, suggests comfort times and keeps the room model from learning the hour after.",
+          "homecoming_preheat": "Learns from the people when somebody usually comes home on each weekday (house sensor \"Übliche Heimkehr\"). While nobody is home and the schedule has comfort then, the room is warm by that time. Coming home earlier is handled by presence as before.",
+          "cold_comfort_boost": "In frost the walls are colder and the room feels cooler. From +5 °C outdoors the comfort temperature rises evenly up to this value at −10 °C. Eco stays the same."
         }
       }
     },
@@ -449,7 +454,8 @@
       "target_reached": "Target temperature reached",
       "window_opened": "Window opened (after delay)",
       "window_closed": "Window closed (after delay)",
-      "humidity_high": "Humidity high (60 % or more)"
+      "humidity_high": "Humidity high (60 % or more)",
+      "preheat_started": "Preheating starts"
     }
   },
   "services": {
