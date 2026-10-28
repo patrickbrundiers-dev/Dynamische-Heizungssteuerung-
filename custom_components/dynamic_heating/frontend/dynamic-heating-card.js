@@ -219,6 +219,7 @@ class DynamicHeatingScheduleCard extends HTMLElement {
       active: attributes.active_schedule || null,
       comfort: Number(attributes.comfort_temperature),
       eco: Number(attributes.eco_temperature),
+      levels: attributes.levels || [],
     };
     const key = JSON.stringify(info);
     if (key === this._infoKey) return;
@@ -380,7 +381,23 @@ class DynamicHeatingScheduleCard extends HTMLElement {
 
   _blockTemperature(block) {
     const own = Number(block.data?.temperature);
-    return Number.isFinite(own) ? own : this._info?.comfort;
+    if (Number.isFinite(own)) return own;
+    const level = this._blockLevel(block);
+    return level && Number.isFinite(Number(level.temperature))
+      ? Number(level.temperature) : this._info?.comfort;
+  }
+
+  // The level a block names ("stufe: abend"), if the house knows it.
+  _blockLevel(block) {
+    const name = String(block.data?.stufe ?? block.data?.level ?? "").trim().toLowerCase();
+    if (!name) return null;
+    return (this._info?.levels || []).find((level) => level.key === name) || null;
+  }
+
+  _setTemperature(block, value) {
+    block.data.temperature = value;
+    delete block.data.stufe;
+    delete block.data.level;
   }
 
   _touch() {
@@ -537,10 +554,17 @@ class DynamicHeatingScheduleCard extends HTMLElement {
       return;
     } else if (block && action === "temp") {
       const current = this._blockTemperature(block) ?? 20;
-      block.data.temperature = clamp(snap(current + Number(value), TEMP_STEP), TEMP_MIN, TEMP_MAX);
+      this._setTemperature(block, clamp(snap(current + Number(value), TEMP_STEP), TEMP_MIN, TEMP_MAX));
       this._touch();
     } else if (block && action === "comfort") {
       delete block.data.temperature;
+      delete block.data.stufe;
+      delete block.data.level;
+      this._touch();
+    } else if (block && action === "level") {
+      delete block.data.temperature;
+      delete block.data.level;
+      block.data.stufe = value;
       this._touch();
     } else if (block && action === "delete") {
       blocks.splice(this._block, 1);
@@ -644,7 +668,7 @@ class DynamicHeatingScheduleCard extends HTMLElement {
         block.to = from + length;
       } else {
         const degrees = (-dy / PLOT_H) * (tMax - tMin);
-        block.data.temperature = clamp(snap(drag.origin.temp + degrees, TEMP_STEP), TEMP_MIN, TEMP_MAX);
+        this._setTemperature(block, clamp(snap(drag.origin.temp + degrees, TEMP_STEP), TEMP_MIN, TEMP_MAX));
       }
     }
     this._block = drag.index;
@@ -783,7 +807,9 @@ class DynamicHeatingScheduleCard extends HTMLElement {
         x="${left}" y="${yTop}" width="${Math.max(2, right - left)}" height="${height}"/>`);
       parts.push(`<line class="top" x1="${left}" x2="${right}" y1="${top}" y2="${top}" pointer-events="none"/>`);
       const own = Number.isFinite(Number(block.data?.temperature));
-      parts.push(`<text class="label" x="${(left + right) / 2}" y="${top - 5}" text-anchor="middle">${number(temp)}°${own ? "" : " K"}</text>`);
+      const level = own ? null : this._blockLevel(block);
+      const mark = own ? "" : level ? ` ${escape(level.name.replace(/^Stufe /, ""))}` : " K";
+      parts.push(`<text class="label" x="${(left + right) / 2}" y="${top - 5}" text-anchor="middle">${number(temp)}°${mark}</text>`);
       if (!this._readonly) {
         for (const [role, edge] of [["left", left], ["right", right]]) {
           parts.push(`<rect class="grip" x="${edge - 2}" y="${top - 7}" width="4" height="14" rx="2" pointer-events="none"/>`);
@@ -823,7 +849,7 @@ class DynamicHeatingScheduleCard extends HTMLElement {
     const today = start.toDateString() === new Date().toDateString();
     const date = today ? "heute" : `am ${start.toLocaleDateString("de-DE", { day: "numeric", month: "numeric" })}`;
     box.innerHTML = `
-      <span><span class="swatch" style="background: var(--dh-block, #ff9800)"></span>Komfort laut Zeitplan (K = Komforttemperatur des Raums)</span>
+      <span><span class="swatch" style="background: var(--dh-block, #ff9800)"></span>Komfort laut Zeitplan (K = Komforttemperatur des Raums, sonst Name der Stufe)</span>
       <span><span class="swatch" style="background: var(--secondary-text-color)"></span>Eco ${number(this._info.eco)} °C</span>
       ${this._history?.length ? `<span><span class="swatch" style="background: var(--dh-history, #2196f3)"></span>Raumtemperatur ${date}</span>` : ""}
       ${this._readonly ? "" : '<div class="hint">Tippen auf eine freie Stelle legt einen Block an. Block seitlich ziehen verschiebt ihn, hoch oder runter ändert die Temperatur, die Ränder ändern Anfang und Ende.</div>'}`;
@@ -848,6 +874,15 @@ class DynamicHeatingScheduleCard extends HTMLElement {
         <option value="${minute}" ${minute === selected ? "selected" : ""}>${clock(minute)}</option>`).join("");
     };
     const own = Number.isFinite(Number(block.data?.temperature));
+    const current = own ? null : this._blockLevel(block);
+    const levels = (this._info.levels || []).length ? `
+        <div class="row">
+          <label>Stufe</label>
+          ${this._info.levels.map((level) => `
+            <button class="chip ${current?.key === level.key ? "active" : ""}" data-action="level" data-value="${escape(level.key)}">
+              ${escape(level.name.replace(/^Stufe /, ""))} ${number(level.temperature)}°</button>`).join("")}
+        </div>
+        <div class="hint">Eine Stufe gilt in allen Zeitplänen. Ihre Temperatur stellst du am Haus ein (Regler „Stufe …“).</div>` : "";
     box.innerHTML = `
       <div class="panel">
         <div class="row">
@@ -860,11 +895,11 @@ class DynamicHeatingScheduleCard extends HTMLElement {
           <button data-action="temp" data-value="-${TEMP_STEP}">−</button>
           <span class="temp">${number(this._blockTemperature(block))} °C</span>
           <button data-action="temp" data-value="${TEMP_STEP}">+</button>
-          <button class="chip ${own ? "" : "active"}" data-action="comfort">Komforttemperatur</button>
+          <button class="chip ${own || current ? "" : "active"}" data-action="comfort">Komforttemperatur</button>
           <span class="spacer"></span>
           <button data-action="delete">Löschen</button>
           <button data-action="close">Fertig</button>
-        </div>
+        </div>${levels}
       </div>`;
   }
 }
@@ -1124,11 +1159,134 @@ class DynamicHeatingCard extends HTMLElement {
   }
 }
 
+
+// House timeline: every room's day plan as one bar over the next 24 hours.
+// Finds the rooms' "Tagesplan" sensors itself; `entities` limits the list.
+const TIMELINE_STYLE = `
+  :host { display: block; }
+  ha-card { padding: 16px; }
+  .title { font-size: 1.2em; font-weight: 500; margin-bottom: 8px; }
+  .room { display: grid; grid-template-columns: minmax(70px, 22%) 1fr; gap: 8px; align-items: center; margin: 4px 0; }
+  .name { font-size: 0.9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .note { color: var(--secondary-text-color); font-size: 0.8em; }
+  svg { width: 100%; height: 22px; display: block; }
+  .axis { position: relative; height: 14px; }
+  .axis span { position: absolute; transform: translateX(-50%); color: var(--secondary-text-color); font-size: 10px; }
+  svg.defs { position: absolute; width: 0; height: 0; }
+  .eco { fill: var(--secondary-text-color); fill-opacity: 0.22; }
+  .preheat { fill: var(--dh-preheat, #ffcc80); }
+  .comfort { fill: var(--dh-block, #ff9800); }
+  .off { fill: url(#dh-hatch); }
+  .now { stroke: var(--success-color, #43a047); stroke-width: 2; }
+  .legend { color: var(--secondary-text-color); font-size: 0.8em; margin-top: 8px; }
+  .legend span { white-space: nowrap; margin-right: 10px; }
+  .swatch { display: inline-block; width: 12px; height: 10px; vertical-align: middle; margin-right: 4px; border-radius: 2px; }
+`;
+const KIND_NAMES = { eco: "Eco", preheat: "Vorheizen", comfort: "Komfort" };
+
+class DynamicHeatingTimelineCard extends HTMLElement {
+  static getStubConfig() {
+    return {};
+  }
+
+  setConfig(config) {
+    this._config = config || {};
+    if (!this.shadowRoot) {
+      this.attachShadow({ mode: "open" });
+      this.shadowRoot.innerHTML = `<style>${TIMELINE_STYLE}</style><ha-card>
+        <svg class="defs" aria-hidden="true"><defs><pattern id="dh-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <line x1="0" y1="0" x2="0" y2="6" style="stroke: var(--primary-text-color, #212121); stroke-opacity: 0.45; stroke-width: 2"/></pattern></defs></svg>
+        <div class="title"></div><div class="rows"></div><div class="legend"></div></ha-card>`;
+    }
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    const sensors = this._sensors(hass);
+    const key = JSON.stringify(sensors.map((id) => [id, hass.states[id]?.attributes?.segments, hass.states[id]?.state]))
+      + Math.floor(Date.now() / 300000);
+    if (key === this._key) return;
+    this._key = key;
+    this._render(sensors);
+  }
+
+  getCardSize() {
+    return 2 + Math.ceil(this._count || 3);
+  }
+
+  _sensors(hass) {
+    if (Array.isArray(this._config.entities) && this._config.entities.length) {
+      return this._config.entities.filter((id) => hass.states[id]);
+    }
+    return Object.keys(hass.states).filter((id) => id.startsWith("sensor.")
+      && hass.entities?.[id]?.platform === "dynamic_heating"
+      && Array.isArray(hass.states[id].attributes?.segments)).sort();
+  }
+
+  _name(id) {
+    const hass = this._hass;
+    const entity = hass.entities?.[id];
+    const areaId = entity?.area_id || hass.devices?.[entity?.device_id]?.area_id;
+    if (areaId && hass.areas?.[areaId]?.name) return hass.areas[areaId].name;
+    const name = hass.states[id]?.attributes?.friendly_name || id;
+    return name.replace(/\s*Tagesplan$/, "").replace(/\s*Heizung$/, "");
+  }
+
+  _render(sensors) {
+    const root = this.shadowRoot;
+    root.querySelector(".title").textContent = this._config.title || "Heizung – nächste 24 Stunden";
+    this._count = sensors.length;
+    const start = Date.now();
+    const end = start + 86400000;
+    const x = (time) => clamp(((time - start) / (end - start)) * 1000, 0, 1000);
+    const rows = sensors.map((id) => {
+      const segments = this._hass.states[id].attributes.segments || [];
+      const bars = segments.map((segment) => {
+        const from = Date.parse(segment.start);
+        const to = Date.parse(segment.end);
+        if (!(to > start) || !(from < end)) return "";
+        const left = x(from);
+        const width = Math.max(0.5, x(to) - left);
+        const label = `${time(segment.start)}–${time(segment.end)} ${KIND_NAMES[segment.kind] || segment.kind}`
+          + (segment.kind === "eco" ? "" : ` ${number(segment.target)} °C`)
+          + (segment.supply_off ? ", Zentralheizung meist aus" : "");
+        return `<rect class="${escape(segment.kind)}" x="${left}" y="2" width="${width}" height="18" rx="2"><title>${escape(label)}</title></rect>`
+          + (segment.supply_off ? `<rect class="off" x="${left}" y="2" width="${width}" height="18"><title>${escape(label)}</title></rect>` : "");
+      }).join("");
+      const note = segments.length ? "" : `<div class="note">${escape(this._hass.states[id].state)}</div>`;
+      return `<div class="room"><div class="name" title="${escape(this._hass.states[id].state)}">${escape(this._name(id))}</div>
+        <div>${segments.length ? `<svg viewBox="0 0 1000 22" preserveAspectRatio="none">${bars}
+          <line class="now" x1="1" x2="1" y1="0" y2="22"/></svg>` : note}</div></div>`;
+    });
+    const ticks = [];
+    const first = new Date(start);
+    first.setMinutes(0, 0, 0);
+    for (let hour = 1; hour <= 24; hour += 1) {
+      const at = new Date(first.getTime() + hour * 3600000);
+      if (at.getHours() % 3 !== 0) continue;
+      const left = x(at.getTime()) / 10;
+      if (left > 3 && left < 97) ticks.push(`<span style="left: ${left}%">${String(at.getHours()).padStart(2, "0")}</span>`);
+    }
+    root.querySelector(".rows").innerHTML = sensors.length
+      ? `${rows.join("")}<div class="room"><div></div><div class="axis">${ticks.join("")}</div></div>`
+      : '<div class="note">Noch kein Raum mit Tagesplan (das Raummodell lernt noch).</div>';
+    root.querySelector(".legend").innerHTML = `
+      <span><span class="swatch" style="background: var(--secondary-text-color); opacity: 0.35"></span>Eco</span>
+      <span><span class="swatch" style="background: var(--dh-preheat, #ffcc80)"></span>Vorheizen</span>
+      <span><span class="swatch" style="background: var(--dh-block, #ff9800)"></span>Komfort</span>
+      <span><svg style="display:inline-block;width:12px;height:10px;vertical-align:middle" viewBox="0 0 12 10"><rect width="12" height="10" fill="url(#dh-hatch)"/></svg> Zentralheizung meist aus</span>
+      <span>linker Rand = jetzt</span>`;
+  }
+}
+
 if (!customElements.get("dynamic-heating-schedule-card")) {
   customElements.define("dynamic-heating-schedule-card", DynamicHeatingScheduleCard);
 }
 if (!customElements.get("dynamic-heating-card")) {
   customElements.define("dynamic-heating-card", DynamicHeatingCard);
+}
+if (!customElements.get("dynamic-heating-timeline-card")) {
+  customElements.define("dynamic-heating-timeline-card", DynamicHeatingTimelineCard);
 }
 window.customCards = window.customCards || [];
 if (!window.customCards.some((card) => card.type === "dynamic-heating-card")) {
@@ -1143,5 +1301,12 @@ if (!window.customCards.some((card) => card.type === "dynamic-heating-schedule-c
     type: "dynamic-heating-schedule-card",
     name: "Dynamische Heizung – Zeitplan",
     description: "Zeitplan des Raums als Graph: Blöcke ziehen, Temperatur je Block, Raumtemperatur darüber.",
+  });
+}
+if (!window.customCards.some((card) => card.type === "dynamic-heating-timeline-card")) {
+  window.customCards.push({
+    type: "dynamic-heating-timeline-card",
+    name: "Dynamische Heizung – Zeitleiste",
+    description: "Alle Räume als Balken für die nächsten 24 Stunden: Eco, Vorheizen, Komfort und Pausen der Zentralheizung.",
   });
 }

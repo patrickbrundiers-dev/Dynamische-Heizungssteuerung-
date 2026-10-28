@@ -81,10 +81,13 @@ def blocks_from_schedule(
     now: datetime,
     temperature_of: Callable[[object], float | None],
     hours: int = PLAN_HOURS,
+    level_of: Callable[[dict], float | None] | None = None,
 ) -> list[Block]:
     """Comfort blocks from a schedule helper's week (``schedule.get_schedule``).
 
-    ``now`` is local and aware; ``temperature_of`` reads a block's data.
+    ``now`` is local and aware; ``temperature_of`` reads a block's
+    ``temperature``, ``level_of`` (if given) a level such as ``stufe: abend``
+    in the block's data when it has no temperature.
     """
     if not isinstance(weekly, dict):
         return []
@@ -113,6 +116,8 @@ def blocks_from_schedule(
             temperature = (
                 temperature_of(data.get("temperature")) if isinstance(data, dict) else None
             )
+            if temperature is None and level_of is not None and isinstance(data, dict):
+                temperature = level_of(data)
             blocks.append(Block(start, end, temperature))
     return sorted(blocks, key=lambda block: block.start)
 
@@ -495,3 +500,39 @@ def savings_text(answer: dict) -> str:
     else:
         warm = "Warm wie bisher."
     return f"{', '.join(changes)}: {effect}. {warm}"
+
+
+def plan_segments(points: list[PlanPoint], eco: float) -> list[dict]:
+    """The plan as bars for a timeline: eco, preheat or comfort, boiler pauses.
+
+    Neighbouring points of the same kind are joined; each segment ends where
+    the next one starts (the last one a step after its point).
+    """
+    segments: list[dict] = []
+    for point in points:
+        if point.preheat:
+            kind = "preheat"
+        elif point.target > eco + 0.05:
+            kind = "comfort"
+        else:
+            kind = "eco"
+        if (
+            segments
+            and segments[-1]["kind"] == kind
+            and segments[-1]["supply_off"] == point.supply_off
+            and segments[-1]["target"] == point.target
+        ):
+            segments[-1]["end"] = (point.at + timedelta(minutes=STEP_MINUTES)).isoformat()
+            continue
+        if segments:
+            segments[-1]["end"] = point.at.isoformat()
+        segments.append(
+            {
+                "start": point.at.isoformat(),
+                "end": (point.at + timedelta(minutes=STEP_MINUTES)).isoformat(),
+                "kind": kind,
+                "supply_off": point.supply_off,
+                "target": point.target,
+            }
+        )
+    return segments

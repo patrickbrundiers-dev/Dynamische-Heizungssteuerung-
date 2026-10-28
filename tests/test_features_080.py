@@ -415,6 +415,7 @@ async def test_device_triggers_and_change_source(hass, enable_custom_integration
     assert {trigger["type"] for trigger in triggers} == {
         "heating_started", "heating_stopped", "target_reached",
         "window_opened", "window_closed", "humidity_high",
+        "preheat_started",
     }
     events = async_capture_events(hass, "dynamic_heating_event")
     hass.states.async_set("binary_sensor.living_room_window", "on")

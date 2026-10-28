@@ -36,6 +36,7 @@ from .const import (
     HOUSE_HOME,
     HOUSE_MODES,
     HOUSE_VACATION,
+    LEVELS,
     QUICK_AUTO,
     QUICK_MORNING_HOUR,
     QUICK_SLEEP,
@@ -88,6 +89,8 @@ class HouseManager:
         self._cold_sent = False
         # Local day of the last battery push (persisted).
         self.battery_notified: str | None = None
+        # Temperature levels for schedule blocks ("stufe: abend", persisted).
+        self.levels: dict[str, float] = {key: item[1] for key, item in LEVELS.items()}
 
     def rooms(self) -> list[DynamicHeatingCoordinator]:
         """All rooms that are set up right now."""
@@ -110,6 +113,11 @@ class HouseManager:
             self.vacation_until = dt_util.as_utc(parsed) if parsed else None
             raw_notified = stored.get("battery_notified")
             self.battery_notified = raw_notified if isinstance(raw_notified, str) else None
+            raw_levels = stored.get("levels")
+            if isinstance(raw_levels, dict):
+                for key, value in raw_levels.items():
+                    if key in self.levels and isinstance(value, (int, float)):
+                        self.levels[key] = float(value)
             if stored.get("supply_version") == SUPPLY_VERSION:
                 self.supply = SupplyProfile.from_list(stored.get("supply_profile"))
         self._unsubs = [
@@ -281,8 +289,23 @@ class HouseManager:
                 "supply_profile": self.supply.as_list(),
                 "supply_version": SUPPLY_VERSION,
                 "battery_notified": self.battery_notified,
+                "levels": self.levels,
             }
         )
+
+    def level(self, key: str) -> float | None:
+        """Temperature of a level, None for an unknown name."""
+        return self.levels.get(key)
+
+    async def async_set_level(self, key: str, value: float) -> None:
+        """Change a level; every room picks it up with its next cycle."""
+        self.levels[key] = round(float(value), 1)
+        await self._async_save()
+        for listener in list(self._listeners):
+            listener()
+        for room in self.rooms():
+            room.async_update_listeners()
+            await room.async_request_refresh()
 
     def supply_verdict(self, overrides: dict[str, str | None] | None = None) -> str | None:
         """Does the central heating deliver right now, judged by all rooms?
@@ -513,6 +536,23 @@ class HouseManager:
     @property
     def away(self) -> bool:
         return self.mode == HOUSE_AWAY
+
+    def homecoming(self) -> dict[str, Any]:
+        """The usual homecoming, from the room that has seen the most."""
+        best = None
+        for room in self.rooms():
+            if best is None or room.homecoming.count() > best.homecoming.count():
+                best = room
+        if best is None or not best.homecoming.count():
+            return {"today": None, "week": {}, "count": 0, "room": None}
+        today = dt_util.now()
+        minute = best.homecoming.usual(today.weekday(), today.date())
+        return {
+            "today": None if minute is None else f"{minute // 60:02d}:{minute % 60:02d}",
+            "week": best.homecoming.week(today.date()),
+            "count": best.homecoming.count(),
+            "room": best.room_name,
+        }
 
     def rooms_overview(self) -> list[dict[str, Any]]:
         """Short state of every room for the overview sensor and card."""

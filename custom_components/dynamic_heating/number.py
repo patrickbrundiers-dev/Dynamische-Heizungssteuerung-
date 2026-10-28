@@ -16,6 +16,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_ENTRY_TYPE,
+    ENTRY_TYPE_HOUSE,
+    LEVELS,
     CONF_ACTIVITY_TEMPERATURE,
     CONF_BOOST_TEMPERATURE,
     CONF_COMFORT_TEMPERATURE,
@@ -34,6 +37,8 @@ from .const import (
     VALVE_OFFSET_MIN,
 )
 from .coordinator import DynamicHeatingCoordinator
+from .house import HouseManager
+from .house_entities import HouseEntity
 from .select import device_info
 
 # key, name, icon, minimum, maximum, default
@@ -58,7 +63,12 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the room's sliders."""
+    """Set up the room's sliders, or the house's temperature levels."""
+    if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HOUSE:
+        async_add_entities(
+            [HouseLevel(entry.runtime_data, entry, key) for key in LEVELS]
+        )
+        return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
     entities: list[NumberEntity] = [
         TemperatureSetting(coordinator, entry, *item) for item in _TEMPERATURES
@@ -182,3 +192,26 @@ class ValveOffset(_RoomNumber):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_set_valve_offset(self._thermostat_id, value)
+
+
+class HouseLevel(HouseEntity, NumberEntity):
+    """A temperature level that schedule blocks name, e.g. ``stufe: abend``."""
+
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_native_step = 0.5
+    _attr_native_min_value = 5.0
+    _attr_native_max_value = 30.0
+    _attr_icon = "mdi:stairs"
+
+    def __init__(self, house: HouseManager, entry: ConfigEntry, key: str) -> None:
+        super().__init__(house, entry, f"level_{key}")
+        self._key = key
+        self._attr_name = LEVELS[key][0]
+
+    @property
+    def native_value(self) -> float | None:
+        return self.house.level(self._key)
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.house.async_set_level(self._key, value)

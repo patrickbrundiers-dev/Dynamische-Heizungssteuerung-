@@ -35,6 +35,62 @@ BIAS_MAX = 60.0
 # Raised when what is learned changes: older results and correction are
 # dropped. 2: mornings without heat from the central heating do not count.
 PUNCTUALITY_VERSION = 2
+# Mornings kept with their weather for the correction from similar mornings.
+PUNCTUAL_HISTORY = 40
+# At least this many judged mornings (not given up) before similar mornings
+# are asked; until then the running correction applies.
+PUNCTUAL_SIMILAR_MIN = 5
+# At most this many of the most similar mornings count.
+PUNCTUAL_SIMILAR_COUNT = 25
+# A morning's weight halves about every three weeks (e^-age/30).
+PUNCTUAL_DECAY_DAYS = 30.0
+# Similarity: this many degrees outdoors weigh like one degree of warming up.
+PUNCTUAL_OUTDOOR_SCALE = 5.0
+# Without an outdoor value on either side, that distance is assumed.
+PUNCTUAL_OUTDOOR_UNKNOWN = 0.5
+# Of the similar mornings' needed corrections, this share is covered
+# (weighted median); more if mornings were often late lately.
+PUNCTUAL_PERCENTILE = 50
+PUNCTUAL_PERCENTILE_CAREFUL = 80
+# Of the last mornings, more than this share late makes planning careful.
+PUNCTUAL_LATE_SHARE = 0.2
+PUNCTUAL_RECENT = 10
+# A given-up morning only says "at least this much more" (+20 %), and only
+# as long as it is not older than this and similar enough.
+PUNCTUAL_PARTIAL_FACTOR = 1.2
+PUNCTUAL_PARTIAL_DAYS = 30
+PUNCTUAL_PARTIAL_DISTANCE = 1.5
+
+
+@dataclass(frozen=True, slots=True)
+class MorningSample:
+    """One judged morning with the conditions it was preheated in."""
+
+    day: str
+    # Outdoor temperature at the comfort start (forecast), if known.
+    outdoor: float | None
+    # Degrees the room had to warm up when preheating began.
+    gap: float
+    # Correction (minutes) that would have made this morning punctual.
+    needed: float
+    # Still not warm when judging gave up: ``needed`` is a lower bound.
+    partial: bool
+    late: int
+
+
+def _weighted_percentile(values: list[tuple[float, float]], percentile: float) -> float:
+    """``values`` as (value, weight); the value below which ``percentile`` lies."""
+    ordered = sorted(values)
+    total = sum(weight for _, weight in ordered)
+    if total <= 0:
+        return ordered[len(ordered) // 2][0]
+    limit = total * percentile / 100
+    running = 0.0
+    for value, weight in ordered:
+        running += weight
+        if running >= limit - 1e-9:
+            return value
+    return ordered[-1][0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +120,12 @@ class Punctuality:
     # The latest comfort start, set once when it begins (picked up by the
     # morning report).
     morning: Morning | None = None
+    # Judged mornings with their weather (persisted).
+    history: list[MorningSample] = field(default_factory=list)
+    # Conditions when preheating for the watched start began.
+    context_outdoor: float | None = None
+    context_gap: float | None = None
+    context_bias: float = 0.0
 
     def observe(
         self,
@@ -74,6 +136,8 @@ class Punctuality:
         next_event: datetime | None,
         target: float | None,
         supply_cold: bool = False,
+        outdoor: float | None = None,
+        bias: float | None = None,
     ) -> int | None:
         """Feed one cycle; returns the lateness when a morning was judged.
 
@@ -82,7 +146,9 @@ class Punctuality:
         window open or nobody home at the start are not judged. Neither are
         mornings on which the central heating delivered no heat while
         preheating (``supply_cold``): preheating earlier would not have
-        helped, so nothing is learned from them.
+        helped, so nothing is learned from them. ``outdoor`` (at the comfort
+        start) and ``bias`` (the correction in use) are kept with the morning
+        so later mornings in similar weather can learn from it.
         """
         if room is None:
             return None
@@ -90,6 +156,11 @@ class Punctuality:
             if self.watch_start != next_event:
                 self.watch_start = next_event
                 self.readings = []
+                self.context_gap = (
+                    None if target is None else max(0.0, float(target) - float(room))
+                )
+                self.context_outdoor = outdoor
+                self.context_bias = self.bias_minutes if bias is None else float(bias)
             self.preheated = True
             if supply_cold:
                 self.supply_missing = True
@@ -133,6 +204,7 @@ class Punctuality:
             self._reset()
             return None
         self._record(start.date(), late)
+        self._remember(start.date(), late)
         self._reset()
         return late
 
@@ -141,19 +213,104 @@ class Punctuality:
         self.readings = []
         self.preheated = False
         self.supply_missing = False
+        self.context_gap = None
+        self.context_outdoor = None
+        self.context_bias = 0.0
+
+    def _remember(self, day: date, late: int) -> None:
+        """Keep the morning with its weather for similar mornings later."""
+        if self.context_gap is None:
+            return
+        partial = late >= PUNCTUAL_GIVE_UP_MINUTES
+        if partial:
+            needed = self.context_bias + late * PUNCTUAL_PARTIAL_FACTOR
+        else:
+            needed = self.context_bias + _error(late)
+        self.history = [item for item in self.history if item.day != day.isoformat()]
+        self.history.append(
+            MorningSample(
+                day.isoformat(),
+                None if self.context_outdoor is None else round(self.context_outdoor, 1),
+                round(self.context_gap, 2),
+                round(needed, 1),
+                partial,
+                late,
+            )
+        )
+        self.history = self.history[-PUNCTUAL_HISTORY:]
+
+    def bias_for(
+        self,
+        outdoor: float | None,
+        gap: float | None,
+        today: date | None = None,
+    ) -> float:
+        """The correction for a morning like this one (outdoor, degrees to go).
+
+        From the most similar earlier mornings (fresh ones weigh more), the
+        correction that would have made them punctual: their weighted median,
+        or a careful 80 % when several of the last mornings were late. A
+        morning that was never warm in time is a lower bound. Until enough
+        mornings are known, the running correction applies.
+        """
+        complete = [item for item in self.history if not item.partial]
+        if gap is None or len(complete) < PUNCTUAL_SIMILAR_MIN:
+            return self.bias_minutes
+        today = today or date.today()
+
+        def age(item: MorningSample) -> float:
+            try:
+                return max(0, (today - date.fromisoformat(item.day)).days)
+            except ValueError:
+                return PUNCTUAL_DECAY_DAYS * 3
+
+        def distance(item: MorningSample) -> float:
+            value = abs(float(gap) - item.gap)
+            if outdoor is None or item.outdoor is None:
+                return value + PUNCTUAL_OUTDOOR_UNKNOWN
+            return value + abs(float(outdoor) - item.outdoor) / PUNCTUAL_OUTDOOR_SCALE
+
+        nearest = sorted(complete, key=distance)[:PUNCTUAL_SIMILAR_COUNT]
+        weighted = [
+            (
+                item.needed,
+                math.exp(-age(item) / PUNCTUAL_DECAY_DAYS) * math.exp(-distance(item)),
+            )
+            for item in nearest
+        ]
+        recent = self.history[-PUNCTUAL_RECENT:]
+        late_share = sum(1 for item in recent if item.late > PUNCTUAL_MINUTES) / len(
+            recent
+        )
+        percentile = (
+            PUNCTUAL_PERCENTILE_CAREFUL
+            if late_share > PUNCTUAL_LATE_SHARE
+            else PUNCTUAL_PERCENTILE
+        )
+        value = _weighted_percentile(weighted, percentile)
+        for item in self.history:
+            if (
+                item.partial
+                and age(item) <= PUNCTUAL_PARTIAL_DAYS
+                and distance(item) <= PUNCTUAL_PARTIAL_DISTANCE
+            ):
+                value = max(value, item.needed)
+        return round(max(BIAS_MIN, min(BIAS_MAX, value)), 1)
+
+    def similar_ready(self) -> bool:
+        """True once the correction comes from similar mornings."""
+        return sum(1 for item in self.history if not item.partial) >= PUNCTUAL_SIMILAR_MIN
 
     def _record(self, day: date, late: int) -> None:
         self.results = [item for item in self.results if item[0] != day.isoformat()]
         self.results.append((day.isoformat(), late))
         self.results = self.results[-PUNCTUAL_DAYS:]
-        if late > PUNCTUAL_MINUTES:
-            error = late
-        elif late < -PUNCTUAL_MINUTES:
-            error = late + PUNCTUAL_MINUTES
-        else:
-            error = 0
         self.bias_minutes = round(
-            max(BIAS_MIN, min(BIAS_MAX, self.bias_minutes + PUNCTUAL_GAIN * error)), 1
+            max(
+                BIAS_MIN,
+                min(BIAS_MAX, self.bias_minutes + PUNCTUAL_GAIN * _error(late)),
+            ),
+            1,
         )
 
     def summary(self) -> str:
@@ -174,6 +331,10 @@ class Punctuality:
             "version": PUNCTUALITY_VERSION,
             "bias_minutes": self.bias_minutes,
             "results": [list(item) for item in self.results],
+            "history": [
+                [item.day, item.outdoor, item.gap, item.needed, item.partial, item.late]
+                for item in self.history
+            ],
         }
 
     @classmethod
@@ -193,7 +354,172 @@ class Punctuality:
             ):
                 result.results.append((item[0], item[1]))
         result.results = result.results[-PUNCTUAL_DAYS:]
+        for item in data.get("history") or []:
+            if not isinstance(item, list) or len(item) != 6:
+                continue
+            day, outdoor, gap, needed, partial, late = item
+            if (
+                not isinstance(day, str)
+                or not (outdoor is None or isinstance(outdoor, (int, float)))
+                or not isinstance(gap, (int, float))
+                or not isinstance(needed, (int, float))
+                or not math.isfinite(gap)
+                or not math.isfinite(needed)
+                or not isinstance(late, int)
+            ):
+                continue
+            result.history.append(
+                MorningSample(
+                    day,
+                    None if outdoor is None else float(outdoor),
+                    float(gap),
+                    float(needed),
+                    bool(partial),
+                    late,
+                )
+            )
+        result.history = result.history[-PUNCTUAL_HISTORY:]
         return result
+
+
+def _error(late: int) -> float:
+    """Minutes a morning's start should have moved (0 within the tolerance)."""
+    if late > PUNCTUAL_MINUTES:
+        return float(late)
+    if late < -PUNCTUAL_MINUTES:
+        return float(late + PUNCTUAL_MINUTES)
+    return 0.0
+
+
+# --- Homecoming ---------------------------------------------------------------
+
+# Only a return after at least this long away is a homecoming.
+HOMECOMING_AWAY_MINUTES = 120
+# Returns are looked for in this part of the day (local hours).
+HOMECOMING_FROM_HOUR = 6
+HOMECOMING_UNTIL_HOUR = 23
+# Per weekday the latest this many returns, none older than this.
+HOMECOMING_KEEP = 6
+HOMECOMING_MAX_DAYS = 42
+# At least this many returns within this of their median make a habit.
+HOMECOMING_MIN = 3
+HOMECOMING_SPREAD_MINUTES = 45
+
+
+@dataclass(slots=True)
+class Homecoming:
+    """Learns at what time somebody usually comes home on each weekday."""
+
+    # Weekday (0 = Monday) -> [(date ISO, minute of the day)].
+    arrivals: dict[int, list[tuple[str, int]]] = field(default_factory=dict)
+    # Since when nobody is home (runtime only).
+    away_since: datetime | None = None
+    seen: bool = False
+
+    def observe(self, now: datetime, home: bool) -> bool:
+        """Feed whether anybody is home (``now`` local); True on a homecoming."""
+        if not home:
+            if self.away_since is None:
+                # The first reading after a start is no departure.
+                self.away_since = now if self.seen else None
+            self.seen = True
+            return False
+        self.seen = True
+        since, self.away_since = self.away_since, None
+        if since is None:
+            return False
+        if now - since < timedelta(minutes=HOMECOMING_AWAY_MINUTES):
+            return False
+        if not HOMECOMING_FROM_HOUR <= now.hour < HOMECOMING_UNTIL_HOUR:
+            return False
+        self.record(now)
+        return True
+
+    def record(self, at: datetime) -> None:
+        day = at.date().isoformat()
+        items = [item for item in self.arrivals.get(at.weekday(), []) if item[0] != day]
+        items.append((day, at.hour * 60 + at.minute))
+        self.arrivals[at.weekday()] = sorted(items)[-HOMECOMING_KEEP:]
+
+    def usual(self, weekday: int, today: date | None = None) -> int | None:
+        """Usual minute of the day of coming home, None without a habit."""
+        today = today or date.today()
+        minutes = []
+        for day, minute in self.arrivals.get(weekday, []):
+            try:
+                age = (today - date.fromisoformat(day)).days
+            except ValueError:
+                continue
+            if 0 <= age <= HOMECOMING_MAX_DAYS:
+                minutes.append(minute)
+        if len(minutes) < HOMECOMING_MIN:
+            return None
+        minutes.sort()
+        median = minutes[len(minutes) // 2]
+        close = [
+            minute for minute in minutes if abs(minute - median) <= HOMECOMING_SPREAD_MINUTES
+        ]
+        if len(close) < HOMECOMING_MIN:
+            return None
+        return close[len(close) // 2]
+
+    def week(self, today: date | None = None) -> dict[str, str | None]:
+        """Usual homecoming per weekday as "HH:MM" (None without a habit)."""
+        names = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+        result: dict[str, str | None] = {}
+        for weekday, name in enumerate(names):
+            minute = self.usual(weekday, today)
+            result[name] = None if minute is None else f"{minute // 60:02d}:{minute % 60:02d}"
+        return result
+
+    def count(self) -> int:
+        return sum(len(items) for items in self.arrivals.values())
+
+    def as_dict(self) -> dict:
+        return {
+            str(weekday): [list(item) for item in items]
+            for weekday, items in self.arrivals.items()
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> Homecoming:
+        result = cls()
+        if not isinstance(data, dict):
+            return result
+        for key, items in data.items():
+            try:
+                weekday = int(key)
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= weekday <= 6 or not isinstance(items, list):
+                continue
+            kept = [
+                (item[0], item[1])
+                for item in items
+                if isinstance(item, list)
+                and len(item) == 2
+                and isinstance(item[0], str)
+                and isinstance(item[1], int)
+                and 0 <= item[1] < 24 * 60
+            ]
+            if kept:
+                result.arrivals[weekday] = sorted(kept)[-HOMECOMING_KEEP:]
+        return result
+
+
+def homecomings_from_history(
+    changes: list[tuple[datetime, str, bool]], people: int
+) -> Homecoming:
+    """Learn from (local time, person, home) changes of the last weeks."""
+    learner = Homecoming(seen=True)
+    home: dict[str, bool] = {}
+    for at, person, at_home in sorted(changes, key=lambda item: item[0]):
+        home[person] = at_home
+        if len(home) < people:
+            continue
+        learner.observe(at, any(home.values()))
+    learner.away_since = None
+    return learner
 
 
 # --- Habits -------------------------------------------------------------------
@@ -612,6 +938,7 @@ def tuya_day_schedule(
     eco: float,
     step: float = 0.5,
     temperature_of=None,
+    level_of=None,
 ) -> str:
     """Six switch points for one day from a schedule helper's blocks.
 
@@ -635,6 +962,8 @@ def tuya_day_schedule(
         data = item.get("data")
         if temperature_of is not None and isinstance(data, dict):
             value = temperature_of(data.get("temperature"))
+            if value is None and level_of is not None:
+                value = level_of(data)
             if value is not None:
                 temperature = value
         blocks.append((start, end, temperature))
@@ -670,10 +999,13 @@ def tuya_week_schedule(
     eco: float,
     step: float = 0.5,
     temperature_of=None,
+    level_of=None,
 ) -> dict[str, str]:
     """Weekday -> text for a Tuya valve from a schedule helper's week."""
     week = weekly if isinstance(weekly, dict) else {}
     return {
-        day: tuya_day_schedule(week.get(day), comfort, eco, step, temperature_of)
+        day: tuya_day_schedule(
+            week.get(day), comfort, eco, step, temperature_of, level_of
+        )
         for day in TUYA_DAYS
     }

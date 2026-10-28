@@ -182,7 +182,37 @@ def answer_why_cold(room: DynamicHeatingCoordinator) -> str:
     return f"{text} {reason}."
 
 
+def _preheat_reason(parts: object) -> str | None:
+    """The main reason behind the preheat time, as one short sentence."""
+    if not isinstance(parts, dict):
+        return None
+    if parts.get("supply_wait_until"):
+        return f" Die Zentralheizung liefert erst ab {parts['supply_wait_until']} Uhr."
+    if parts.get("limited"):
+        return f" Das Vorheizen ist auf {parts.get('limit_minutes')} Minuten begrenzt."
+    bias = int(parts.get("punctuality_minutes") or 0)
+    if bias >= 10:
+        return (
+            f" Es startet {bias} Minuten früher, weil es an ähnlichen Morgen"
+            " zu spät warm war."
+        )
+    if bias <= -10:
+        return (
+            f" Es startet {-bias} Minuten später, weil es an ähnlichen Morgen"
+            " zu früh warm war."
+        )
+    if int(parts.get("sun_minutes") or 0) <= -5:
+        return " Die Sonne hilft mit, darum startet es etwas später."
+    return None
+
+
 def answer_when_warm(room: DynamicHeatingCoordinator) -> str:
+    text = _answer_when_warm(room)
+    reason = _preheat_reason((room.data or {}).get("preheat_parts"))
+    return text + reason if reason else text
+
+
+def _answer_when_warm(room: DynamicHeatingCoordinator) -> str:
     data = room.data or {}
     name = room.room_name
     current = data.get("room_temperature")

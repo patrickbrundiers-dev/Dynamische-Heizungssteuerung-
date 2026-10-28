@@ -319,7 +319,7 @@ NOTIFY_FROST_FALLBACK_TEMPERATURE: Final = 10.0
 CONF_ENTRY_TYPE: Final = "entry_type"
 ENTRY_TYPE_HOUSE: Final = "house"
 HOUSE_DATA_KEY: Final = "house"
-HOUSE_PLATFORMS: Final = ["button", "datetime", "select", "sensor"]
+HOUSE_PLATFORMS: Final = ["button", "datetime", "number", "select", "sensor"]
 HOUSE_HOME: Final = "home"
 HOUSE_AWAY: Final = "away"
 HOUSE_VACATION: Final = "vacation"
@@ -475,6 +475,8 @@ TRIGGER_TARGET_REACHED: Final = "target_reached"
 TRIGGER_WINDOW_OPENED: Final = "window_opened"
 TRIGGER_WINDOW_CLOSED: Final = "window_closed"
 TRIGGER_HUMIDITY_HIGH: Final = "humidity_high"
+# Preheating begins (for a comfort block or a homecoming, 0.15.0).
+TRIGGER_PREHEAT_STARTED: Final = "preheat_started"
 TRIGGER_TYPES: Final = (
     TRIGGER_HEATING_STARTED,
     TRIGGER_HEATING_STOPPED,
@@ -482,6 +484,7 @@ TRIGGER_TYPES: Final = (
     TRIGGER_WINDOW_OPENED,
     TRIGGER_WINDOW_CLOSED,
     TRIGGER_HUMIDITY_HIGH,
+    TRIGGER_PREHEAT_STARTED,
 )
 HUMIDITY_HIGH_PERCENT: Final = 60.0
 HUMIDITY_HYSTERESIS: Final = 5.0
@@ -717,3 +720,32 @@ RADIATOR_POWER_PER_THERMOSTAT_W: Final = 1000
 # Spar-Rechner: days simulated for a what-if.
 SAVINGS_DAYS: Final = 7
 SERVICE_ESTIMATE_SAVINGS: Final = "estimate_savings"
+
+# Ideen aus velair (0.15.0)
+# Learn the usual homecoming per weekday and preheat for it while nobody is
+# home (off by default); the room stays warm this long after that time.
+CONF_HOMECOMING_PREHEAT: Final = "homecoming_preheat"
+DEFAULT_HOMECOMING_PREHEAT: Final = False
+HOMECOMING_HOLD_MINUTES: Final = 30
+HOMECOMING_HISTORY_DAYS: Final = 28
+# Comfort a little higher in frost: from this outdoor temperature on, up to
+# the set raise at the lower one (0 = off).
+CONF_COLD_COMFORT_BOOST: Final = "cold_comfort_boost"
+DEFAULT_COLD_COMFORT_BOOST: Final = 0.0
+COLD_COMFORT_MAX: Final = 1.0
+COLD_COMFORT_FROM: Final = 5.0
+COLD_COMFORT_FULL: Final = -10.0
+# Airing advice: indoor humidity above this is worth airing out, when the
+# outdoor air holds at least this much less water (g/m³).
+AIRING_HUMIDITY_PERCENT: Final = 60.0
+AIRING_MIN_DIFFERENCE: Final = 1.0
+# Optional outdoor humidity sensor (%); else the weather entity's humidity.
+CONF_OUTDOOR_HUMIDITY_ENTITY: Final = "outdoor_humidity_entity"
+# Temperature levels for schedule blocks ("stufe: abend"), kept by the house.
+LEVEL_KEYS: Final = ("stufe", "level")
+LEVELS: Final = {
+    "morgen": ("Stufe Morgen", 21.0),
+    "tag": ("Stufe Tag", 21.0),
+    "abend": ("Stufe Abend", 21.5),
+    "nacht": ("Stufe Nacht", 18.0),
+}
