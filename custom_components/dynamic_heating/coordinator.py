@@ -731,7 +731,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._plan_at: datetime | None = None
         self._plan_key: tuple | None = None
         self._schedule_week: list[Block] | None = None
-        self._schedule_week_key: tuple[str | None, str] | None = None
+        self._schedule_week_key: tuple | None = None
         self._schedule_week_at: datetime | None = None
         self._plan_checks: dict[datetime, float] = {}
         self._plan_check_hour: int | None = None
@@ -1366,6 +1366,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         item = LEVELS.get(key)
         return None if item is None else item[1]
 
+    def _levels_key(self) -> tuple[float | None, ...]:
+        """The current level temperatures, so caches notice a change."""
+        return tuple(self._level_temperature(key) for key in LEVELS)
+
     def level_options(self) -> list[dict[str, Any]]:
         """The temperature levels for the schedule editor."""
         return [
@@ -1544,7 +1548,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         eco = float(self.config.get(CONF_ECO_TEMPERATURE, DEFAULT_ECO_TEMPERATURE))
         now = dt_util.utcnow()
-        key = (schedule_id, comfort, eco)
+        key = (schedule_id, comfort, eco, self._levels_key())
         if (
             key == self._week_written_key
             and self._week_written_at is not None
@@ -4925,12 +4929,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         key = (
             schedule_id,
             tomorrow_id,
+            self._levels_key(),
             dt_util.as_local(now).strftime("%Y-%m-%d %H"),
         )
         if (
             self._schedule_week is not None
             and self._schedule_week_key is not None
-            and self._schedule_week_key[:2] == key[:2]
+            and self._schedule_week_key[:3] == key[:3]
             and self._schedule_week_at is not None
             and now - self._schedule_week_at < SCHEDULE_WEEK_INTERVAL
         ):

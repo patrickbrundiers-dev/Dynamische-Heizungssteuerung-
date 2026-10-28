@@ -400,11 +400,14 @@ async def test_schedule_block_follows_a_house_level(hass, enable_custom_integrat
         for entity_id in hass.states.async_entity_ids("number")
         if entity_id.endswith("_stufe_abend")
     )
+    before = coordinator._levels_key()
     await hass.services.async_call(
         "number", "set_value", {"entity_id": level, "value": 22.5}, blocking=True
     )
     await hass.async_block_till_done()
     assert house.level("abend") == 22.5
+    # Cached week blocks and Tuya week programs must notice the change.
+    assert coordinator._levels_key() != before
     await coordinator.async_refresh()
     assert coordinator.data["comfort_temperature"] == 22.5
     # A temperature of its own wins over the level.
