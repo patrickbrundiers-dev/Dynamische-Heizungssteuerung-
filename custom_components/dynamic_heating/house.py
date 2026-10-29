@@ -119,7 +119,9 @@ class HouseManager:
                     if key in self.levels and isinstance(value, (int, float)):
                         self.levels[key] = float(value)
             if stored.get("supply_version") == SUPPLY_VERSION:
-                self.supply = SupplyProfile.from_list(stored.get("supply_profile"))
+                self.supply = SupplyProfile.from_list(
+                    stored.get("supply_profile"), stored.get("supply_counts")
+                )
         self._unsubs = [
             async_track_time_interval(
                 self.hass, self._async_observe_supply, timedelta(minutes=1)
@@ -142,6 +144,12 @@ class HouseManager:
         if dt_util.as_local(now).weekday() == REPORT_WEEKDAY:
             # The report names the batteries itself.
             await self.async_send_report(reset=True)
+            from .learning_backup import async_export_learning
+
+            try:
+                await async_export_learning(self.hass, now)
+            except OSError as err:
+                _LOGGER.warning("Sicherung des Lernstands fehlgeschlagen: %s", err)
         else:
             await self.async_battery_notice()
 
@@ -287,6 +295,7 @@ class HouseManager:
                     self.vacation_until.isoformat() if self.vacation_until else None
                 ),
                 "supply_profile": self.supply.as_list(),
+                "supply_counts": self.supply.count_list(),
                 "supply_version": SUPPLY_VERSION,
                 "battery_notified": self.battery_notified,
                 "levels": self.levels,

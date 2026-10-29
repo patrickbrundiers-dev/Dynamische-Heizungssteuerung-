@@ -37,3 +37,17 @@ heat_load:
           max: 15
           step: 1
           unit_of_measurement: "°C"
+export_learning:
+restore_learning:
+  fields:
+    file:
+      example: lernstand-2026-11-01.json
+      selector:
+        text:
+    entity_id:
+      selector:
+        entity:
+          integration: dynamic_heating
+    include_house:
+      selector:
+        boolean:

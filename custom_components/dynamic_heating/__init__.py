@@ -35,11 +35,14 @@ from .const import (
     PLATFORMS,
     SERVICE_ESTIMATE_SAVINGS,
     SERVICE_HEAT_LOAD,
+    SERVICE_EXPORT_LEARNING,
+    SERVICE_RESTORE_LEARNING,
     HEAT_LOAD_OUTDOOR,
 )
 from .assist import async_setup_assist
 from .coordinator import DynamicHeatingCoordinator
 from .house import HouseManager
+from .learning_backup import async_export_learning, async_restore_learning
 from .pending_push import pending_pushes
 
 
@@ -108,6 +111,35 @@ async def _heat_load(call: ServiceCall) -> ServiceResponse:
     return house.heat_load(call.data["outdoor_temperature"])
 
 
+async def _export_learning(call: ServiceCall) -> ServiceResponse:
+    """Sicherung des Lernstands jetzt schreiben."""
+    try:
+        return await async_export_learning(call.hass)
+    except OSError as err:
+        raise ServiceValidationError(f"Sicherung nicht möglich: {err}") from err
+
+
+RESTORE_SCHEMA = vol.Schema(
+    {
+        vol.Optional("file"): cv.string,
+        vol.Optional("entity_id"): cv.entity_id,
+        vol.Optional("include_house"): cv.boolean,
+    }
+)
+
+
+async def _restore_learning(call: ServiceCall) -> ServiceResponse:
+    """Lernstand aus einer Sicherung zurückholen (ein Raum oder alle)."""
+    entity_id = call.data.get("entity_id")
+    room = _room_of(call.hass, entity_id) if entity_id else None
+    return await async_restore_learning(
+        call.hass,
+        file=call.data.get("file"),
+        room_entry_id=None if room is None else room.entry_id,
+        include_house=call.data.get("include_house"),
+    )
+
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Spar-Rechner, Assist questions, and the room card for the card picker."""
     hass.services.async_register(
@@ -123,6 +155,19 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         _heat_load,
         schema=HEAT_LOAD_SCHEMA,
         supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_EXPORT_LEARNING,
+        _export_learning,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RESTORE_LEARNING,
+        _restore_learning,
+        schema=RESTORE_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
     )
     async_setup_assist(hass)
     if hass.http is None:

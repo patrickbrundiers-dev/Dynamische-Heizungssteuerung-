@@ -39,6 +39,7 @@ async def async_setup_entry(
     entities.append(ValveMaintenanceButton(entry.runtime_data, entry))
     entities.append(WarmUpButton(entry.runtime_data, entry))
     entities.append(SelfTestButton(entry.runtime_data, entry))
+    entities.append(RadiatorTestButton(entry.runtime_data, entry))
     entities.append(LearnRunButton(entry.runtime_data, entry))
     async_add_entities(entities)
 
@@ -124,6 +125,25 @@ class SelfTestButton(CoordinatorEntity[DynamicHeatingCoordinator], ButtonEntity)
 
     async def async_press(self) -> None:
         await self.coordinator.async_run_selftest()
+
+
+class RadiatorTestButton(CoordinatorEntity[DynamicHeatingCoordinator], ButtonEntity):
+    """Valves fully open for 20 minutes: does the radiator get warm?"""
+
+    _attr_has_entity_name = True
+    _attr_name = "Heizkörpertest starten"
+    _attr_icon = "mdi:radiator"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self, coordinator: DynamicHeatingCoordinator, entry: ConfigEntry
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_radiator_test_button"
+        self._attr_device_info = device_info(entry)
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_start_radiator_test()
 
 
 class LearnRunButton(CoordinatorEntity[DynamicHeatingCoordinator], ButtonEntity):

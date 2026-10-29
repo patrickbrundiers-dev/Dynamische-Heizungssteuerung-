@@ -267,6 +267,12 @@ SUPPLY_VERSION = 3
 SUPPLY_MIN_SECONDS = 1200
 SUPPLY_OFF_BELOW = 0.3
 SUPPLY_ON_FROM = 0.5
+# Radiators that wait for warmth are judged once the wait ends: a wait that
+# ends cold was cold all along. One that ends warm was warm-up for at most
+# this long; anything before that the boiler was still off.
+SUPPLY_WARMUP_SECONDS = 1800
+# A wait still open after this long is dropped unjudged.
+SUPPLY_PENDING_HOURS = 3
 
 
 @dataclass(slots=True)
@@ -274,38 +280,78 @@ class SupplyProfile:
     """How often the central heating delivered, per hour of the day (0..1).
 
     Only time in which the room asked for heat long enough to judge counts.
+    The first hour of heating is mostly "waiting" (the radiators are not
+    warm yet, but it is too early to call them cold); that time is counted
+    once the wait ends, so the hour in which a night preheat starts learns
+    the boiler pause instead of staying unknown.
     """
 
     slots: list[float | None] = field(default_factory=lambda: [None] * 24)
+    # Hours judged per slot: the first few weigh more than the usual
+    # alpha, so one misread night does not stick for a week.
+    counts: list[int] = field(default_factory=lambda: [0] * 24)
     current: int | None = None
-    warm_seconds: float = 0.0
-    judged_seconds: float = 0.0
+    # Open hours, oldest first: [hour, warm, judged, waiting seconds].
+    open: list[list] = field(default_factory=list)
 
     def observe(self, hour: int, supply: str | None, seconds: float) -> bool:
         """Add time to the running hour; True when an hour was finished."""
-        finished = False
         if self.current != hour:
-            finished = self._finish()
             self.current = hour
-            self.warm_seconds = 0.0
-            self.judged_seconds = 0.0
+            self.open.append([hour, 0.0, 0.0, 0.0])
         seconds = max(0.0, min(seconds, 300.0))
+        slot = self.open[-1]
         if supply in (SUPPLY_WARM, SUPPLY_PARTLY):
-            self.warm_seconds += seconds
-            self.judged_seconds += seconds
+            self._resolve(warm=True)
+            slot[1] += seconds
+            slot[2] += seconds
         elif supply == SUPPLY_COLD:
-            self.judged_seconds += seconds
+            self._resolve(warm=False)
+            slot[2] += seconds
+        elif supply == SUPPLY_WAITING:
+            slot[3] += seconds
+        else:
+            # The room stopped asking before the wait was decided.
+            for item in self.open:
+                item[3] = 0.0
+        return self._finish_closed()
+
+    def _resolve(self, warm: bool) -> None:
+        """Count the waiting time of the open hours now that it is decided."""
+        warmup = SUPPLY_WARMUP_SECONDS if warm else 0.0
+        # The latest waiting time is the warm-up, earlier time was cold.
+        for item in reversed(self.open):
+            waiting = item[3]
+            if not waiting:
+                continue
+            as_warm = min(waiting, warmup)
+            warmup -= as_warm
+            item[1] += as_warm
+            item[2] += waiting
+            item[3] = 0.0
+
+    def _finish_closed(self) -> bool:
+        """Learn every past hour whose time is fully judged."""
+        finished = False
+        while self.open and self.open[0][0] != self.current:
+            if self.open[0][3] and len(self.open) <= SUPPLY_PENDING_HOURS:
+                # Still waiting to be decided.
+                break
+            hour, warm, judged, _waiting = self.open.pop(0)
+            finished = self._learn(hour, warm, judged) or finished
         return finished
 
-    def _finish(self) -> bool:
-        if self.current is None or self.judged_seconds < SUPPLY_MIN_SECONDS:
+    def _learn(self, hour: int, warm: float, judged: float) -> bool:
+        if judged < SUPPLY_MIN_SECONDS:
             return False
-        share = self.warm_seconds / self.judged_seconds
-        old = self.slots[self.current]
-        self.slots[self.current] = round(
-            share if old is None else (1 - SUPPLY_ALPHA) * old + SUPPLY_ALPHA * share,
-            3,
+        share = warm / judged
+        old = self.slots[hour]
+        count = self.counts[hour] or (0 if old is None else 1)
+        weight = max(SUPPLY_ALPHA, 1 / (count + 1))
+        self.slots[hour] = round(
+            share if old is None else old + weight * (share - old), 3
         )
+        self.counts[hour] = min(count + 1, 99)
         return True
 
     def usually_off(self, hour: int) -> bool:
@@ -327,6 +373,9 @@ class SupplyProfile:
     def as_list(self) -> list[float | None]:
         return list(self.slots)
 
+    def count_list(self) -> list[int]:
+        return list(self.counts)
+
     @property
     def known(self) -> bool:
         return any(value is not None for value in self.slots)
@@ -338,7 +387,7 @@ class SupplyProfile:
                 self.slots[hour] = value
 
     @classmethod
-    def from_list(cls, data: object) -> SupplyProfile:
+    def from_list(cls, data: object, counts: object = None) -> SupplyProfile:
         profile = cls()
         if isinstance(data, list) and len(data) == 24:
             for hour, value in enumerate(data):
@@ -348,6 +397,10 @@ class SupplyProfile:
                     and 0.0 <= value <= 1.0
                 ):
                     profile.slots[hour] = float(value)
+        if isinstance(counts, list) and len(counts) == 24:
+            for hour, value in enumerate(counts):
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    profile.counts[hour] = min(value, 99)
         return profile
 
 
@@ -447,3 +500,78 @@ def balance_verdict(stats: dict[str, RadiatorStats]) -> tuple[str, list[str]]:
     if len(weak) > 1:
         text += f" (auch {', '.join(item[1] for item in weak[1:])})"
     return text, [item[1] for item in weak]
+
+
+# --- Radiator test (button) --------------------------------------------------
+
+# Valves fully open this long, then the radiators and the room are judged.
+RADIATOR_TEST_SECONDS = 1200
+# The room warmed less than this in the test: it loses its heat quickly.
+RADIATOR_TEST_ROOM_RISE = 0.1
+
+TEST_WARM = "warm"
+TEST_WARM_ROOM_COLD = "warm_room_cold"
+TEST_COLD = "cold"
+TEST_NO_SUPPLY = "no_supply"
+TEST_NO_DATA = "no_data"
+
+
+def radiator_test_verdict(
+    valve_rises: dict[str, float | None],
+    room_rise: float | None,
+    boiler_warm: bool | None,
+) -> tuple[str, str]:
+    """(code, German text) after the valves were open for the test.
+
+    ``valve_rises`` holds how much each valve's own temperature rose,
+    ``boiler_warm`` whether another room saw hot water meanwhile (None:
+    unknown).
+    """
+    known = {name: rise for name, rise in valve_rises.items() if rise is not None}
+    warm = [name for name, rise in known.items() if rise >= WARM_RISE]
+    cold = [name for name, rise in known.items() if rise < WARM_RISE]
+
+    def rises(names: list[str]) -> str:
+        return ", ".join(
+            f"{name} +{known[name]:.1f} K".replace(".", ",") for name in names
+        )
+
+    room_text = (
+        "" if room_rise is None else f", Raum {room_rise:+.1f} K".replace(".", ",")
+    )
+    if known and not cold:
+        if room_rise is not None and room_rise < RADIATOR_TEST_ROOM_RISE:
+            return (
+                TEST_WARM_ROOM_COLD,
+                f"Heizkörper wird warm ({rises(warm)}), aber der Raum kaum{room_text}: "
+                "er verliert viel Wärme (Fenster, Außenwand) oder der Heizkörper ist zu klein.",
+            )
+        return TEST_WARM, f"Heizkörper wird warm ({rises(warm)}{room_text})."
+    if not known:
+        if room_rise is None:
+            return TEST_NO_DATA, "Kein Messwert von Ventil und Raum – Test sagt nichts."
+        if room_rise >= RADIATOR_TEST_ROOM_RISE:
+            return TEST_WARM, f"Der Raum wird wärmer{room_text}."
+        if boiler_warm is False:
+            return (
+                TEST_NO_SUPPLY,
+                "Die Zentralheizung lieferte gerade keine Wärme – Test bitte später wiederholen.",
+            )
+        return TEST_COLD, (
+            f"Der Raum wird nicht wärmer{room_text}: "
+            "Heizkörper entlüften oder Ventilstift prüfen."
+        )
+    if boiler_warm is False and not warm:
+        return (
+            TEST_NO_SUPPLY,
+            "Die Zentralheizung lieferte gerade keine Wärme – Test bitte später wiederholen.",
+        )
+    if warm:
+        return TEST_COLD, (
+            f"Nur ein Teil wird warm ({rises(warm)}); kalt bleibt {rises(cold)}: "
+            "diesen Heizkörper entlüften oder Ventilstift prüfen."
+        )
+    return TEST_COLD, (
+        f"Heizkörper bleibt kalt ({rises(cold)}{room_text}): "
+        "entlüften oder Ventilstift prüfen."
+    )

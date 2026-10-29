@@ -234,6 +234,8 @@ from .const import (
     QUICK_ECO,
     ROOM_FALLBACK_GRACE_SECONDS,
     ROOM_SENSOR_STALE_SECONDS,
+    DATA_STALE_SECONDS,
+    DATA_VALVE_STALE_SECONDS,
     DEFAULT_HYSTERESIS,
     CONF_VALVE_MAINTENANCE,
     CONF_CLIMATE_ENTITY,
@@ -343,6 +345,8 @@ from .logic import (
     model_lead_minutes,
     preheat_parts_text,
     airing_advice,
+    data_quality,
+    source_quality,
     schedule_comfort_temperature,
     decide_heating_target,
     evaluate_heating_limit,
@@ -368,6 +372,8 @@ from .model import (
 )
 from .radiator import (
     COLD,
+    RADIATOR_TEST_SECONDS,
+    radiator_test_verdict,
     SUPPLY_COLD,
     SUPPLY_IDLE,
     SUPPLY_PARTLY,
@@ -700,6 +706,10 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._overshoot_samples = 0
         self._overshoot_track: tuple[float, float, datetime] | None = None
         self._was_heating = False
+        # Radiator test (button): the running one and the last result.
+        self._radiator_test: dict[str, Any] | None = None
+        self._radiator_test_requested = False
+        self.radiator_test_result: dict[str, Any] | None = None
         # Valve maintenance started by hand, and valves woken up for it.
         self._maintenance_requested = False
         self._maintenance_woken: set[str] = set()
@@ -1188,7 +1198,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._model_seeded = False
         self.cooling = CoolingCorrection.from_dict(stored.get("cooling_correction"))
         self.supply = (
-            SupplyProfile.from_list(stored.get("supply_profile"))
+            SupplyProfile.from_list(
+                stored.get("supply_profile"), stored.get("supply_counts")
+            )
             if stored.get("supply_version") == SUPPLY_VERSION
             else SupplyProfile()
         )
@@ -1905,6 +1917,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "room_model_seeded": self._model_seeded,
                 "room_model_version": ROOM_MODEL_VERSION,
                 "supply_profile": self.supply.as_list(),
+                "supply_counts": self.supply.count_list(),
                 "supply_version": SUPPLY_VERSION,
                 "cooling_correction": self.cooling.as_dict(),
                 "usage_profile": self.usage.as_list(),
@@ -3186,6 +3199,136 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._maintenance_requested = True
         await self.async_refresh()
 
+    async def async_start_radiator_test(self) -> None:
+        """Open the valves fully for a while and judge the radiators (button)."""
+        if not self.enabled:
+            raise ServiceValidationError(
+                "Die Regelung ist aus – Heizkörpertest nur bei aktiver Regelung."
+            )
+        self._radiator_test_requested = True
+        await self.async_refresh()
+
+    def _valve_own_temperatures(self) -> dict[str, float | None]:
+        """Valve -> its own (radiator-side) temperature, where there is one.
+
+        A valve with a housing sensor reads that; one without uses its own
+        reading, unless it is fed the room temperature.
+        """
+        sensors = self._radiator_sensors()
+        feeding = bool(self.config.get(CONF_EXTERNAL_TEMPERATURE))
+        values: dict[str, float | None] = {}
+        for entity_id in self._thermostat_ids():
+            if entity_id in self.skipped_valves:
+                continue
+            if entity_id in sensors:
+                values[entity_id] = _as_float(self.hass.states.get(sensors[entity_id]))
+            elif not feeding or self._external_temperature_entities(entity_id) is None:
+                state = self.hass.states.get(entity_id)
+                values[entity_id] = (
+                    _as_number(state.attributes.get("current_temperature"))
+                    if self._valid(state)
+                    else None
+                )
+        return values
+
+    async def _run_radiator_test(
+        self, window_open: bool, result: dict[str, Any]
+    ) -> bool:
+        """Radiator test; True while it owns the valves."""
+        now = dt_util.utcnow()
+        room = result.get("room_temperature")
+        if self._radiator_test is None:
+            if not self._radiator_test_requested:
+                return False
+            self._radiator_test_requested = False
+            if window_open:
+                self.radiator_test_result = {
+                    "at": now.isoformat(),
+                    "code": "aborted",
+                    "text": "Nicht gestartet: Fenster offen.",
+                }
+                result["radiator_test"] = self.radiator_test_result["text"]
+                return False
+            self._radiator_test = {
+                "started": now,
+                "valves": self._valve_own_temperatures(),
+                "room": None if room is None else float(room),
+            }
+            self._log("Heizkörpertest gestartet")
+        test = self._radiator_test
+        elapsed = (now - test["started"]).total_seconds()
+        if window_open or elapsed >= RADIATOR_TEST_SECONDS:
+            await self._finish_radiator_test(now, room, aborted=window_open)
+            result["radiator_test"] = self.radiator_test_result["text"]
+            return False
+        minutes = max(1, round((RADIATOR_TEST_SECONDS - elapsed) / 60))
+        result["status"] = f"Heizkörpertest – Ventile offen, noch {minutes} min"
+        result["radiator_test"] = f"Läuft, noch {minutes} min"
+        for entity_id in self._thermostat_ids():
+            state = self.hass.states.get(entity_id)
+            if not self._valid(state) or state.state == "off":
+                continue
+            try:
+                setpoint = float(state.attributes["max_temp"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not await self._write_setpoint(entity_id, state, setpoint, now):
+                result["control_error"] = True
+        return True
+
+    async def _finish_radiator_test(
+        self, now: datetime, room: float | None, *, aborted: bool
+    ) -> None:
+        test = self._radiator_test or {}
+        self._radiator_test = None
+        # Forget the test setpoints so they are not taken for manual changes.
+        self._written.clear()
+        self._skip_closed.clear()
+        if aborted:
+            self.radiator_test_result = {
+                "at": now.isoformat(),
+                "code": "aborted",
+                "text": "Abgebrochen: Fenster geöffnet.",
+            }
+            self._log("Heizkörpertest abgebrochen")
+            return
+        start = test.get("valves") or {}
+        end = self._valve_own_temperatures()
+        rises = {
+            self._friendly_name(entity_id): (
+                None
+                if start.get(entity_id) is None or end.get(entity_id) is None
+                else round(end[entity_id] - start[entity_id], 1)
+            )
+            for entity_id in start
+        }
+        start_room = test.get("room")
+        room_rise = (
+            None if start_room is None or room is None else round(float(room) - start_room, 2)
+        )
+        house = self._house()
+        others = [
+            other.data.get("radiator_supply")
+            for other in (house.rooms() if house is not None else [])
+            if other is not self and other.data
+        ]
+        if SUPPLY_WARM in others or SUPPLY_PARTLY in others:
+            boiler_warm: bool | None = True
+        elif self.supply_profile.usually_off(dt_util.as_local(now).hour):
+            boiler_warm = False
+        else:
+            boiler_warm = None
+        code, text = radiator_test_verdict(rises, room_rise, boiler_warm)
+        self.radiator_test_result = {
+            "at": now.isoformat(),
+            "code": code,
+            "text": text,
+            "valves": rises,
+            "room_rise": room_rise,
+        }
+        self._log(f"Heizkörpertest: {text}")
+        await self._push_room(f"Heizkörpertest {self.room_name}: {text}")
+
     async def _run_valve_maintenance(
         self, window_open: bool, result: dict[str, Any]
     ) -> bool:
@@ -3789,6 +3932,58 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if value is None or not math.isfinite(value) or not 0 < value <= 100:
             return None
         return value
+
+    def _data_sources(self) -> list[tuple[str, str, float | None]]:
+        """Every source the room reads, with how fresh it is."""
+        now = dt_util.utcnow()
+        sources: list[tuple[str, str, float | None]] = []
+
+        def add(name: str, entity_id: str | None, max_age: float | None) -> None:
+            if not entity_id:
+                return
+            state = self.hass.states.get(entity_id)
+            age = None
+            if state is not None:
+                reported = getattr(state, "last_reported", None) or state.last_updated
+                age = (now - reported).total_seconds()
+            sources.append(
+                (name, source_quality(self._valid(state), age, max_age), age)
+            )
+
+        add("Raumfühler", self.config.get(CONF_ROOM_TEMPERATURE_ENTITY), DATA_STALE_SECONDS)
+        add(
+            "Außentemperatur",
+            self.config.get(CONF_OUTDOOR_TEMPERATURE_ENTITY),
+            DATA_STALE_SECONDS,
+        )
+        add("Wettervorhersage", self.config.get(CONF_WEATHER_ENTITY), DATA_STALE_SECONDS)
+        add("Feuchte", self.config.get(CONF_HUMIDITY_ENTITY), DATA_STALE_SECONDS)
+        add(
+            "Außenfeuchte",
+            self.config.get(CONF_OUTDOOR_HUMIDITY_ENTITY),
+            DATA_STALE_SECONDS,
+        )
+        for entity_id in self._thermostat_ids():
+            if entity_id not in self.skipped_valves:
+                add(self._friendly_name(entity_id), entity_id, DATA_VALVE_STALE_SECONDS)
+        contacts = {
+            entity_id
+            for _key, ids, _door, _open, _close in self._contact_groups()
+            for entity_id in ids
+        }
+        for entity_id in sorted(contacts):
+            # Contacts report only when they change: only availability counts.
+            add(self._friendly_name(entity_id), entity_id, None)
+        for entity_id in self._people():
+            add(self._friendly_name(entity_id), entity_id, None)
+        return sources
+
+    def _update_data_quality(self, result: dict[str, Any]) -> None:
+        """Datenqualität: does every source of the room still report?"""
+        quality = data_quality(self._data_sources())
+        result["data_quality"] = quality["state"]
+        result["data_quality_problems"] = quality["problems"]
+        result["data_quality_sources"] = quality["sources"]
 
     def _update_airing(self, result: dict[str, Any]) -> None:
         """Airing advice from indoor and outdoor humidity (display only)."""
@@ -5568,6 +5763,13 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if warnings
             else "keine Meldungen",
         )
+        quality = data_quality(self._data_sources())
+        if quality["state"] is not None:
+            add(
+                "Datenqualität",
+                not quality["problems"],
+                "; ".join(quality["problems"]) or "alle Quellen melden",
+            )
         add(
             "Raummodell",
             None,
@@ -5883,6 +6085,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._morning_report(result)
         shower_seen = self._observe_shower(result)
         self._update_airing(result)
+        self._update_data_quality(result)
         batteries_changed = self._observe_batteries(result)
         habit = self._update_habits(result)
         await self._maybe_selftest(result)
@@ -7305,6 +7508,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Ersatzwert aus den Thermostaten"
             )
         result["valve_maintenance"] = None
+        result["radiator_test"] = (
+            self.radiator_test_result["text"] if self.radiator_test_result else None
+        )
         if decision.mode == "maintenance":
             # The valves are fully open anyway; a pending start is dropped.
             self._maintenance_requested = False
@@ -7313,6 +7519,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             and decision.mode != "maintenance"
             and await self._run_valve_maintenance(window_open, result)
         ):
+            return result
+        if self.enabled and await self._run_radiator_test(window_open, result):
             return result
         if self.enabled and decision.target_temperature is not None:
             await self._apply_target(
@@ -7336,6 +7544,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._written.clear()
             self._calibration.clear()
             self._maintenance_started = None
+            self._radiator_test = None
             self._manual_override = None
             self._skip_closed.clear()
             self._divergent_since.clear()

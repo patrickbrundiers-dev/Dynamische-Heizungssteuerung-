@@ -426,6 +426,8 @@ async def async_setup_entry(
     ]
     entities.append(DayPlanSensor(coordinator, entry, DAY_PLAN))
     entities.append(PreheatSensor(coordinator, entry, PREHEAT))
+    entities.append(DataQualitySensor(coordinator, entry, DATA_QUALITY))
+    entities.append(RadiatorTestSensor(coordinator, entry, RADIATOR_TEST))
     if coordinator.config.get(CONF_HUMIDITY_ENTITY):
         entities.append(AiringSensor(coordinator, entry, AIRING))
     async_add_entities(entities)
@@ -716,6 +718,52 @@ class AiringSensor(HeatingSensor):
             return None
         details = self.coordinator.data.get("airing_details") or {}
         return {key: value for key, value in details.items() if key != "text"}
+
+
+DATA_QUALITY = HeatingSensorDescription(
+    key="data_quality",
+    name="Datenqualität",
+    icon="mdi:database-check-outline",
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+
+
+class DataQualitySensor(HeatingSensor):
+    """Do all sources of the room still report? Which ones do not?"""
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        if not self.coordinator.data:
+            return None
+        data = self.coordinator.data
+        return {
+            "problems": data.get("data_quality_problems") or [],
+            "sources": data.get("data_quality_sources") or {},
+        }
+
+
+RADIATOR_TEST = HeatingSensorDescription(
+    key="radiator_test",
+    name="Heizkörpertest",
+    icon="mdi:radiator",
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+
+
+class RadiatorTestSensor(HeatingSensor):
+    """Result of the last radiator test (button "Heizkörpertest starten")."""
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        result = self.coordinator.radiator_test_result
+        if not result:
+            return None
+        return {
+            "tested_at": result.get("at"),
+            "result": result.get("code"),
+            "valve_rise": result.get("valves"),
+            "room_rise": result.get("room_rise"),
+        }
 
 
 class HouseHomecomingSensor(HouseEntity, SensorEntity):
