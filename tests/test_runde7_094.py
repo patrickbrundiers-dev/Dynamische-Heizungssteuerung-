@@ -16,7 +16,7 @@ from test_home_assistant_sandbox import (
 )
 from test_radiator_093 import _add_valve, _history_with_cold_central_heating
 
-from custom_components.dynamic_heating.coordinator import SEED_VERSION
+from custom_components.dynamic_heating.room_util import SEED_VERSION
 from custom_components.dynamic_heating.const import DOMAIN
 from custom_components.dynamic_heating.model import (
     ModelView,
