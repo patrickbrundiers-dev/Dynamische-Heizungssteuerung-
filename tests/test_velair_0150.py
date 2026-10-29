@@ -120,7 +120,10 @@ def test_homecoming_is_learned_per_weekday():
         learner.observe(_local(day, 7, 30), False)
         assert learner.observe(_local(day, hour, minute), True)
     assert learner.usual(0, date(2026, 10, 20)) == 17 * 60 + 10
-    assert learner.usual(1, date(2026, 10, 20)) is None
+    # Since 0.17.0 the other workdays use all workdays until they have their
+    # own habit; the weekend has none yet.
+    assert learner.usual(1, date(2026, 10, 20)) == 17 * 60 + 10
+    assert learner.usual(5, date(2026, 10, 20)) is None
     assert learner.week(date(2026, 10, 20))["Montag"] == "17:10"
     # A short trip to the bakery is no homecoming.
     learner.observe(_local(26, 9, 0), False)

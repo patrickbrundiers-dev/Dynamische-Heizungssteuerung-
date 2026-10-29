@@ -138,6 +138,7 @@ from .const import (
     CONF_HEATING_SEASON_ENTITY,
     CONF_MAX_PREHEAT_MINUTES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
+    CONF_OCCUPANCY_ENTITY,
     CONF_PRESENCE_ENTITY,
     CONF_PERSON_ENTITIES,
     CONF_GUEST_ENTITY,
@@ -882,6 +883,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             self._entity_field(CONF_PRESENCE_SCHEDULE_ENTITY, "schedule", current),
             self._duration_field(CONF_PRESENCE_ON_DURATION, current, DEFAULT_PRESENCE_ON_DURATION),
             self._duration_field(CONF_PRESENCE_OFF_DURATION, current, DEFAULT_PRESENCE_OFF_DURATION),
+            self._entity_field(CONF_OCCUPANCY_ENTITY, ["binary_sensor", "input_boolean"], current),
         ):
             schema[item[0]] = item[1]
         schema[vol.Optional(CONF_AWAY_TEMPERATURE)] = _temperature_selector(5, 21)
@@ -1227,7 +1229,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             )
             for key in (CONF_PERSON_ENTITIES, CONF_GUEST_ENTITY, CONF_PRESENCE_ENTITY,
                         CONF_PRESENCE_SCHEDULE_ENTITY, CONF_FORCE_COMFORT_ENTITIES,
-                        CONF_FORCE_ECO_ENTITIES):
+                        CONF_FORCE_ECO_ENTITIES, CONF_OCCUPANCY_ENTITY):
                 current[key] = user_input.get(key) or None
             current[CONF_FOLLOW_HOUSE_CALENDAR] = bool(
                 user_input.get(CONF_FOLLOW_HOUSE_CALENDAR, DEFAULT_FOLLOW_HOUSE_CALENDAR)

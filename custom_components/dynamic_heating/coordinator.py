@@ -197,6 +197,9 @@ from .const import (
     LEARN_RUN_DURATION_SECONDS,
     LEARN_RUN_RISE,
     NOTIFY_ACTION_PREFIX,
+    OCCUPANCY_EXTEND_MAX_SECONDS,
+    OCCUPANCY_HOLD_SECONDS,
+    OCCUPANCY_UNUSED_SECONDS,
     NOTIFY_AWAY_SECONDS,
     NOTIFY_SNOOZE_SECONDS,
     CONF_NOTIFY_SERVICE,
@@ -249,6 +252,7 @@ from .const import (
     CONF_WINDOW_TEMPERATURE,
     CONF_MAX_PREHEAT_MINUTES,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
+    CONF_OCCUPANCY_ENTITY,
     CONF_PRESENCE_ENTITY,
     CONF_PERSON_ENTITIES,
     CONF_GUEST_ENTITY,
@@ -359,6 +363,9 @@ from .logic import (
     valve_maintenance_phase,
 )
 from .model import (
+    HOLDS_DOWN_TO_FLOOR,
+    HORIZON_MIN,
+    TRUSTED_HORIZON_ERROR,
     TRUSTED_SAMPLES,
     CoolingCorrection,
     ModelView,
@@ -514,6 +521,11 @@ def foreign_source(hass: HomeAssistant, context: Context | None) -> tuple[str, s
         if state.context.id in ids:
             return state.entity_id, state.name
     return None
+
+
+def _de_number(value: float) -> str:
+    """A number with two decimals the German way (0,31)."""
+    return f"{value:.2f}".replace(".", ",")
 
 
 def _foreign_issue_id(entry_id: str, source_id: str) -> str:
@@ -768,6 +780,8 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Day (ISO) of the last comfort start told in the morning report.
         self._morning_reported: str | None = None
         self._comfort_started_at: datetime | None = None
+        # Latest motion of the occupancy sensor (runtime only).
+        self._last_motion: datetime | None = None
         # Comfort block that already ended heating early, and the sun pause.
         self._early_stop_event: datetime | None = None
         self._solar_pause = False
@@ -974,7 +988,12 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"{week['alerts']} Meldung" + ("en" if week["alerts"] > 1 else "")
             )
         model = self.room_model
-        if model.trusted and model.mean_error is not None:
+        if model.trusted and model.horizon_error is not None:
+            parts.append(
+                "Raummodell liegt über 3 Stunden im Schnitt "
+                f"{_de_number(model.horizon_error)} °C daneben"
+            )
+        elif model.trusted and model.mean_error is not None:
             parts.append(
                 f"Raummodell liegt im Schnitt {model.mean_error:.2f} °C/h daneben"
                 .replace(".", ",")
@@ -4567,8 +4586,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "load_kw": round(load.share * power_kw, 2),
             "radiator_kw": round(power_kw, 2),
             "share_percent": round(load.share * 100),
-            "holds_comfort_down_to": round(load.holds_down_to, 1),
-            "verdict": load.verdict,
+            # A tiny learned loss puts this at −300 °C: no real meaning.
+            "holds_comfort_down_to": round(max(load.holds_down_to, HOLDS_DOWN_TO_FLOOR), 1),
+            "verdict": load.verdict if self.room_model.trusted else "noch ungenau",
             # Below the trusted mark the figures are still rough.
             "trusted": self.room_model.trusted,
         }
@@ -4662,6 +4682,44 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             comfort, view.reachable(min(room, comfort)) - RECOVERY_REACH_MARGIN
         )
         return round(view.lowest_start(reach, seconds / 3600), 1)
+
+    def _occupancy(self, now: datetime, schedule_active: bool) -> str | None:
+        """Comfort by use of a motion sensor (e.g. the bathroom).
+
+        "extend": the comfort block ended, but there was motion within the
+        last minutes. "unused": the block runs for a while without any
+        motion since it started. None otherwise.
+        """
+        entity_id = self.config.get(CONF_OCCUPANCY_ENTITY)
+        if not entity_id:
+            self._last_motion = None
+            return None
+        state = self.hass.states.get(entity_id)
+        if not self._valid(state):
+            return None
+        # Short pulses are enough: "on" is motion now, "off" since when.
+        moment = now if state.state == "on" else state.last_changed
+        if self._last_motion is None or moment > self._last_motion:
+            self._last_motion = moment
+        last = self._last_motion
+        if not schedule_active:
+            ended = self._comfort_ended_at
+            if (
+                ended is not None
+                and (now - ended).total_seconds() <= OCCUPANCY_EXTEND_MAX_SECONDS
+                and last >= ended - timedelta(seconds=OCCUPANCY_HOLD_SECONDS)
+                and (now - last).total_seconds() <= OCCUPANCY_HOLD_SECONDS
+            ):
+                return "extend"
+            return None
+        started = self._comfort_started_at
+        if (
+            started is not None
+            and (now - started).total_seconds() >= OCCUPANCY_UNUSED_SECONDS
+            and last < started
+        ):
+            return "unused"
+        return None
 
     def _hold_comfort(self, now: datetime) -> str | None:
         """Why an empty room keeps comfort for now, or None."""
@@ -4968,8 +5026,9 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 or bool(result.get("supply_usually_off"))
             )
         )
+        at = dt_util.utcnow().timestamp()
         sample = self._model_collector.observe(
-            dt_util.utcnow().timestamp(),
+            at,
             float(room),
             float(demand) / 100,
             float(outdoor),
@@ -4979,7 +5038,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             radiators == SUPPLY_WARM,
         )
         return sample is not None and self.room_model.add(
-            *sample, warm=self._model_collector.last_warm
+            *sample, warm=self._model_collector.last_warm, at=at
         )
 
     async def async_seed_model(self) -> None:
@@ -6025,14 +6084,30 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         elif view is None:
             status = "Bereit – Außentemperatur fehlt"
         elif not model.trusted:
-            error = (
-                "–" if model.mean_error is None
-                else f"{model.mean_error:.2f}".replace(".", ",")
-            )
-            status = (
-                f"Aktiv fürs Vorheizen – Absenkung und Sonne ab {TRUSTED_SAMPLES} "
-                f"Stunden und Fehler unter 0,12 °C/h (jetzt {model.samples} h, {error})"
-            )
+            horizon = model.horizon_error
+            if model.samples < TRUSTED_SAMPLES:
+                status = (
+                    f"Aktiv fürs Vorheizen – Absenkung und Sonne ab {TRUSTED_SAMPLES} "
+                    f"Stunden (jetzt {model.samples} h)"
+                )
+            elif horizon is None:
+                error = (
+                    "–" if model.mean_error is None
+                    else f"{model.mean_error:.2f}".replace(".", ",")
+                )
+                status = (
+                    "Aktiv fürs Vorheizen – Absenkung und Sonne, sobald die "
+                    f"Abweichung unter 0,12 °C/h liegt (jetzt {error}) oder "
+                    f"{HORIZON_MIN} Drei-Stunden-Vergleiche vorliegen "
+                    f"(jetzt {len(model.horizon_errors)})"
+                )
+            else:
+                status = (
+                    "Aktiv fürs Vorheizen – Absenkung und Sonne, sobald die "
+                    "Vorhersage über 3 Stunden im Schnitt weniger als "
+                    f"{_de_number(TRUSTED_HORIZON_ERROR)} °C daneben liegt "
+                    f"(jetzt {_de_number(horizon)} °C)"
+                )
         else:
             status = "Aktiv"
         ready = model.ready
@@ -6045,6 +6120,7 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "model_heating_samples": model.heating_samples,
             "model_idle_samples": model.idle_samples,
             "model_error": model.mean_error,
+            "model_horizon_error": model.horizon_error,
             "heat_output": round(heat_output, 2) if ready else None,
             # °C per hour lost at 10 °C between room and outside.
             "heat_loss": round(loss * 10, 2) if ready else None,
@@ -7047,6 +7123,16 @@ class DynamicHeatingCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         elif self._schedule_was_active is False:
             self._comfort_started_at = now_utc
         self._schedule_was_active = schedule_active
+        occupancy = self._occupancy(now_utc, schedule_active)
+        if occupancy == "extend":
+            # Still in use after the block ended: comfort without an end, so
+            # nothing stops it early.
+            schedule_active, next_event = True, None
+            presence_status = "Raum wird noch genutzt – Komfort gehalten"
+        elif occupancy == "unused" and self._absence == "none" and "presence" not in paused:
+            present = False
+            presence_status = "Seit Komfortbeginn keine Bewegung – abgesenkt bis zur ersten Bewegung"
+            self._absence = "room_empty"
         solar_kw, wind = self._weather_inputs()
         view = self._model_view(outdoor_temperature, solar_kw, wind)
         # Preheat timing uses the model once it is ready; what changes the

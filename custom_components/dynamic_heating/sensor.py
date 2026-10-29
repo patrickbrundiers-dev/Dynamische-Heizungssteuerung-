@@ -370,6 +370,7 @@ _MODEL_KEYS = (
     "model_heating_samples",
     "model_idle_samples",
     "model_error",
+    "model_horizon_error",
     "wind_loss",
     "setback_floor",
     "usage_now",

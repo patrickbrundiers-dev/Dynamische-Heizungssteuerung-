@@ -15,6 +15,9 @@ CONF_ROOM_TEMPERATURE_ENTITY: Final = "room_temperature_entity"
 CONF_SCHEDULE_ENTITY: Final = "schedule_entity"
 CONF_WINDOW_ENTITY: Final = "window_entity"
 CONF_PRESENCE_ENTITY: Final = "presence_entity"
+# Motion sensor that keeps comfort while the room is used and ends an unused
+# comfort block early (e.g. a bathroom).
+CONF_OCCUPANCY_ENTITY: Final = "occupancy_entity"
 CONF_OUTDOOR_TEMPERATURE_ENTITY: Final = "outdoor_temperature_entity"
 CONF_WEATHER_ENTITY: Final = "weather_entity"
 CONF_COMFORT_TEMPERATURE: Final = "comfort_temperature"
@@ -760,3 +763,10 @@ SERVICE_RESTORE_LEARNING: Final = "restore_learning"
 LEARNING_BACKUP_DIR: Final = "dynamic_heating_backup"
 LEARNING_BACKUP_KEEP: Final = 8
 LEARNING_BACKUP_VERSION: Final = 1
+
+# Comfort by motion (0.17.0): comfort is kept this long after the last motion
+# once the block has ended, at most this long past its end; a block without
+# any motion after this long is reduced like an empty room.
+OCCUPANCY_HOLD_SECONDS: Final = 600
+OCCUPANCY_EXTEND_MAX_SECONDS: Final = 3600
+OCCUPANCY_UNUSED_SECONDS: Final = 1800

@@ -44,6 +44,14 @@ IDLE_SAMPLE_DEMAND = 0.1
 # proven itself: enough hours and a small prediction error.
 TRUSTED_SAMPLES = 48
 TRUSTED_ERROR = 0.12
+# The hourly error swings with every door opened (0.01 to 0.37 °C/h within
+# a few days in real rooms), so trust is judged over three hours, the scale
+# setback and sun decisions work on: hourly errors add up or cancel out.
+HORIZON_HOURS = 3
+HORIZON_WINDOW = 48
+# Three-hour errors needed before they decide; before that, the hourly one.
+HORIZON_MIN = 12
+TRUSTED_HORIZON_ERROR = 0.5
 # Reachable means within this many hours of full heating, not in theory.
 REACH_HOURS = 6.0
 # A room changing faster than this within an hour is not normal operation.
@@ -177,6 +185,11 @@ class RoomModel:
     idle_samples: int = 0
     last_error: float | None = None
     mean_error: float | None = None
+    # Signed errors of the latest back-to-back hours and when the last ended.
+    chain: list[float] = field(default_factory=list)
+    last_at: float | None = None
+    # |sum| of the errors of three back-to-back hours, newest last.
+    horizon_errors: list[float] = field(default_factory=list)
 
     def add(
         self,
@@ -187,10 +200,12 @@ class RoomModel:
         solar_kw: float = 0.0,
         wind: float = 0.0,
         warm: bool = False,
+        at: float | None = None,
     ) -> bool:
         """Learn one hourly sample; False when it is not plausible.
 
-        ``warm``: the radiators were seen warm during the hour.
+        ``warm``: the radiators were seen warm during the hour. ``at``: when
+        the hour ended (seconds), to chain back-to-back hours.
         """
         values = (rate, demand, room, outdoor, solar_kw, wind)
         if not all(math.isfinite(value) for value in values):
@@ -201,6 +216,7 @@ class RoomModel:
         features = _features(demand, room, outdoor, max(0.0, solar_kw), max(0.0, wind))
         predicted = sum(p * x for p, x in zip(parameters, features, strict=True))
         error = abs(predicted - rate)
+        self._chain(rate - predicted, at)
         self.last_error = round(error, 3)
         self.mean_error = round(
             error if self.mean_error is None else 0.9 * self.mean_error + 0.1 * error,
@@ -218,6 +234,28 @@ class RoomModel:
         elif demand <= IDLE_SAMPLE_DEMAND:
             self.idle_samples += 1
         return True
+
+    def _chain(self, residual: float, at: float | None) -> None:
+        """Add up the errors of back-to-back hours into three-hour errors."""
+        if (
+            at is None
+            or self.last_at is None
+            or not 0 < at - self.last_at <= SAMPLE_SECONDS + SAMPLE_MAX_GAP_SECONDS
+        ):
+            self.chain = []
+        self.last_at = at
+        self.chain = [*self.chain, residual][-HORIZON_HOURS:]
+        if len(self.chain) == HORIZON_HOURS:
+            self.horizon_errors = [
+                *self.horizon_errors, round(abs(sum(self.chain)), 3)
+            ][-HORIZON_WINDOW:]
+
+    @property
+    def horizon_error(self) -> float | None:
+        """Mean error of a three-hour prediction (°C); None until known."""
+        if len(self.horizon_errors) < HORIZON_MIN:
+            return None
+        return round(sum(self.horizon_errors) / len(self.horizon_errors), 3)
 
     def parameters(self) -> tuple[float, float, float, float]:
         """Fitted (heat output, loss, solar gain, wind loss), within bounds."""
@@ -243,12 +281,12 @@ class RoomModel:
 
     @property
     def trusted(self) -> bool:
-        return (
-            self.ready
-            and self.samples >= TRUSTED_SAMPLES
-            and self.mean_error is not None
-            and self.mean_error <= TRUSTED_ERROR
-        )
+        if not self.ready or self.samples < TRUSTED_SAMPLES:
+            return False
+        horizon = self.horizon_error
+        if horizon is not None:
+            return horizon <= TRUSTED_HORIZON_ERROR
+        return self.mean_error is not None and self.mean_error <= TRUSTED_ERROR
 
     def view(
         self, outdoor: float, solar_kw: float = 0.0, wind: float = 0.0
@@ -267,6 +305,9 @@ class RoomModel:
             "idle_samples": self.idle_samples,
             "last_error": self.last_error,
             "mean_error": self.mean_error,
+            "chain": list(self.chain),
+            "last_at": self.last_at,
+            "horizon_errors": list(self.horizon_errors),
         }
 
     @classmethod
@@ -299,10 +340,24 @@ class RoomModel:
                             setattr(model, key, value)
         except (TypeError, ValueError):
             return cls()
-        for key in ("last_error", "mean_error"):
+        for key in ("last_error", "mean_error", "last_at"):
             value = data.get(key)
-            if isinstance(value, (int, float)) and math.isfinite(value):
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+            ):
                 setattr(model, key, float(value))
+        for key, limit in (("chain", HORIZON_HOURS), ("horizon_errors", HORIZON_WINDOW)):
+            values = data.get(key)
+            if isinstance(values, list):
+                setattr(model, key, [
+                    float(value)
+                    for value in values
+                    if isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(value)
+                ][-limit:])
         return model
 
 
@@ -507,7 +562,9 @@ def seed_room_model(
                 supply == SUPPLY_COLD,
                 supply == SUPPLY_WARM,
             )
-            if sample is not None and model.add(*sample, warm=collector.last_warm):
+            if sample is not None and model.add(
+                *sample, warm=collector.last_warm, at=at
+            ):
                 added += 1
         at += HISTORY_STEP_SECONDS
     return added
@@ -721,6 +778,8 @@ class CoolingCorrection:
 # Heat load check (0.14.0): below this share of today's radiator output the
 # room also stays warm with a lower flow temperature (e.g. a heat pump).
 LOW_FLOW_SHARE = 0.6
+# Colder than this is outside anything the model has seen.
+HOLDS_DOWN_TO_FLOOR = -30.0
 
 
 @dataclass(frozen=True)
