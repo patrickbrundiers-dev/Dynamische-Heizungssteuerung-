@@ -490,6 +490,28 @@
           "description": "The cold day to calculate for."
         }
       }
+    },
+    "export_learning": {
+      "name": "Back up learning",
+      "description": "Writes a backup of everything the rooms and the house learned to /config/dynamic_heating_backup (the last 8 are kept). Also runs every Sunday."
+    },
+    "restore_learning": {
+      "name": "Restore learning",
+      "description": "Restores the learned state from a backup and reloads the rooms. A room that was set up again is matched by its name.",
+      "fields": {
+        "file": {
+          "name": "File",
+          "description": "Backup name, e.g. lernstand-2026-11-01.json. Empty: the newest."
+        },
+        "entity_id": {
+          "name": "Room",
+          "description": "Any entity of the room. Empty: all rooms."
+        },
+        "include_house": {
+          "name": "Include house",
+          "description": "Also restore house values (boiler hours, levels). Default: only when all rooms are restored."
+        }
+      }
     }
   }
 }

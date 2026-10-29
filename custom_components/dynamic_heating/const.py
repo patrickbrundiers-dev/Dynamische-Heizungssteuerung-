@@ -749,3 +749,14 @@ LEVELS: Final = {
     "abend": ("Stufe Abend", 21.5),
     "nacht": ("Stufe Nacht", 18.0),
 }
+
+# Data quality (0.16.0): a source without a report for this long is stale.
+DATA_STALE_SECONDS: Final = 21600
+DATA_VALVE_STALE_SECONDS: Final = 43200
+
+# Backup of what was learned (0.16.0).
+SERVICE_EXPORT_LEARNING: Final = "export_learning"
+SERVICE_RESTORE_LEARNING: Final = "restore_learning"
+LEARNING_BACKUP_DIR: Final = "dynamic_heating_backup"
+LEARNING_BACKUP_KEEP: Final = 8
+LEARNING_BACKUP_VERSION: Final = 1

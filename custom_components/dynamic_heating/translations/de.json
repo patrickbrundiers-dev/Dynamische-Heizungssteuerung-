@@ -490,6 +490,28 @@
           "description": "Der kalte Tag, für den gerechnet wird."
         }
       }
+    },
+    "export_learning": {
+      "name": "Lernstand sichern",
+      "description": "Schreibt eine Sicherung von allem, was Räume und Haus gelernt haben, nach /config/dynamic_heating_backup (die letzten 8 bleiben). Läuft sonntags auch von selbst."
+    },
+    "restore_learning": {
+      "name": "Lernstand wiederherstellen",
+      "description": "Holt den Lernstand aus einer Sicherung zurück und lädt die Räume neu. Ein neu angelegter Raum wird über seinen Namen gefunden.",
+      "fields": {
+        "file": {
+          "name": "Datei",
+          "description": "Name der Sicherung, z. B. lernstand-2026-11-01.json. Leer: die neueste."
+        },
+        "entity_id": {
+          "name": "Raum",
+          "description": "Eine Entität des Raums. Leer: alle Räume."
+        },
+        "include_house": {
+          "name": "Haus mit",
+          "description": "Auch Haus-Werte (Heizzeiten der Therme, Stufen) zurückholen. Standard: nur wenn alle Räume zurückgeholt werden."
+        }
+      }
     }
   }
 }

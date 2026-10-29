@@ -1075,3 +1075,57 @@ def airing_advice(
         result["state"] = "useless"
         result["text"] = "Lüften bringt nichts – draußen ähnlich feucht"
     return result
+
+
+# --- Data quality -------------------------------------------------------------
+
+QUALITY_OK = "ok"
+QUALITY_STALE = "stale"
+QUALITY_MISSING = "missing"
+
+
+def source_quality(
+    available: bool, age_seconds: float | None, max_age_seconds: float | None
+) -> str:
+    """One source: ``ok``, ``stale`` (no report for too long) or ``missing``."""
+    if not available:
+        return QUALITY_MISSING
+    if (
+        max_age_seconds is not None
+        and age_seconds is not None
+        and age_seconds > max_age_seconds
+    ):
+        return QUALITY_STALE
+    return QUALITY_OK
+
+
+def data_quality(sources: list[tuple[str, str, float | None]]) -> dict:
+    """Sum up the sources (name, quality, age in seconds) of a room.
+
+    "Vollständig" when every source reports, "Teilweise" when some are
+    missing or stale, "Veraltet" when none can be used.
+    """
+    problems = []
+    for name, quality, age in sources:
+        if quality == QUALITY_MISSING:
+            problems.append(f"{name} fehlt")
+        elif quality == QUALITY_STALE:
+            hours = (age or 0) / 3600
+            problems.append(
+                f"{name} meldet seit {hours:.0f} h nichts"
+                if hours >= 1
+                else f"{name} meldet nichts"
+            )
+    if not sources:
+        state = None
+    elif not problems:
+        state = "Vollständig"
+    elif len(problems) == len(sources):
+        state = "Veraltet"
+    else:
+        state = "Teilweise"
+    return {
+        "state": state,
+        "problems": problems,
+        "sources": {name: quality for name, quality, _age in sources},
+    }
