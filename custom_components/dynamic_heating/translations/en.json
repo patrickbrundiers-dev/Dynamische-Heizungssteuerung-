@@ -254,7 +254,8 @@
           "frost_after_absence": "Frost protection after absence",
           "force_comfort_entities": "Force comfort with (optional)",
           "force_eco_entities": "Force eco with (optional)",
-          "follow_house_calendar": "Follow the house calendar"
+          "follow_house_calendar": "Follow the house calendar",
+          "occupancy_entity": "Motion sensor for comfort by use (optional)"
         },
         "data_description": {
           "person_entities": "Comfort is allowed when at least one selected person or device tracker is home. Device trackers with simple home/not_home states are usually most predictable.",
@@ -271,7 +272,8 @@
           "frost_after_absence": "After nobody has been home this long, drop to frost protection (without one, to the thermostat minimum). 0 turns it off.",
           "force_comfort_entities": "Switches, sensors or timers, e.g. input_boolean.party. While one is on or active the room heats to comfort. A number at the end of the name (\"Party 23\") is used as the temperature. An open window wins.",
           "force_eco_entities": "While one of these is on the room stays at eco. Forced comfort wins.",
-          "follow_house_calendar": "While a house calendar event runs, the room uses the schedule it names, or heats to comfort if the event asks for it."
+          "follow_house_calendar": "While a house calendar event runs, the room uses the schedule it names, or heats to comfort if the event asks for it.",
+          "occupancy_entity": "For rooms like the bathroom: if it reports motion after a comfort block ends, comfort is kept until there was no motion for 10 minutes (at most 1 hour). Without motion in the first 30 minutes of a comfort block, the room is reduced like an empty room until the first motion. Short motion pulses are enough."
         }
       },
       "geofencing": {

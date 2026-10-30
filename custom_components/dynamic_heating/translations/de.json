@@ -254,7 +254,8 @@
           "frost_after_absence": "Frostschutz nach Abwesenheit",
           "force_comfort_entities": "Komfort erzwingen mit (optional)",
           "force_eco_entities": "Eco erzwingen mit (optional)",
-          "follow_house_calendar": "Haus-Kalender folgen"
+          "follow_house_calendar": "Haus-Kalender folgen",
+          "occupancy_entity": "Bewegungsmelder für Komfort nach Nutzung (optional)"
         },
         "data_description": {
           "person_entities": "Komfortbetrieb ist erlaubt, wenn mindestens eine ausgewählte Person oder ein Geräte-Tracker zu Hause ist. Geräte-Tracker mit einfachem home/not_home-Status sind meist am zuverlässigsten.",
@@ -271,7 +272,8 @@
           "frost_after_absence": "Ist so lange niemand zuhause, wird auf Frostschutz abgesenkt (ohne Frostschutztemperatur auf das Minimum des Thermostats). 0 schaltet es ab.",
           "force_comfort_entities": "Schalter, Sensoren oder Timer, z. B. input_boolean.party. Solange einer an bzw. aktiv ist, heizt der Raum auf Komfort. Endet der Name auf eine Zahl („Party 23“), gilt diese Temperatur. Ein offenes Fenster hat Vorrang.",
           "force_eco_entities": "Solange eine dieser Entitäten an ist, bleibt der Raum auf Eco. Komfort erzwingen hat Vorrang.",
-          "follow_house_calendar": "Läuft ein Termin im Haus-Kalender, nutzt der Raum den Zeitplan, den der Termin nennt, bzw. heizt auf Komfort, wenn der Termin das verlangt."
+          "follow_house_calendar": "Läuft ein Termin im Haus-Kalender, nutzt der Raum den Zeitplan, den der Termin nennt, bzw. heizt auf Komfort, wenn der Termin das verlangt.",
+          "occupancy_entity": "Für Räume wie das Bad: Meldet er nach dem Ende eines Komfortblocks noch Bewegung, bleibt es warm, bis 10 Minuten lang keine Bewegung mehr kam (höchstens 1 Stunde). Kommt in den ersten 30 Minuten eines Komfortblocks keine Bewegung, wird bis zur ersten Bewegung abgesenkt wie bei leerem Raum. Kurze Bewegungsimpulse genügen."
         }
       },
       "geofencing": {

@@ -404,6 +404,9 @@ HOMECOMING_MAX_DAYS = 42
 # At least this many returns within this of their median make a habit.
 HOMECOMING_MIN = 3
 HOMECOMING_SPREAD_MINUTES = 45
+# Until a weekday has its own habit, workdays and weekend days are learned
+# together: per weekday alone it takes weeks.
+HOMECOMING_GROUPS = ((0, 1, 2, 3, 4), (5, 6))
 
 
 @dataclass(slots=True)
@@ -442,16 +445,32 @@ class Homecoming:
         self.arrivals[at.weekday()] = sorted(items)[-HOMECOMING_KEEP:]
 
     def usual(self, weekday: int, today: date | None = None) -> int | None:
-        """Usual minute of the day of coming home, None without a habit."""
+        """Usual minute of the day of coming home, None without a habit.
+
+        The weekday's own returns decide once they make a habit; before
+        that, those of all workdays (or both weekend days) together.
+        """
         today = today or date.today()
+        own = self._habit(self._minutes((weekday,), today))
+        if own is not None:
+            return own
+        group = next(group for group in HOMECOMING_GROUPS if weekday in group)
+        return self._habit(self._minutes(group, today))
+
+    def _minutes(self, weekdays: tuple[int, ...], today: date) -> list[int]:
         minutes = []
-        for day, minute in self.arrivals.get(weekday, []):
-            try:
-                age = (today - date.fromisoformat(day)).days
-            except ValueError:
-                continue
-            if 0 <= age <= HOMECOMING_MAX_DAYS:
-                minutes.append(minute)
+        for weekday in weekdays:
+            for day, minute in self.arrivals.get(weekday, []):
+                try:
+                    age = (today - date.fromisoformat(day)).days
+                except ValueError:
+                    continue
+                if 0 <= age <= HOMECOMING_MAX_DAYS:
+                    minutes.append(minute)
+        return minutes
+
+    @staticmethod
+    def _habit(minutes: list[int]) -> int | None:
         if len(minutes) < HOMECOMING_MIN:
             return None
         minutes.sort()

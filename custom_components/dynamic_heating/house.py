@@ -179,11 +179,17 @@ class HouseManager:
         if rooms:
             text = (
                 f"Bei {number(outdoor)} °C braucht das Haus etwa {number(total)} kW: "
-                + ", ".join(f"{item['room']} {number(item['load_kw'])} kW" for item in rooms)
+                + ", ".join(
+                    f"{item['room']} {number(item['load_kw'])} kW"
+                    + ("" if item["trusted"] else " (noch ungenau)")
+                    for item in rooms
+                )
                 + "."
             )
-            short = [item for item in rooms if item["share_percent"] > 100]
-            tight = [item for item in rooms if 60 < item["share_percent"] <= 100]
+            # Only rooms whose model has proven itself get a verdict.
+            judged = [item for item in rooms if item["trusted"]]
+            short = [item for item in judged if item["share_percent"] > 100]
+            tight = [item for item in judged if 60 < item["share_percent"] <= 100]
             if short:
                 text += " Zu schwach: " + ", ".join(
                     f"{item['room']} (hält {number(item['comfort_temperature'])} °C "
@@ -194,8 +200,13 @@ class HouseManager:
                 text += " Mit niedrigerer Vorlauftemperatur knapp: " + ", ".join(
                     item["room"] for item in tight
                 ) + "."
-            if not short and not tight:
-                text += " Alle Heizkörper reichen auch mit niedrigerer Vorlauftemperatur."
+            if judged and not short and not tight:
+                text += (
+                    " Alle Heizkörper reichen auch mit niedrigerer Vorlauftemperatur."
+                    if len(judged) == len(rooms)
+                    else " Wo das Raummodell schon sicher ist, reichen die Heizkörper "
+                    "auch mit niedrigerer Vorlauftemperatur."
+                )
         else:
             text = "Noch kein Raum hat genug gelernt, um die Heizlast zu schätzen."
         return {
