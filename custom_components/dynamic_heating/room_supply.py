@@ -103,7 +103,7 @@ class SupplyMixin:
         result["room_response"] = response
         supply = combined_supply(room_supply(states), response)
         asking = response != IDLE or any(
-            tracker.heating_since is not None
+            tracker.asking
             for entity_id, tracker in self._radiators.items()
             if entity_id in sensors
         )

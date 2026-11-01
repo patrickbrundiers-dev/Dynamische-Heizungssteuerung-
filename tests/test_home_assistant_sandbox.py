@@ -1665,9 +1665,17 @@ async def test_valve_maintenance_opens_closes_and_resumes(
             force_update=True,
             timestamp=at.timestamp(),
         )
-        with patch(
-            "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
-            return_value=at,
+        # Local time too: code reading the local hour must not see the
+        # real night while the simulated clock says 11:00.
+        with (
+            patch(
+                "custom_components.dynamic_heating.coordinator.dt_util.utcnow",
+                return_value=at,
+            ),
+            patch(
+                "custom_components.dynamic_heating.coordinator.dt_util.now",
+                return_value=dt_util.as_local(at),
+            ),
         ):
             await coordinator.async_refresh()
 
@@ -1677,6 +1685,12 @@ async def test_valve_maintenance_opens_closes_and_resumes(
         assert coordinator.data["valve_maintenance"] == "open"
         await refresh_at(320)
         assert coordinator.data["valve_maintenance"] == "close"
+        # The valve reports the 7 °C it was sent, like a real one; otherwise
+        # a target equal to its old setpoint (eco at night) needs no write.
+        valve = hass.states.get("climate.living_room")
+        hass.states.async_set(
+            valve.entity_id, valve.state, {**valve.attributes, "temperature": 7.0}
+        )
         await refresh_at(620)
         assert coordinator.data["valve_maintenance"] is None
         # It does not start again in the same week.
