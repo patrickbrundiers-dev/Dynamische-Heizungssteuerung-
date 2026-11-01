@@ -46,6 +46,10 @@ SENTENCES: dict[str, list[str]] = {
         "wie viel (wärme|energie) hat die heizung [heute] verbraucht",
         "wie viel hat die heizung [heute] verbraucht",
     ],
+    "week_ahead": [
+        "wie viel (heizen|heizt) (wir|die heizung) [in] (dieser|der nächsten|nächste) woche",
+        "wie viel (wärme|energie|gas) (brauchen wir|braucht die heizung) (diese|nächste) woche",
+    ],
     "overview": [
         "wie läuft die heizung",
         "was macht die heizung [gerade]",
@@ -308,6 +312,14 @@ def answer_overview(hass: HomeAssistant, rooms: list[DynamicHeatingCoordinator])
     return ". ".join(parts) + "."
 
 
+def answer_week_ahead(hass: HomeAssistant) -> str:
+    house = hass.data.get(DOMAIN, {}).get(HOUSE_DATA_KEY)
+    week = None if house is None else house.week
+    if not week:
+        return "Für die nächsten Tage habe ich noch keine Vorhersage."
+    return f"{week['text']} Das ist geschätzt."
+
+
 def _rooms(hass: HomeAssistant) -> list[DynamicHeatingCoordinator]:
     from .coordinator import DynamicHeatingCoordinator
 
@@ -357,6 +369,8 @@ def async_setup_assist(hass: HomeAssistant) -> CALLBACK_TYPE | None:
                     return _room_answer(hass, spoken, answer_room_energy)
                 if kind == "house_energy":
                     return answer_house_energy(_rooms(hass))
+                if kind == "week_ahead":
+                    return answer_week_ahead(hass)
                 return answer_overview(hass, _rooms(hass))
             except Exception:  # noqa: BLE001 - always answer something
                 _LOGGER.exception("Assist question %s failed", kind)

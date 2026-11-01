@@ -523,7 +523,7 @@ class PresenceMixin:
             home = any(state.state == "home" for state in states)
             learned = self.homecoming.observe(dt_util.now(), home)
             if learned:
-                self._log("Heimkehr gelernt")
+                self._log("Heimkehr oder Weggehen gelernt")
         today = dt_util.now()
         minute = self.homecoming.usual(today.weekday(), today.date())
         result["homecoming_today"] = (
@@ -531,13 +531,19 @@ class PresenceMixin:
         )
         result["homecoming_week"] = self.homecoming.week(today.date())
         result["homecoming_count"] = self.homecoming.count()
+        leave = self.homecoming.usual_departure(today.weekday(), today.date())
+        result["departure_today"] = (
+            None if leave is None else f"{leave // 60:02d}:{leave % 60:02d}"
+        )
+        result["departure_week"] = self.homecoming.week(today.date(), departures=True)
+        result["departure_count"] = self.homecoming.departure_count()
         return learned
 
     async def async_seed_homecoming(self) -> None:
         """Homecomings of the last weeks from the people's history, once."""
         people = self._people()
         if (
-            self._homecoming_seeded
+            (self._homecoming_seeded and self._departures_seeded)
             or not people
             or "recorder" not in self.hass.config.components
         ):
@@ -571,17 +577,32 @@ class PresenceMixin:
                     (dt_util.as_local(state.last_changed), entity_id, state.state == "home")
                 )
         seeded = homecomings_from_history(changes, len(people))
-        for items in seeded.arrivals.values():
-            for day, minute in items:
-                moment = datetime.combine(
+
+        def moments(source: dict[int, list[tuple[str, int]]]) -> list[datetime]:
+            return [
+                datetime.combine(
                     date.fromisoformat(day),
                     datetime.min.time(),
                     dt_util.get_default_time_zone(),
                 ) + timedelta(minutes=minute)
+                for items in source.values()
+                for day, minute in items
+            ]
+
+        if not self._homecoming_seeded:
+            for moment in moments(seeded.arrivals):
                 self.homecoming.record(moment)
+            if seeded.count():
+                self._log(f"{seeded.count()}× Heimkehr aus dem Verlauf gelernt")
+        if not self._departures_seeded:
+            for moment in moments(seeded.departures):
+                self.homecoming.record_departure(moment)
+            if seeded.departure_count():
+                self._log(
+                    f"{seeded.departure_count()}× Weggehen aus dem Verlauf gelernt"
+                )
         self._homecoming_seeded = True
-        if seeded.count():
-            self._log(f"{seeded.count()}× Heimkehr aus dem Verlauf gelernt")
+        self._departures_seeded = True
         await self._save_learning()
 
     def _homecoming_preheat(

@@ -322,7 +322,7 @@ NOTIFY_FROST_FALLBACK_TEMPERATURE: Final = 10.0
 CONF_ENTRY_TYPE: Final = "entry_type"
 ENTRY_TYPE_HOUSE: Final = "house"
 HOUSE_DATA_KEY: Final = "house"
-HOUSE_PLATFORMS: Final = ["button", "datetime", "number", "select", "sensor"]
+HOUSE_PLATFORMS: Final = ["button", "datetime", "number", "select", "sensor", "switch"]
 HOUSE_HOME: Final = "home"
 HOUSE_AWAY: Final = "away"
 HOUSE_VACATION: Final = "vacation"
@@ -770,3 +770,40 @@ LEARNING_BACKUP_VERSION: Final = 1
 OCCUPANCY_HOLD_SECONDS: Final = 600
 OCCUPANCY_EXTEND_MAX_SECONDS: Final = 3600
 OCCUPANCY_UNUSED_SECONDS: Final = 1800
+
+# Runde 16 (0.18.0): ideas from other integrations and studies.
+# 1. Stop reheating before the usual departure (EarlyOff), off by default:
+# from this long before leaving, if the room loses at most the drop by then.
+CONF_DEPARTURE_STOP: Final = "departure_stop"
+DEFAULT_DEPARTURE_STOP: Final = False
+DEPARTURE_STOP_MINUTES: Final = 60
+DEPARTURE_STOP_DROP: Final = 0.5
+# 3. Unusual heat loss: judged over a stretch of this length; one push per
+# room and kind a day, never at night.
+UNUSUAL_STRETCH_SECONDS: Final = 7200
+UNUSUAL_MIN_DROP: Final = 0.8
+UNUSUAL_LOSS_FACTOR: Final = 2.5
+UNUSUAL_LOSS_MARGIN: Final = 0.6
+UNUSUAL_MIN_RISE: Final = 0.8
+UNUSUAL_HEAT_SHARE: Final = 0.3
+UNUSUAL_QUIET_FROM: Final = 22
+UNUSUAL_QUIET_UNTIL: Final = 7
+CONF_UNUSUAL_NOTIFY: Final = "unusual_notify"
+DEFAULT_UNUSUAL_NOTIFY: Final = True
+# 5. Price of a kWh of heat for the week ahead (ct/kWh, house number).
+HEAT_PRICE_DEFAULT: Final = 12.0
+WEEK_AHEAD_DAYS: Final = 7
+# 6. Learning pause: "Heute nicht lernen" (button) and while guests are here.
+# 7. Sun expected: before the sun comes, heat only to this much below the
+# target when the forecast sun alone brings the room there.
+CONF_SOLAR_FORECAST: Final = "solar_forecast"
+DEFAULT_SOLAR_FORECAST: Final = True
+SOLAR_AHEAD_HOURS: Final = 2
+SOLAR_AHEAD_DROP: Final = 0.5
+# 8. Bundle holding: rooms holding their temperature heat together (house
+# switch, off by default).
+BUNDLE_JOIN_ABOVE: Final = 0.3
+BUNDLE_JOIN_UNTIL: Final = 0.2
+BUNDLE_WAIT_BELOW: Final = 0.3
+BUNDLE_WAIT_UNTIL: Final = 0.4
+BUNDLE_HEATING_DEMAND: Final = 50

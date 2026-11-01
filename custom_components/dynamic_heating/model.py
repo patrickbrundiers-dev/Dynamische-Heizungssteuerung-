@@ -56,6 +56,11 @@ TRUSTED_HORIZON_ERROR = 0.5
 REACH_HOURS = 6.0
 # A room changing faster than this within an hour is not normal operation.
 MAX_SAMPLE_RATE = 4.0
+# Robust learning (0.18.0): once the model is trusted, an hour missing the
+# prediction by more than this (°C/h: a party, the oven, many guests) counts
+# only in proportion, like a Huber fit, so one such evening no longer bends
+# the room for days.
+ROBUST_LIMIT = 0.6
 
 
 def _features(
@@ -190,6 +195,8 @@ class RoomModel:
     last_at: float | None = None
     # |sum| of the errors of three back-to-back hours, newest last.
     horizon_errors: list[float] = field(default_factory=list)
+    # Weight the latest hour got (1 = normal, less for an outlier; runtime).
+    last_weight: float | None = None
 
     def add(
         self,
@@ -216,6 +223,10 @@ class RoomModel:
         features = _features(demand, room, outdoor, max(0.0, solar_kw), max(0.0, wind))
         predicted = sum(p * x for p, x in zip(parameters, features, strict=True))
         error = abs(predicted - rate)
+        weight = 1.0
+        if self.trusted and error > ROBUST_LIMIT:
+            weight = ROBUST_LIMIT / error
+        self.last_weight = round(weight, 3)
         self._chain(rate - predicted, at)
         self.last_error = round(error, 3)
         self.mean_error = round(
@@ -223,10 +234,11 @@ class RoomModel:
             3,
         )
         for row in range(4):
-            self.vector[row] = DECAY * self.vector[row] + features[row] * rate
+            self.vector[row] = DECAY * self.vector[row] + weight * features[row] * rate
             for column in range(4):
                 self.matrix[row][column] = (
-                    DECAY * self.matrix[row][column] + features[row] * features[column]
+                    DECAY * self.matrix[row][column]
+                    + weight * features[row] * features[column]
                 )
         self.samples += 1
         if demand >= HEATING_SAMPLE_DEMAND or (warm and demand >= WARM_SAMPLE_DEMAND):
@@ -816,3 +828,42 @@ def heat_load(view: ModelView, comfort: float, outdoor: float) -> HeatLoad | Non
         comfort=comfort,
         outdoor=outdoor,
     )
+
+
+# --- Sun forecast (0.18.0) ----------------------------------------------------
+
+
+def sun_elevation(at_utc_timestamp: float, latitude: float, longitude: float) -> float:
+    """Elevation of the sun in degrees (NOAA approximation, ±0.5°)."""
+    days = at_utc_timestamp / 86400.0 + 2440587.5 - 2451545.0
+    mean_longitude = math.radians((280.460 + 0.9856474 * days) % 360)
+    anomaly = math.radians((357.528 + 0.9856003 * days) % 360)
+    ecliptic = mean_longitude + math.radians(
+        1.915 * math.sin(anomaly) + 0.020 * math.sin(2 * anomaly)
+    )
+    obliquity = math.radians(23.439 - 0.0000004 * days)
+    declination = math.asin(math.sin(obliquity) * math.sin(ecliptic))
+    right_ascension = math.atan2(
+        math.cos(obliquity) * math.sin(ecliptic), math.cos(ecliptic)
+    )
+    sidereal = math.radians((280.46061837 + 360.98564736629 * days) % 360)
+    hour_angle = sidereal + math.radians(longitude) - right_ascension
+    lat = math.radians(latitude)
+    sine = math.sin(lat) * math.sin(declination) + math.cos(lat) * math.cos(
+        declination
+    ) * math.cos(hour_angle)
+    return math.degrees(math.asin(max(-1.0, min(1.0, sine))))
+
+
+def expected_solar_kw(elevation: float, cloud_percent: float | None) -> float:
+    """Global radiation in kW/m² for a sun elevation and cloud cover.
+
+    Clear sky after Haurwitz, clouds after Kasten and Czeplak. Without a
+    cloud cover the sky counts as half covered.
+    """
+    if elevation <= 0:
+        return 0.0
+    sine = math.sin(math.radians(elevation))
+    clear = 1.098 * sine * math.exp(-0.057 / sine)
+    cover = 0.5 if cloud_percent is None else max(0.0, min(1.0, cloud_percent / 100))
+    return max(0.0, clear * (1 - 0.75 * cover**3.4))

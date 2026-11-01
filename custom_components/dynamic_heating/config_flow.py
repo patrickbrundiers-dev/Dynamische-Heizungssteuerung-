@@ -20,6 +20,12 @@ from .const import (
     CONF_PREHEAT_WHEN_HOME,
     CONF_HOMECOMING_PREHEAT,
     DEFAULT_HOMECOMING_PREHEAT,
+    CONF_DEPARTURE_STOP,
+    DEFAULT_DEPARTURE_STOP,
+    CONF_SOLAR_FORECAST,
+    DEFAULT_SOLAR_FORECAST,
+    CONF_UNUSUAL_NOTIFY,
+    DEFAULT_UNUSUAL_NOTIFY,
     CONF_COLD_COMFORT_BOOST,
     DEFAULT_COLD_COMFORT_BOOST,
     COLD_COMFORT_MAX,
@@ -1018,6 +1024,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
         for key, default in (
             (CONF_PREHEAT_WHEN_HOME, DEFAULT_PREHEAT_WHEN_HOME),
             (CONF_HOMECOMING_PREHEAT, DEFAULT_HOMECOMING_PREHEAT),
+            (CONF_DEPARTURE_STOP, DEFAULT_DEPARTURE_STOP),
             (CONF_LEARN_USAGE, DEFAULT_LEARN_USAGE),
         ):
             schema[vol.Optional(key, default=bool(current.get(key, default)))] = (
@@ -1035,6 +1042,8 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             (CONF_MORNING_REPORT, DEFAULT_MORNING_REPORT),
             (CONF_HOLD_BEFORE_PAUSE, DEFAULT_HOLD_BEFORE_PAUSE),
             (CONF_SHOWER_LEARNING, DEFAULT_SHOWER_LEARNING),
+            (CONF_SOLAR_FORECAST, DEFAULT_SOLAR_FORECAST),
+            (CONF_UNUSUAL_NOTIFY, DEFAULT_UNUSUAL_NOTIFY),
         ):
             schema[vol.Optional(key, default=bool(current.get(key, default)))] = (
                 selector.BooleanSelector()
@@ -1336,11 +1345,14 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 (CONF_RECOVERY_LIMIT, DEFAULT_RECOVERY_LIMIT),
                 (CONF_PREHEAT_WHEN_HOME, DEFAULT_PREHEAT_WHEN_HOME),
                 (CONF_HOMECOMING_PREHEAT, DEFAULT_HOMECOMING_PREHEAT),
+                (CONF_DEPARTURE_STOP, DEFAULT_DEPARTURE_STOP),
                 (CONF_LEARN_USAGE, DEFAULT_LEARN_USAGE),
                 (CONF_PUNCTUALITY, DEFAULT_PUNCTUALITY),
                 (CONF_MORNING_REPORT, DEFAULT_MORNING_REPORT),
                 (CONF_HOLD_BEFORE_PAUSE, DEFAULT_HOLD_BEFORE_PAUSE),
                 (CONF_SHOWER_LEARNING, DEFAULT_SHOWER_LEARNING),
+                (CONF_SOLAR_FORECAST, DEFAULT_SOLAR_FORECAST),
+                (CONF_UNUSUAL_NOTIFY, DEFAULT_UNUSUAL_NOTIFY),
             ):
                 current[key] = bool(user_input.get(key, default))
             for key in (CONF_ROOM_EMPTY_RECOVERY, CONF_ROOM_EMPTY_GRACE, CONF_EARLY_STOP,

@@ -397,7 +397,10 @@
           "hold_before_supply_pause": "Keep comfort in the evening until the central heating pauses",
           "shower_learning": "Learn shower times (bathroom)",
           "homecoming_preheat": "Preheat for the usual homecoming while nobody is home",
-          "cold_comfort_boost": "Raise comfort in frost by up to (0 = off)"
+          "cold_comfort_boost": "Raise comfort in frost by up to (0 = off)",
+          "departure_stop": "Stop heating before the usual departure",
+          "solar_forecast": "Plan for sunny hours (weather forecast)",
+          "unusual_notify": "Report unusual heat loss"
         },
         "data_description": {
           "recovery_limit": "Outside comfort time the room must get warm again within the maximum preheat time.",
@@ -409,7 +412,10 @@
           "hold_before_supply_pause": "When comfort ends shortly before the central heating's usual night pause, the room keeps comfort until the pause starts. It starts warmer in the morning but uses some more heat.",
           "shower_learning": "Detects showers from a fast humidity rise, suggests comfort times and keeps the room model from learning the hour after.",
           "homecoming_preheat": "Learns from the people when somebody usually comes home on each weekday (house sensor \"Übliche Heimkehr\"). While nobody is home and the schedule has comfort then, the room is warm by that time. Coming home earlier is handled by presence as before.",
-          "cold_comfort_boost": "In frost the walls are colder and the room feels cooler. From +5 °C outdoors the comfort temperature rises evenly up to this value at −10 °C. Eco stays the same."
+          "cold_comfort_boost": "In frost the walls are colder and the room feels cooler. From +5 °C outdoors the comfort temperature rises evenly up to this value at −10 °C. Eco stays the same.",
+          "departure_stop": "Learns when the house usually becomes empty on each weekday (house sensor \"Übliches Weggehen\"). Up to 60 minutes before, the room is not reheated if the room model says it loses at most 0.5 °C until then. If somebody stays longer, heating resumes.",
+          "solar_forecast": "Only with a solar radiation sensor and a trusted room model that reacts to the sun. When the forecast sun of the next two hours alone brings the room to its target, it is heated only to 0.5 °C below before.",
+          "unusual_notify": "When the room loses far more heat over two hours than the room model expects (tilted window, open door) or barely warms with the valves open (cold radiator), a push is sent at most once a day, never between 22:00 and 7:00."
         }
       }
     },

@@ -397,7 +397,10 @@
           "hold_before_supply_pause": "Abends bis zur Pause der Zentralheizung warm halten",
           "shower_learning": "Duschzeiten lernen (Bad)",
           "homecoming_preheat": "Zur üblichen Heimkehr vorheizen, wenn niemand zuhause ist",
-          "cold_comfort_boost": "Komfort bei Frost anheben um bis zu (0 = aus)"
+          "cold_comfort_boost": "Komfort bei Frost anheben um bis zu (0 = aus)",
+          "departure_stop": "Vor dem üblichen Weggehen früher abschalten",
+          "solar_forecast": "Sonnige Stunden einplanen (Wettervorhersage)",
+          "unusual_notify": "Ungewöhnlichen Wärmeverlust melden"
         },
         "data_description": {
           "recovery_limit": "Außerhalb der Komfortzeit muss der Raum innerhalb der maximalen Vorheizzeit wieder warm werden.",
@@ -409,7 +412,10 @@
           "hold_before_supply_pause": "Endet der Komfort kurz vor der üblichen Nachtpause der Zentralheizung, bleibt der Raum bis zum Beginn der Pause auf Komfort. Er startet dann morgens wärmer, kostet aber etwas Wärme.",
           "shower_learning": "Erkennt Duschen am schnellen Anstieg der Luftfeuchte, schlägt passende Komfortzeiten vor und lernt das Raummodell nicht aus der Stunde danach.",
           "homecoming_preheat": "Die Integration lernt aus den Personen, wann an welchem Wochentag jemand nach Hause kommt (Sensor „Übliche Heimkehr“ am Haus). Ist niemand zuhause und hat der Zeitplan dann Komfortzeit, ist der Raum zu dieser Zeit warm. Kommt ihr früher, greift die Anwesenheit wie bisher.",
-          "cold_comfort_boost": "Bei Frost sind die Wände kälter und es fühlt sich kühler an. Ab +5 °C außen steigt die Komforttemperatur gleichmäßig bis zu diesem Wert bei −10 °C. Eco bleibt gleich."
+          "cold_comfort_boost": "Bei Frost sind die Wände kälter und es fühlt sich kühler an. Ab +5 °C außen steigt die Komforttemperatur gleichmäßig bis zu diesem Wert bei −10 °C. Eco bleibt gleich.",
+          "departure_stop": "Die Integration lernt, wann das Haus an welchem Wochentag meist leer wird (Sensor „Übliches Weggehen“ am Haus). Bis zu 60 Minuten vorher heizt sie nicht mehr nach, wenn der Raum laut Raummodell bis dahin höchstens 0,5 °C verliert. Bleibt jemand länger, wird wieder geheizt.",
+          "solar_forecast": "Nur mit Sonneneinstrahlungs-Sensor und einem sicheren Raummodell, das auf Sonne reagiert. Bringt die vorhergesagte Sonne der nächsten zwei Stunden den Raum allein ans Ziel, wird vorher nur bis 0,5 °C darunter geheizt.",
+          "unusual_notify": "Verliert der Raum über zwei Stunden viel mehr Wärme als das Raummodell erwartet (gekipptes Fenster, offene Tür) oder wird er mit offenem Ventil kaum warm (kalter Heizkörper), kommt höchstens einmal am Tag eine Meldung, nicht zwischen 22 und 7 Uhr."
         }
       }
     },

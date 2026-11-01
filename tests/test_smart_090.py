@@ -218,7 +218,13 @@ def _comfort_until(hass, minutes: int) -> None:
     hass.states.async_set(
         "schedule.living_room_comfort",
         "on",
-        {"next_event": (dt_util.now() + timedelta(minutes=minutes)).isoformat()},
+        # From UTC: local wall-clock arithmetic is an hour off in the hour
+        # repeated when daylight saving time ends.
+        {
+            "next_event": dt_util.as_local(
+                dt_util.utcnow() + timedelta(minutes=minutes)
+            ).isoformat()
+        },
     )
 
 

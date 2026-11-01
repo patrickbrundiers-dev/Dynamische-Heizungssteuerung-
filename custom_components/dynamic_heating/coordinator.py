@@ -209,6 +209,7 @@ from .radiator import (
     RoomResponse,
     SupplyProfile,
 )
+from .anomaly import HeatLossWatch
 from .battery import BatteryWatch
 from .routine import (
     Habits,
@@ -504,6 +505,14 @@ class DynamicHeatingCoordinator(
         # Comfort block that already ended heating early, and the sun pause.
         self._early_stop_event: datetime | None = None
         self._solar_pause = False
+        # 0.18.0: local day heating already stopped before the usual
+        # departure, sun expected, bundled holding ("join"/"wait"), learning
+        # pause ("Heute nicht lernen") and the unusual heat loss watch.
+        self._departure_day: date | None = None
+        self._solar_ahead_active = False
+        self._bundle: str | None = None
+        self.learning_paused_until: datetime | None = None
+        self.unusual = HeatLossWatch()
         # Calibration run of the room model: planned start and running end.
         self.learn_run_at: datetime | None = None
         self.learn_run_until: datetime | None = None
@@ -524,6 +533,7 @@ class DynamicHeatingCoordinator(
         self.homecoming = Homecoming()
         self._airing_state: str | None = None
         self._homecoming_seeded = False
+        self._departures_seeded = False
         self._homecoming_day: date | None = None
         self._shower_watch = ShowerWatch(
             SHOWER_RISE_PERCENT, SHOWER_RISE_WINDOW_SECONDS, SHOWER_COOLDOWN_SECONDS
@@ -864,6 +874,7 @@ class DynamicHeatingCoordinator(
         self._showers_seeded = bool(stored.get("showers_seeded"))
         self.homecoming = Homecoming.from_dict(stored.get("homecoming"))
         self._homecoming_seeded = bool(stored.get("homecoming_seeded"))
+        self._departures_seeded = bool(stored.get("departures_seeded"))
         raw_maintenance = self._stored_string(stored.get("valve_maintenance_last"))
         parsed_maintenance = (
             dt_util.parse_datetime(raw_maintenance) if raw_maintenance else None
@@ -2116,6 +2127,9 @@ class DynamicHeatingCoordinator(
         shower_seen = self._observe_shower(result)
         self._update_airing(result)
         self._update_data_quality(result)
+        self.learning_paused(result)
+        await self._observe_unusual(result)
+        result["bundle"] = self._bundle
         batteries_changed = self._observe_batteries(result)
         habit = self._update_habits(result)
         await self._maybe_selftest(result)
@@ -2745,7 +2759,17 @@ class DynamicHeatingCoordinator(
             schedule_active=schedule_active,
             view=trusted,
         )
+        decision = self._departure_stop(
+            decision,
+            room_temperature=room_temperature,
+            comfort_temperature=comfort_temperature,
+            eco_temperature=eco_temperature,
+            view=trusted,
+        )
         decision = self._sun_pause(
+            decision, room_temperature, eco_temperature, trusted
+        )
+        decision = self._solar_ahead(
             decision, room_temperature, eco_temperature, trusted
         )
         reachable = (
@@ -2779,6 +2803,7 @@ class DynamicHeatingCoordinator(
             eco_temperature=eco_temperature,
             schedule_active=schedule_active,
         )
+        decision = self._bundle_holding(decision, room_temperature)
         decision = self._homecoming_preheat(
             decision,
             room_temperature=room_temperature,
