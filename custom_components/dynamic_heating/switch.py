@@ -9,8 +9,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .const import CONF_ENTRY_TYPE, ENTRY_TYPE_HOUSE
 from .select import device_info
 from .coordinator import DynamicHeatingCoordinator
+from .house_entities import HouseEntity
 
 
 async def async_setup_entry(
@@ -18,7 +20,10 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the opt-in control switch."""
+    """Set up the opt-in control switch, or the house's bundling switch."""
+    if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HOUSE:
+        async_add_entities([BundleHoldingSwitch(entry.runtime_data, entry, "bundle_holding")])
+        return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
     entities = [DynamicHeatingSwitch(coordinator, entry), BoostSwitch(coordinator, entry)]
     if coordinator.child_lock_switches():
@@ -187,3 +192,20 @@ class SkipValveSwitch(CoordinatorEntity[DynamicHeatingCoordinator], SwitchEntity
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_valve_skipped(self._thermostat_id, False)
         self.async_write_ha_state()
+
+
+class BundleHoldingSwitch(HouseEntity, SwitchEntity):
+    """Heizen bündeln: rooms holding their temperature heat together (0.18.0)."""
+
+    _attr_name = "Heizen bündeln"
+    _attr_icon = "mdi:radiator-disabled"
+
+    @property
+    def is_on(self) -> bool:
+        return self.house.bundle_holding
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.house.async_set_bundle_holding(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.house.async_set_bundle_holding(False)

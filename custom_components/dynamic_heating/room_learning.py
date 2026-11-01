@@ -16,6 +16,11 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_GUEST_ENTITY,
+    CONF_UNUSUAL_NOTIFY,
+    DEFAULT_UNUSUAL_NOTIFY,
+    UNUSUAL_QUIET_FROM,
+    UNUSUAL_QUIET_UNTIL,
     CONF_ROOM_MODEL,
     CONF_SOLAR_RADIATION_ENTITY,
     CONF_WIND_SPEED_ENTITY,
@@ -45,6 +50,7 @@ from .const import (
     MIN_LEARNED_HEATING_RATE,
     MIN_SAMPLE_SECONDS,
 )
+from .anomaly import LOSS
 from .model import (
     HORIZON_MIN,
     TRUSTED_HORIZON_ERROR,
@@ -192,6 +198,7 @@ class LearningMixin:
                 "showers_seeded": self._showers_seeded,
                 "homecoming": self.homecoming.as_dict(),
                 "homecoming_seeded": self._homecoming_seeded,
+                "departures_seeded": self._departures_seeded,
                 "batteries": self.batteries.as_dict(),
             }
         )
@@ -496,6 +503,7 @@ class LearningMixin:
         )
         idle = (
             self.enabled
+            and not self.learning_paused()
             and not self._room_fallback
             and room is not None
             and outdoor is not None
@@ -527,6 +535,7 @@ class LearningMixin:
             self._shower_until = None
         if (
             not self.enabled
+            or self.learning_paused()
             or self._room_fallback
             or self._shower_until is not None
             or room is None
@@ -851,3 +860,109 @@ class LearningMixin:
             unit = str(wind_state.attributes.get("unit_of_measurement") or "")
             wind = wind_to_ms(value, unit.lower())
         return min(solar, 1.5), min(wind, 40.0)
+
+    # --- 0.18.0: learning pause and unusual heat loss -------------------------
+
+    def learning_paused(self, result: dict[str, Any] | None = None) -> bool:
+        """No learning today (button) or while guests are here."""
+        paused_until = self.learning_paused_until
+        if paused_until is not None and dt_util.utcnow() >= paused_until:
+            self.learning_paused_until = paused_until = None
+        reason = None
+        if paused_until is not None:
+            reason = "Heute nicht lernen"
+        else:
+            guest_id = self.config.get(CONF_GUEST_ENTITY)
+            guest = self.hass.states.get(guest_id) if guest_id else None
+            if guest is not None and guest.state == "on":
+                reason = "Gäste da"
+        if result is not None:
+            result["learning_paused"] = reason
+        return reason is not None
+
+    async def async_pause_learning_today(self) -> None:
+        """Button "Heute nicht lernen": no learning until midnight."""
+        local = dt_util.now()
+        midnight = (local + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        self.learning_paused_until = dt_util.as_utc(midnight)
+        self._model_collector.reset()
+        self._log("Heute wird nicht gelernt")
+        await self.async_request_refresh()
+
+    async def _observe_unusual(self, result: dict[str, Any]) -> None:
+        """Push once a day when the room loses or gains far from its model."""
+        room = result.get("room_temperature")
+        outdoor = result.get("outdoor_temperature")
+        demand = result.get("heat_demand")
+        solar_kw, wind = self._weather_inputs()
+        view = (
+            self._model_view(None if outdoor is None else float(outdoor), solar_kw, wind)
+            if self.room_model.trusted
+            else None
+        )
+        usable = (
+            self.enabled
+            and not self._room_fallback
+            and not result.get("window_open")
+            and not result.get("manual_override")
+            and not result.get("valve_maintenance")
+            and result.get("mode")
+            not in ("waiting", "maintenance", "window", "boost", "quick_off")
+            and self._shower_until is None
+            and not self.learning_paused()
+        )
+        if demand is not None and float(demand) >= 80:
+            # Full heat only says something while the boiler delivers.
+            usable = usable and SUPPLY_COLD not in (
+                result.get("radiator_supply"), result.get("house_supply")
+            ) and not result.get("supply_usually_off")
+        finding = self.unusual.observe(
+            dt_util.utcnow().timestamp(),
+            None if room is None else float(room),
+            None if demand is None else float(demand) / 100,
+            bool(usable),
+            view,
+        )
+        last = self.unusual.last
+        result["unusual"] = (
+            None
+            if last is None
+            else {
+                "kind": last.kind,
+                "observed": last.observed,
+                "expected": last.expected,
+                "since": dt_util.as_local(
+                    dt_util.utc_from_timestamp(last.started_at)
+                ).isoformat(),
+            }
+        )
+        if finding is None:
+            return
+        since = dt_util.as_local(dt_util.utc_from_timestamp(finding.started_at))
+        name = self._room_name()
+        observed = f"{finding.observed:.1f}".replace(".", ",")
+        expected = f"{finding.expected:.1f}".replace(".", ",")
+        if finding.kind == LOSS:
+            text = (
+                f"{name} hat seit {since:%H:%M} Uhr {observed} °C verloren, "
+                f"erwartet waren nur {expected} °C. Ist ein Fenster gekippt "
+                "oder eine Tür offen?"
+            )
+        else:
+            text = (
+                f"{name} wird seit {since:%H:%M} Uhr mit offenem Ventil kaum "
+                f"warm (+{observed} °C, erwartet +{expected} °C). Ist der "
+                "Heizkörper kalt oder hat er Luft?"
+            )
+        self._log(text)
+        local = dt_util.now()
+        if (
+            not self.config.get(CONF_UNUSUAL_NOTIFY, DEFAULT_UNUSUAL_NOTIFY)
+            or local.hour >= UNUSUAL_QUIET_FROM
+            or local.hour < UNUSUAL_QUIET_UNTIL
+            or not self.unusual.first_today(finding.kind, local.date().isoformat())
+        ):
+            return
+        await self._push_room(text)

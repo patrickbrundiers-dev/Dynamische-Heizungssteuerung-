@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import (
+    async_call_later,
     async_track_time_change,
     async_track_time_interval,
 )
@@ -20,6 +21,11 @@ from homeassistant.util import dt as dt_util
 from .battery import describe_days
 from .const import (
     BATTERY_BUNDLE_DAYS,
+    CONF_HEATING_LIMIT_TEMPERATURE,
+    CONF_OUTDOOR_TEMPERATURE_ENTITY,
+    CONF_WEATHER_ENTITY,
+    HEAT_PRICE_DEFAULT,
+    WEEK_AHEAD_DAYS,
     BATTERY_NOTIFY_DAYS,
     BATTERY_NOTIFY_INTERVAL_DAYS,
     HEAT_LOAD_OUTDOOR,
@@ -40,6 +46,16 @@ from .const import (
     QUICK_AUTO,
     QUICK_MORNING_HOUR,
     QUICK_SLEEP,
+)
+from .house_insights import (
+    BALANCE_SUGGEST_DIFFERENCE,
+    CYCLE_DEMAND,
+    CycleWatch,
+    FlowStats,
+    RoomRate,
+    balance_point,
+    week_ahead,
+    week_ahead_text,
 )
 from .pending_push import hold_if_missing
 from .radiator import (
@@ -91,6 +107,20 @@ class HouseManager:
         self.battery_notified: str | None = None
         # Temperature levels for schedule blocks ("stufe: abend", persisted).
         self.levels: dict[str, float] = {key: item[1] for key, item in LEVELS.items()}
+        # 0.18.0 (persisted): heating curve statistics, heating phases,
+        # bundled holding (switch) and the price of a kWh of heat.
+        self.flow = FlowStats()
+        self.cycles = CycleWatch()
+        self.bundle_holding = False
+        self.heat_price = HEAT_PRICE_DEFAULT
+        self._insights_at: datetime | None = None
+        self._insights_saved_at: datetime | None = None
+        # Daily mean outdoor temperatures from the recorder (day ISO -> °C)
+        # and the week ahead, both refreshed now and then (runtime only).
+        self.outdoor_means: dict[str, float] = {}
+        self._outdoor_means_at: datetime | None = None
+        self.week: dict[str, Any] | None = None
+        self._week_at: datetime | None = None
 
     def rooms(self) -> list[DynamicHeatingCoordinator]:
         """All rooms that are set up right now."""
@@ -118,6 +148,12 @@ class HouseManager:
                 for key, value in raw_levels.items():
                     if key in self.levels and isinstance(value, (int, float)):
                         self.levels[key] = float(value)
+            self.flow = FlowStats.from_dict(stored.get("flow"))
+            self.cycles = CycleWatch.from_dict(stored.get("cycles"))
+            self.bundle_holding = bool(stored.get("bundle_holding"))
+            price = stored.get("heat_price")
+            if isinstance(price, (int, float)) and 0 <= price <= 100:
+                self.heat_price = float(price)
             if stored.get("supply_version") == SUPPLY_VERSION:
                 self.supply = SupplyProfile.from_list(
                     stored.get("supply_profile"), stored.get("supply_counts")
@@ -129,11 +165,22 @@ class HouseManager:
             async_track_time_interval(
                 self.hass, self._async_check_vacation, timedelta(minutes=1)
             ),
+            async_track_time_interval(
+                self.hass, self._async_refresh_insights_tick, timedelta(minutes=30)
+            ),
+            # Once the rooms are up after a start.
+            async_call_later(self.hass, 300, self._async_refresh_insights_tick),
             async_track_time_change(
                 self.hass, self._async_weekly, hour=REPORT_HOUR, minute=0, second=0
             ),
         ]
         await self._async_check_vacation()
+
+    async def _async_refresh_insights_tick(self, _now: Any = None) -> None:
+        try:
+            await self.async_refresh_insights()
+        except Exception:  # noqa: BLE001 - insights must never break the house
+            _LOGGER.debug("House insights failed", exc_info=True)
 
     async def async_unload(self) -> None:
         for unsub in self._unsubs:
@@ -263,6 +310,17 @@ class HouseManager:
         )]
         if batteries := self.battery_text():
             lines.append(batteries)
+        curve = self.heating_curve()
+        if curve["state"] != "zu_wenig_daten":
+            lines.append(f"Heizkurve: {curve['text']}")
+        balance = self.balance()
+        if balance.get("suggest"):
+            lines.append(f"Heizgrenze: {balance['text']}")
+        phases = self.heating_phases()
+        if phases["cycling"]:
+            lines.append(f"Heizphasen: {phases['text']}")
+        if self.week:
+            lines.append(self.week["text"])
         lines.append(f"Hausmodus: {labels.get(self.mode, self.mode)}")
         return "\n".join(lines)
 
@@ -310,6 +368,10 @@ class HouseManager:
                 "supply_version": SUPPLY_VERSION,
                 "battery_notified": self.battery_notified,
                 "levels": self.levels,
+                "flow": self.flow.as_dict(),
+                "cycles": self.cycles.as_dict(),
+                "bundle_holding": self.bundle_holding,
+                "heat_price": self.heat_price,
             }
         )
 
@@ -359,12 +421,319 @@ class HouseManager:
         self.supply_state = verdict
         seconds = 0.0 if self._supply_at is None else (now - self._supply_at).total_seconds()
         self._supply_at = now
+        saved = False
         if self.supply.observe(local.hour, verdict, seconds):
+            await self._async_save()
+            saved = True
+        self._observe_insights(now)
+        if not saved and (
+            self._insights_saved_at is None
+            or now - self._insights_saved_at >= timedelta(minutes=30)
+        ):
+            self._insights_saved_at = now
             await self._async_save()
         await self._notify_supply(verdict, now)
         if changed:
             for listener in list(self._listeners):
                 listener()
+
+    # --- 0.18.0: heating curve, heating limit, week ahead, phases -------------
+
+    def _observe_insights(self, now: datetime) -> None:
+        """Feed the heating curve statistics and the heating phases."""
+        hours = (
+            0.0
+            if self._insights_at is None
+            else (now - self._insights_at).total_seconds() / 3600
+        )
+        self._insights_at = now
+        if not 0 < hours <= 0.25:
+            hours = 0.0
+        today = dt_util.as_local(now).date()
+        asking = False
+        for room in self.rooms():
+            data = room.data or {}
+            if not room.enabled or not data:
+                continue
+            demand = data.get("heat_demand")
+            if demand is not None and float(demand) >= CYCLE_DEMAND:
+                asking = True
+            self.flow.observe(
+                room.room_name,
+                today,
+                hours,
+                outdoor=data.get("outdoor_temperature"),
+                mode=data.get("mode"),
+                room_temperature=data.get("room_temperature"),
+                target=data.get("target_temperature"),
+                demand=None if demand is None else float(demand),
+            )
+        self.cycles.observe(today, asking, hours * 60)
+
+    def heating_curve(self) -> dict[str, Any]:
+        return self.flow.verdict()
+
+    def heating_phases(self) -> dict[str, Any]:
+        return self.cycles.verdict(dt_util.now().date())
+
+    def heating_limits(self) -> dict[str, float | None]:
+        return {
+            room.room_name: (
+                None
+                if room.config.get(CONF_HEATING_LIMIT_TEMPERATURE) is None
+                else float(room.config[CONF_HEATING_LIMIT_TEMPERATURE])
+            )
+            for room in self.rooms()
+        }
+
+    async def async_refresh_insights(self) -> None:
+        """Outdoor daily means (recorder) and the week ahead, now and then."""
+        now = dt_util.utcnow()
+        if self._outdoor_means_at is None or now - self._outdoor_means_at >= timedelta(
+            hours=6
+        ):
+            self._outdoor_means_at = now
+            await self._async_load_outdoor_means(now)
+        if self._week_at is None or now - self._week_at >= timedelta(hours=3):
+            self._week_at = now
+            await self._async_update_week(now)
+
+    async def _async_load_outdoor_means(self, now: datetime) -> None:
+        entity_id = next(
+            (
+                room.config.get(CONF_OUTDOOR_TEMPERATURE_ENTITY)
+                for room in self.rooms()
+                if room.config.get(CONF_OUTDOOR_TEMPERATURE_ENTITY)
+            ),
+            None,
+        )
+        if not entity_id or "recorder" not in self.hass.config.components:
+            return
+        from homeassistant.components.recorder import get_instance
+        from homeassistant.components.recorder.statistics import (
+            statistics_during_period,
+        )
+
+        try:
+            daily = await get_instance(self.hass).async_add_executor_job(
+                statistics_during_period,
+                self.hass,
+                now - timedelta(days=40),
+                now,
+                {entity_id},
+                "day",
+                None,
+                {"mean"},
+            )
+        except Exception:  # noqa: BLE001 - statistics are a bonus, never fatal
+            _LOGGER.debug("Outdoor statistics not available", exc_info=True)
+            return
+        means = {}
+        for row in daily.get(entity_id, []):
+            start = row.get("start")
+            mean = row.get("mean")
+            if start is None or mean is None:
+                continue
+            moment = (
+                dt_util.utc_from_timestamp(start)
+                if isinstance(start, (int, float))
+                else start
+            )
+            means[dt_util.as_local(moment).date().isoformat()] = float(mean)
+        self.outdoor_means = means
+
+    def balance(self) -> dict[str, Any]:
+        """The learned heating limit and whether it differs from the set one."""
+        today = dt_util.now().date()
+        totals: dict[str, float] = {}
+        means: dict[str, tuple[float, float]] = {}
+        for room in self.rooms():
+            for day, hours, mean, covered in room.heat_stats.daily(today):
+                totals[day] = totals.get(day, 0.0) + hours
+                if mean is not None and covered >= means.get(day, (0.0, 0.0))[1]:
+                    means[day] = (mean, covered)
+        points = []
+        for day, hours in sorted(totals.items()):
+            if day in means and means[day][1] >= 20:
+                outdoor = means[day][0]
+            elif day in self.outdoor_means:
+                outdoor = self.outdoor_means[day]
+            else:
+                continue
+            points.append((outdoor, hours))
+        fit = balance_point(points)
+        limits = {name: value for name, value in self.heating_limits().items() if value is not None}
+        result: dict[str, Any] = {
+            "balance_point": None,
+            "days_available": len(points),
+            "set_limits": limits,
+            "suggest": False,
+        }
+        if fit is None:
+            result["text"] = (
+                f"Noch nicht genug Heiztage ({len(points)} Tage mit Daten, "
+                "mindestens 10 mit Heizen und 3 °C Unterschied nötig)."
+            )
+            return result
+        result.update(fit)
+        value = fit["balance_point"]
+        shown = f"{value:.1f}".replace(".", ",")
+        different = [
+            name for name, limit in limits.items()
+            if abs(limit - value) >= BALANCE_SUGGEST_DIFFERENCE
+        ]
+        result["suggest"] = bool(different)
+        if not limits:
+            result["text"] = (
+                f"Dein Haus braucht ab etwa {shown} °C Tagesmittel keine Heizung mehr. "
+                "Eine Heizgrenze ist in keinem Raum eingestellt."
+            )
+        elif different:
+            set_values = sorted({limits[name] for name in different})
+            set_text = " / ".join(f"{item:.1f}".replace(".", ",") for item in set_values)
+            result["text"] = (
+                f"Dein Haus braucht ab etwa {shown} °C Tagesmittel keine Heizung mehr, "
+                f"eingestellt sind {set_text} °C ({', '.join(sorted(different))}). "
+                "Mit „Heizgrenze übernehmen“ wird der gelernte Wert gesetzt."
+            )
+        else:
+            result["text"] = (
+                f"Die eingestellte Heizgrenze passt: Dein Haus braucht ab etwa {shown} °C "
+                "Tagesmittel keine Heizung mehr."
+            )
+        return result
+
+    async def async_apply_balance_point(self) -> list[str]:
+        """Set the learned heating limit in every room that has one set."""
+        info = self.balance()
+        value = info.get("balance_point")
+        if value is None:
+            return []
+        changed = []
+        for room in self.rooms():
+            entry = self.hass.config_entries.async_get_entry(room.entry_id)
+            current = room.config.get(CONF_HEATING_LIMIT_TEMPERATURE)
+            if entry is None or current is None or float(current) == value:
+                continue
+            self.hass.config_entries.async_update_entry(
+                entry, options={**entry.options, CONF_HEATING_LIMIT_TEMPERATURE: value}
+            )
+            # The room reads its options at start: reload it.
+            self.hass.config_entries.async_schedule_reload(entry.entry_id)
+            changed.append(room.room_name)
+        return sorted(changed)
+
+    async def _async_update_week(self, now: datetime) -> None:
+        forecast = await self._async_daily_forecast(now)
+        rooms = []
+        today = dt_util.as_local(now).date()
+        for room in self.rooms():
+            rate = room.heat_stats.hours_per_degree_day(today)
+            if rate is None or not room.enabled:
+                continue
+            limit = room.config.get(CONF_HEATING_LIMIT_TEMPERATURE)
+            rooms.append(
+                RoomRate(
+                    room.room_name,
+                    rate,
+                    room.radiator_power_w / 1000,
+                    None if limit is None else float(limit),
+                )
+            )
+        if not forecast or not rooms:
+            self.week = None
+        else:
+            self.week = week_ahead(forecast[:WEEK_AHEAD_DAYS], rooms, self.heat_price)
+            self.week["text"] = week_ahead_text(self.week)
+        for listener in list(self._listeners):
+            listener()
+
+    async def _async_daily_forecast(self, now: datetime) -> list[tuple[Any, float]]:
+        """(local date, mean °C) of the coming days, today's rest included."""
+        entity_id = next(
+            (
+                room.config.get(CONF_WEATHER_ENTITY)
+                for room in self.rooms()
+                if room.config.get(CONF_WEATHER_ENTITY)
+            ),
+            None,
+        )
+        if not entity_id or self.hass.states.get(entity_id) is None:
+            return []
+        items: list[dict] = []
+        for kind in ("daily", "hourly"):
+            try:
+                response = await self.hass.services.async_call(
+                    "weather",
+                    "get_forecasts",
+                    {"entity_id": entity_id, "type": kind},
+                    blocking=True,
+                    return_response=True,
+                )
+            except (HomeAssistantError, TypeError, ValueError, AttributeError):
+                continue
+            result = response.get(entity_id, {}) if isinstance(response, dict) else {}
+            raw = result.get("forecast", []) if isinstance(result, dict) else []
+            items = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+            if items:
+                break
+        days: dict[Any, list[float]] = {}
+        for item in items:
+            raw_at = item.get("datetime")
+            moment = dt_util.parse_datetime(raw_at) if isinstance(raw_at, str) else None
+            try:
+                high = float(item.get("temperature"))
+            except (TypeError, ValueError):
+                continue
+            low = item.get("templow")
+            try:
+                value = (high + float(low)) / 2 if low is not None else high
+            except (TypeError, ValueError):
+                value = high
+            if moment is None:
+                continue
+            day = dt_util.as_local(moment).date()
+            if day < dt_util.as_local(now).date():
+                continue
+            days.setdefault(day, []).append(value)
+        return [
+            (day, sum(values) / len(values))
+            for day, values in sorted(days.items())
+            if values
+        ]
+
+    def departure(self) -> dict[str, Any]:
+        """The usual departure, from the room that has seen the most."""
+        best = None
+        for room in self.rooms():
+            if best is None or (
+                room.homecoming.departure_count() > best.homecoming.departure_count()
+            ):
+                best = room
+        if best is None or not best.homecoming.departure_count():
+            return {"today": None, "week": {}, "count": 0, "room": None}
+        today = dt_util.now()
+        minute = best.homecoming.usual_departure(today.weekday(), today.date())
+        return {
+            "today": None if minute is None else f"{minute // 60:02d}:{minute % 60:02d}",
+            "week": best.homecoming.week(today.date(), departures=True),
+            "count": best.homecoming.departure_count(),
+            "room": best.room_name,
+        }
+
+    async def async_set_bundle_holding(self, value: bool) -> None:
+        self.bundle_holding = bool(value)
+        await self._async_save()
+        for listener in list(self._listeners):
+            listener()
+        for room in self.rooms():
+            await room.async_request_refresh()
+
+    async def async_set_heat_price(self, value: float) -> None:
+        self.heat_price = round(float(value), 1)
+        await self._async_save()
+        self._week_at = None
+        await self.async_refresh_insights()
 
     def supply_text(self) -> str:
         """The central heating's state in a few words."""

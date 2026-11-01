@@ -407,6 +407,8 @@ HOMECOMING_SPREAD_MINUTES = 45
 # Until a weekday has its own habit, workdays and weekend days are learned
 # together: per weekday alone it takes weeks.
 HOMECOMING_GROUPS = ((0, 1, 2, 3, 4), (5, 6))
+# Departures are looked for from this local hour on (an early shift counts).
+DEPARTURE_FROM_HOUR = 4
 
 
 @dataclass(slots=True)
@@ -415,34 +417,64 @@ class Homecoming:
 
     # Weekday (0 = Monday) -> [(date ISO, minute of the day)].
     arrivals: dict[int, list[tuple[str, int]]] = field(default_factory=dict)
+    # The same for leaving the house (0.18.0): the start of an absence of at
+    # least two hours.
+    departures: dict[int, list[tuple[str, int]]] = field(default_factory=dict)
     # Since when nobody is home (runtime only).
     away_since: datetime | None = None
     seen: bool = False
+    # The running absence was already recorded as a departure (runtime only).
+    departure_noted: bool = False
 
     def observe(self, now: datetime, home: bool) -> bool:
-        """Feed whether anybody is home (``now`` local); True on a homecoming."""
+        """Feed whether anybody is home (``now`` local); True on a homecoming
+        or when an absence became long enough to count as a departure."""
         if not home:
             if self.away_since is None:
                 # The first reading after a start is no departure.
                 self.away_since = now if self.seen else None
+                self.departure_noted = False
             self.seen = True
-            return False
+            return self._note_departure(now)
         self.seen = True
+        noted = self._note_departure(now)
         since, self.away_since = self.away_since, None
+        self.departure_noted = False
         if since is None:
-            return False
+            return noted
         if now - since < timedelta(minutes=HOMECOMING_AWAY_MINUTES):
-            return False
+            return noted
         if not HOMECOMING_FROM_HOUR <= now.hour < HOMECOMING_UNTIL_HOUR:
-            return False
+            return noted
         self.record(now)
         return True
 
+    def _note_departure(self, now: datetime) -> bool:
+        since = self.away_since
+        if (
+            since is None
+            or self.departure_noted
+            or now - since < timedelta(minutes=HOMECOMING_AWAY_MINUTES)
+        ):
+            return False
+        self.departure_noted = True
+        if not DEPARTURE_FROM_HOUR <= since.hour < HOMECOMING_UNTIL_HOUR:
+            return False
+        self.record_departure(since)
+        return True
+
     def record(self, at: datetime) -> None:
+        self._add(self.arrivals, at)
+
+    def record_departure(self, at: datetime) -> None:
+        self._add(self.departures, at)
+
+    @staticmethod
+    def _add(target: dict[int, list[tuple[str, int]]], at: datetime) -> None:
         day = at.date().isoformat()
-        items = [item for item in self.arrivals.get(at.weekday(), []) if item[0] != day]
+        items = [item for item in target.get(at.weekday(), []) if item[0] != day]
         items.append((day, at.hour * 60 + at.minute))
-        self.arrivals[at.weekday()] = sorted(items)[-HOMECOMING_KEEP:]
+        target[at.weekday()] = sorted(items)[-HOMECOMING_KEEP:]
 
     def usual(self, weekday: int, today: date | None = None) -> int | None:
         """Usual minute of the day of coming home, None without a habit.
@@ -450,17 +482,32 @@ class Homecoming:
         The weekday's own returns decide once they make a habit; before
         that, those of all workdays (or both weekend days) together.
         """
+        return self._usual(self.arrivals, weekday, today)
+
+    def usual_departure(self, weekday: int, today: date | None = None) -> int | None:
+        """Usual minute of the day of leaving the house, None without a habit."""
+        return self._usual(self.departures, weekday, today)
+
+    def _usual(
+        self, source: dict[int, list[tuple[str, int]]], weekday: int, today: date | None
+    ) -> int | None:
         today = today or date.today()
-        own = self._habit(self._minutes((weekday,), today))
+        own = self._habit(self._minutes((weekday,), today, source))
         if own is not None:
             return own
         group = next(group for group in HOMECOMING_GROUPS if weekday in group)
-        return self._habit(self._minutes(group, today))
+        return self._habit(self._minutes(group, today, source))
 
-    def _minutes(self, weekdays: tuple[int, ...], today: date) -> list[int]:
+    def _minutes(
+        self,
+        weekdays: tuple[int, ...],
+        today: date,
+        source: dict[int, list[tuple[str, int]]] | None = None,
+    ) -> list[int]:
+        source = self.arrivals if source is None else source
         minutes = []
         for weekday in weekdays:
-            for day, minute in self.arrivals.get(weekday, []):
+            for day, minute in source.get(weekday, []):
                 try:
                     age = (today - date.fromisoformat(day)).days
                 except ValueError:
@@ -482,29 +529,53 @@ class Homecoming:
             return None
         return close[len(close) // 2]
 
-    def week(self, today: date | None = None) -> dict[str, str | None]:
-        """Usual homecoming per weekday as "HH:MM" (None without a habit)."""
+    def week(
+        self, today: date | None = None, departures: bool = False
+    ) -> dict[str, str | None]:
+        """Usual homecoming (or departure) per weekday as "HH:MM"."""
         names = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
         result: dict[str, str | None] = {}
         for weekday, name in enumerate(names):
-            minute = self.usual(weekday, today)
+            minute = (
+                self.usual_departure(weekday, today)
+                if departures
+                else self.usual(weekday, today)
+            )
             result[name] = None if minute is None else f"{minute // 60:02d}:{minute % 60:02d}"
         return result
 
     def count(self) -> int:
         return sum(len(items) for items in self.arrivals.values())
 
+    def departure_count(self) -> int:
+        return sum(len(items) for items in self.departures.values())
+
     def as_dict(self) -> dict:
-        return {
+        result: dict = {
             str(weekday): [list(item) for item in items]
             for weekday, items in self.arrivals.items()
         }
+        if self.departures:
+            result["departures"] = {
+                str(weekday): [list(item) for item in items]
+                for weekday, items in self.departures.items()
+            }
+        return result
 
     @classmethod
     def from_dict(cls, data: object) -> Homecoming:
         result = cls()
         if not isinstance(data, dict):
             return result
+        result.arrivals = cls._parse(data)
+        raw = data.get("departures")
+        if isinstance(raw, dict):
+            result.departures = cls._parse(raw)
+        return result
+
+    @staticmethod
+    def _parse(data: dict) -> dict[int, list[tuple[str, int]]]:
+        parsed: dict[int, list[tuple[str, int]]] = {}
         for key, items in data.items():
             try:
                 weekday = int(key)
@@ -522,8 +593,8 @@ class Homecoming:
                 and 0 <= item[1] < 24 * 60
             ]
             if kept:
-                result.arrivals[weekday] = sorted(kept)[-HOMECOMING_KEEP:]
-        return result
+                parsed[weekday] = sorted(kept)[-HOMECOMING_KEEP:]
+        return parsed
 
 
 def homecomings_from_history(
@@ -766,7 +837,9 @@ class HeatStats:
     degree_days: float = 0.0
     # Estimated heat given off by the radiators in kWh.
     energy_kwh: float = 0.0
-    # Per local day: [full-load hours, degree days, kWh].
+    # Per local day: [full-load hours, degree days, kWh, outdoor °C × hours,
+    # hours with an outdoor reading] (the last two since 0.18.0, for the
+    # day's mean outdoor temperature).
     days: dict[str, list[float]] = field(default_factory=dict)
     last_at: datetime | None = None
     last_demand: float | None = None
@@ -802,11 +875,15 @@ class HeatStats:
                 self.degree_days = round(self.degree_days + degrees, 4)
                 self.energy_kwh = round(self.energy_kwh + energy, 4)
                 day = self.days.setdefault(
-                    self.last_at.date().isoformat(), [0.0, 0.0, 0.0]
+                    self.last_at.date().isoformat(), [0.0, 0.0, 0.0, 0.0, 0.0]
                 )
+                day.extend([0.0] * (5 - len(day)))
                 day[0] = round(day[0] + hours, 4)
                 day[1] = round(day[1] + degrees, 4)
                 day[2] = round(day[2] + energy, 4)
+                if self.last_outdoor is not None:
+                    day[3] = round(day[3] + self.last_outdoor * seconds / 3600, 4)
+                    day[4] = round(day[4] + seconds / 3600, 4)
                 if len(self.days) > STATS_DAYS:
                     for key in sorted(self.days)[: len(self.days) - STATS_DAYS]:
                         del self.days[key]
@@ -826,6 +903,19 @@ class HeatStats:
                 total += item[2]
             day += timedelta(days=1)
         return round(total, 2)
+
+    def daily(self, today: date) -> list[tuple[str, float, float | None, float]]:
+        """Complete past days: (day ISO, full-load hours, mean outdoor or
+        None, hours covered by outdoor readings)."""
+        result = []
+        for key in sorted(self.days):
+            if key >= today.isoformat():
+                continue
+            item = self.days[key]
+            covered = item[4] if len(item) > 4 else 0.0
+            mean = item[3] / covered if covered > 0 else None
+            result.append((key, item[0], mean, covered))
+        return result
 
     def hours_per_degree_day(self, today: date) -> float | None:
         """Full-load hours per degree day over the last complete days."""
@@ -863,12 +953,13 @@ class HeatStats:
                 if (
                     isinstance(key, str)
                     and isinstance(value, list)
-                    and len(value) in (2, 3)
+                    and len(value) in (2, 3, 5)
                     and all(isinstance(item, (int, float)) for item in value)
                 ):
-                    # Days before the heat meter (0.13.0) have no kWh.
+                    # Days before the heat meter (0.13.0) have no kWh, days
+                    # before 0.18.0 no outdoor mean.
                     result.days[key] = [float(item) for item in value] + [0.0] * (
-                        3 - len(value)
+                        5 - len(value)
                     )
         return result
 

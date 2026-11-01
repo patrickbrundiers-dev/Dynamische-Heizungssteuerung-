@@ -14,6 +14,19 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BUNDLE_HEATING_DEMAND,
+    BUNDLE_JOIN_ABOVE,
+    BUNDLE_JOIN_UNTIL,
+    BUNDLE_WAIT_BELOW,
+    BUNDLE_WAIT_UNTIL,
+    CONF_DEPARTURE_STOP,
+    CONF_SOLAR_FORECAST,
+    DEFAULT_DEPARTURE_STOP,
+    DEFAULT_SOLAR_FORECAST,
+    DEPARTURE_STOP_DROP,
+    DEPARTURE_STOP_MINUTES,
+    SOLAR_AHEAD_DROP,
+    SOLAR_AHEAD_HOURS,
     CONF_EARLY_STOP,
     CONF_SOLAR_RADIATION_ENTITY,
     DEFAULT_EARLY_STOP,
@@ -45,7 +58,7 @@ from .logic import (
     calendar_temperature,
     schedule_comfort_temperature,
 )
-from .model import ModelView
+from .model import ModelView, expected_solar_kw, sun_elevation
 from .plan import (
     CHECK_ALPHA,
     CHECK_HOURS,
@@ -700,3 +713,188 @@ class PlanMixin:
             target_temperature=min(eco_temperature, target),
             preheat_minutes=0,
         )
+
+    def _departure_stop(
+        self,
+        decision: HeatingDecision,
+        *,
+        room_temperature: float,
+        comfort_temperature: float,
+        eco_temperature: float,
+        view: ModelView | None,
+    ) -> HeatingDecision:
+        """Stop reheating before the usual departure (EarlyOff, 0.18.0).
+
+        Somebody is home and the room is in comfort, but the house is usually
+        empty within the hour: the radiators stay off if the room model says
+        the room loses at most half a degree until then. Whoever stays longer
+        gets heat again once that time has passed or the room cools faster.
+        """
+        if not self.config.get(CONF_DEPARTURE_STOP, DEFAULT_DEPARTURE_STOP):
+            self._departure_day = None
+            return decision
+        local = dt_util.now()
+        if (
+            decision.mode != "comfort"
+            or not self._household_present
+            or self._absence == "house_empty"
+        ):
+            return decision
+        minute = self.homecoming.usual_departure(local.weekday(), local.date())
+        if minute is None:
+            return decision
+        leave = local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
+            minutes=minute
+        )
+        minutes_left = (dt_util.as_utc(leave) - dt_util.utcnow()).total_seconds() / 60
+        if minutes_left <= 0 or minutes_left > DEPARTURE_STOP_MINUTES:
+            if minutes_left <= 0 and self._departure_day == local.date():
+                # Still somebody home after the usual time: heat as before.
+                self._departure_day = None
+            return decision
+        lowest = comfort_temperature - DEPARTURE_STOP_DROP
+        if self._departure_day == local.date():
+            if room_temperature < lowest:
+                self._departure_day = None
+                return decision
+        else:
+            if view is None or room_temperature < comfort_temperature - 0.2:
+                return decision
+            predicted = view.temperature_after(room_temperature, minutes_left / 60, 0.0)
+            if predicted < lowest:
+                return decision
+            self._departure_day = local.date()
+        when = leave.strftime("%H:%M")
+        return replace(
+            decision,
+            status=f"Meist geht ihr um {when} Uhr – Heizung schon aus, "
+            "der Raum hält die Wärme",
+            mode="departure_stop",
+            target_temperature=min(eco_temperature, comfort_temperature),
+            preheat_minutes=0,
+        )
+
+    def _expected_sun(self, hours: int) -> float | None:
+        """Mean forecast global radiation (kW/m²) over the next hours."""
+        latitude = self.hass.config.latitude
+        longitude = self.hass.config.longitude
+        if latitude is None or longitude is None:
+            return None
+        clouds: dict[int, float] = {}
+        for item in self._forecast_items:
+            raw = item.get("datetime")
+            moment = dt_util.parse_datetime(raw) if isinstance(raw, str) else None
+            value = _as_number(item.get("cloud_coverage"))
+            if moment is not None and value is not None:
+                clouds[int(dt_util.as_utc(moment).timestamp() // 3600)] = value
+        if not clouds:
+            return None
+        now = dt_util.utcnow().timestamp()
+        values = []
+        for step in range(hours * 2):
+            at = now + (step + 0.5) * 1800
+            cloud = clouds.get(int(at // 3600))
+            if cloud is None:
+                return None
+            values.append(
+                expected_solar_kw(sun_elevation(at, latitude, longitude), cloud)
+            )
+        return sum(values) / len(values)
+
+    def _solar_ahead(
+        self,
+        decision: HeatingDecision,
+        room_temperature: float,
+        eco_temperature: float,
+        view: ModelView | None,
+    ) -> HeatingDecision:
+        """Leave the last half degree to the sun that is forecast (0.18.0).
+
+        Only rooms whose trusted model shows a real solar gain, only while the
+        sun does not warm the room yet, and only when the forecast sun of the
+        next two hours alone (valves closed) brings the room to its target.
+        """
+        target = decision.target_temperature
+        if (
+            view is None
+            or not self.config.get(CONF_SOLAR_FORECAST, DEFAULT_SOLAR_FORECAST)
+            or not self.config.get(CONF_SOLAR_RADIATION_ENTITY)
+            or decision.mode not in ("comfort", "preheat")
+            or target is None
+            or view.solar_gain * 0.3 < SOLAR_PAUSE_MIN_GAIN
+        ):
+            self._solar_ahead_active = False
+            return decision
+        if view.solar_gain * view.solar_kw >= SOLAR_PAUSE_MIN_GAIN:
+            # The sun is already there: the sun pause decides.
+            self._solar_ahead_active = False
+            return decision
+        sun = self._expected_sun(SOLAR_AHEAD_HOURS)
+        if sun is None:
+            self._solar_ahead_active = False
+            return decision
+        sunny = view.with_weather(solar_kw=sun)
+        predicted = sunny.temperature_after(room_temperature, SOLAR_AHEAD_HOURS, 0.0)
+        lowered = max(eco_temperature, target - SOLAR_AHEAD_DROP)
+        needed = target - (0.3 if self._solar_ahead_active else 0.0)
+        if (
+            view.solar_gain * sun < SOLAR_PAUSE_MIN_GAIN
+            or predicted < needed
+            or room_temperature < lowered - 0.3
+            or lowered >= target
+        ):
+            self._solar_ahead_active = False
+            return decision
+        self._solar_ahead_active = True
+        return replace(
+            decision,
+            status="Sonne erwartet – nur bis "
+            + f"{lowered:.1f}".replace(".", ",")
+            + " °C geheizt, den Rest macht die Sonne",
+            mode="solar_ahead",
+            target_temperature=lowered,
+        )
+
+    def _bundle_holding(
+        self, decision: HeatingDecision, room_temperature: float
+    ) -> HeatingDecision:
+        """Rooms holding their temperature heat together (0.18.0, house switch).
+
+        While another room heats, a holding room tops up a little (the boiler
+        runs anyway); while none does, it waits a little longer before it
+        asks. Fewer, longer heating phases instead of one small radiator
+        after the other.
+        """
+        house = self._house()
+        target = decision.target_temperature
+        if (
+            house is None
+            or not house.bundle_holding
+            or decision.mode != "comfort"
+            or target is None
+        ):
+            self._bundle = None
+            return decision
+        others_heat = any(
+            room is not self
+            and room.enabled
+            and (room.data or {}).get("bundle") != "wait"
+            and float((room.data or {}).get("heat_demand") or 0) >= BUNDLE_HEATING_DEMAND
+            for room in house.rooms()
+        )
+        if others_heat and room_temperature < target + BUNDLE_JOIN_UNTIL:
+            self._bundle = "join"
+            return replace(
+                decision,
+                status=f"{decision.status} · heizt mit den anderen Räumen mit",
+                target_temperature=target + BUNDLE_JOIN_ABOVE,
+            )
+        if not others_heat and room_temperature >= target - BUNDLE_WAIT_UNTIL:
+            self._bundle = "wait"
+            return replace(
+                decision,
+                status=f"{decision.status} · wartet, um gemeinsam zu heizen",
+                target_temperature=target - BUNDLE_WAIT_BELOW,
+            )
+        self._bundle = None
+        return decision

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import EntityCategory, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -67,6 +67,7 @@ async def async_setup_entry(
     if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HOUSE:
         async_add_entities(
             [HouseLevel(entry.runtime_data, entry, key) for key in LEVELS]
+            + [HeatPrice(entry.runtime_data, entry, "heat_price")]
         )
         return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
@@ -215,3 +216,23 @@ class HouseLevel(HouseEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         await self.house.async_set_level(self._key, value)
+
+
+class HeatPrice(HouseEntity, NumberEntity):
+    """Price of a kWh of heat for the week ahead (ct/kWh, 0.18.0)."""
+
+    _attr_name = "Wärmepreis"
+    _attr_mode = NumberMode.BOX
+    _attr_native_unit_of_measurement = "ct/kWh"
+    _attr_native_step = 0.1
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 50.0
+    _attr_icon = "mdi:currency-eur"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    @property
+    def native_value(self) -> float:
+        return self.house.heat_price
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.house.async_set_heat_price(value)

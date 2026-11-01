@@ -407,6 +407,11 @@ async def async_setup_entry(
             HouseEnergySensor(entry.runtime_data, entry, "heat_energy"),
             HouseHeatLoadSensor(entry.runtime_data, entry, "heat_load"),
             HouseHomecomingSensor(entry.runtime_data, entry, "homecoming"),
+            HouseDepartureSensor(entry.runtime_data, entry, "departure"),
+            HouseHeatingCurveSensor(entry.runtime_data, entry, "heating_curve"),
+            HouseBalancePointSensor(entry.runtime_data, entry, "balance_point"),
+            HouseWeekAheadSensor(entry.runtime_data, entry, "week_ahead"),
+            HouseHeatingPhasesSensor(entry.runtime_data, entry, "heating_phases"),
         ])
         return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
@@ -785,6 +790,139 @@ class HouseHomecomingSensor(HouseEntity, SensorEntity):
             "weekdays": info["week"],
             "homecomings_seen": info["count"],
             "learned_in": info["room"],
+        }
+
+
+class HouseDepartureSensor(HouseEntity, SensorEntity):
+    """When the house usually becomes empty today (0.18.0)."""
+
+    _attr_name = "Übliches Weggehen"
+    _attr_icon = "mdi:home-export-outline"
+    _attr_should_poll = True
+
+    @property
+    def native_value(self) -> str | None:
+        return self.house.departure()["today"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        info = self.house.departure()
+        return {
+            "weekdays": info["week"],
+            "departures_seen": info["count"],
+            "learned_in": info["room"],
+        }
+
+
+class HouseHeatingCurveSensor(HouseEntity, SensorEntity):
+    """Is the boiler's heating curve too high? Judged from the valves (0.18.0)."""
+
+    _attr_name = "Heizkurve"
+    _attr_icon = "mdi:chart-bell-curve"
+    _attr_should_poll = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _LABELS = {
+        "zu_warm": "Kann flacher",
+        "passt": "Passt",
+        "zu_kalt": "Reicht nicht überall",
+        "zu_wenig_daten": "Noch zu wenig Daten",
+    }
+
+    @property
+    def native_value(self) -> str:
+        return self._LABELS[self.house.heating_curve()["state"]]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        curve = self.house.heating_curve()
+        return {
+            "verdict": curve["state"],
+            "text": curve["text"],
+            "bands": curve["bands"],
+            "short_rooms": curve["short_rooms"],
+        }
+
+
+class HouseBalancePointSensor(HouseEntity, SensorEntity):
+    """Daily mean outdoor temperature from which the house needs no heat."""
+
+    _attr_name = "Gelernte Heizgrenze"
+    _attr_icon = "mdi:thermometer-auto"
+    _attr_should_poll = True
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_suggested_display_precision = 1
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self) -> float | None:
+        return self.house.balance().get("balance_point")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        info = self.house.balance()
+        return {
+            key: info.get(key)
+            for key in (
+                "text", "suggest", "set_limits", "days", "days_available", "r2",
+                "hours_per_kelvin", "raw",
+            )
+        }
+
+
+class HouseWeekAheadSensor(HouseEntity, SensorEntity):
+    """Expected heat of the coming days from the forecast (0.18.0)."""
+
+    _attr_name = "Heizbedarf nächste Tage"
+    _attr_icon = "mdi:calendar-week"
+    _attr_should_poll = True
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_suggested_display_precision = 0
+
+    @property
+    def native_value(self) -> float | None:
+        week = self.house.week
+        return None if week is None else week["kwh"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        week = self.house.week
+        if week is None:
+            return None
+        return {
+            "text": week["text"],
+            "kwh_low": week["kwh_low"],
+            "kwh_high": week["kwh_high"],
+            "heating_hours": week["hours"],
+            "euro": week["euro"],
+            "price_ct_per_kwh": week["price_ct"],
+            "days": week["days"],
+            "estimated": True,
+        }
+
+
+class HouseHeatingPhasesSensor(HouseEntity, SensorEntity):
+    """Heating phases today; whether the house heats in many short ones."""
+
+    _attr_name = "Heizphasen heute"
+    _attr_icon = "mdi:sine-wave"
+    _attr_should_poll = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def native_value(self) -> int:
+        return self.house.heating_phases()["today"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        info = self.house.heating_phases()
+        return {
+            "phases_last_days": info["phases"],
+            "mean_minutes": info["mean_minutes"],
+            "phases_per_heating_hour": info["per_hour"],
+            "cycling": info["cycling"],
+            "text": info["text"],
+            "bundle_holding": self.house.bundle_holding,
         }
 
 

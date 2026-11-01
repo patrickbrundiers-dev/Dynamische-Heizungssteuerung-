@@ -99,7 +99,8 @@ def test_heat_meter_keeps_old_days_without_kwh():
         }
     )
     assert restored.energy_kwh == 4.5
-    assert restored.days["2026-10-16"] == [3.0, 1.0, 0.0]
+    # Since 0.18.0 a day also carries the outdoor mean (two more values).
+    assert restored.days["2026-10-16"] == [3.0, 1.0, 0.0, 0.0, 0.0]
     assert restored.energy_between(date(2026, 10, 16), date(2026, 10, 17)) == 2.0
     assert HeatStats.from_dict(restored.as_dict()).days == restored.days
 

@@ -31,6 +31,7 @@ async def async_setup_entry(
         async_add_entities([
             SendReportButton(entry.runtime_data, entry, "send_report"),
             GoodNightButton(entry.runtime_data, entry, "good_night"),
+            ApplyBalancePointButton(entry.runtime_data, entry, "apply_balance_point"),
         ])
         return
     entities: list[ButtonEntity] = [
@@ -41,6 +42,7 @@ async def async_setup_entry(
     entities.append(SelfTestButton(entry.runtime_data, entry))
     entities.append(RadiatorTestButton(entry.runtime_data, entry))
     entities.append(LearnRunButton(entry.runtime_data, entry))
+    entities.append(PauseLearningButton(entry.runtime_data, entry))
     async_add_entities(entities)
 
 
@@ -183,3 +185,33 @@ class GoodNightButton(HouseEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self.house.async_good_night()
+
+
+class PauseLearningButton(CoordinatorEntity[DynamicHeatingCoordinator], ButtonEntity):
+    """Heute nicht lernen: a party, the oven, many guests (0.18.0)."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Heute nicht lernen"
+    _attr_icon = "mdi:school-outline"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self, coordinator: DynamicHeatingCoordinator, entry: ConfigEntry
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_pause_learning_button"
+        self._attr_device_info = device_info(entry)
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_pause_learning_today()
+
+
+class ApplyBalancePointButton(HouseEntity, ButtonEntity):
+    """Set the learned heating limit in every room that has one (0.18.0)."""
+
+    _attr_name = "Heizgrenze übernehmen"
+    _attr_icon = "mdi:thermometer-check"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    async def async_press(self) -> None:
+        await self.house.async_apply_balance_point()
