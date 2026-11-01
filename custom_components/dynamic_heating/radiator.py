@@ -26,6 +26,11 @@ PERIOD_MAX_SECONDS = 10800
 # The room asks for heat from this heat demand (%) and stops below the lower.
 HEATING_START_DEMAND = 50
 HEATING_STOP_DEMAND = 10
+# While a room only holds its temperature (demand between the two), a
+# radiator that warms up shows the central heating delivers. It must have
+# risen since holding started (a reading from before proves nothing) and
+# not be cooling: this far below its highest reading it is cooling down.
+HOLD_COOLING = 0.5
 
 WARM = "warm"
 COLD = "cold"
@@ -65,6 +70,12 @@ class RadiatorTracker:
     fresh: bool = False
     # A period that just ended (or ran long enough), to be picked up once.
     period: HeatingPeriod | None = None
+    # Holding the temperature (heat demand above HEATING_STOP_DEMAND but no
+    # full heating period): first and highest reading of the stretch.
+    hold_first: float | None = None
+    hold_peak: float | None = None
+    # A fresh warm reading while holding: the boiler delivers right now.
+    hold_warm: bool = False
 
     def _report(self, at: float) -> None:
         """Hand out the running period once, if it was long enough."""
@@ -110,6 +121,7 @@ class RadiatorTracker:
             self.peak = rise if self.peak is None else max(self.peak, rise)
         if heating and at - (self.heating_since or at) >= PERIOD_MAX_SECONDS:
             self._report(at)
+        self._observe_hold(heating, demand, device, room)
         if device is None or room is None:
             return UNKNOWN
         if (device >= room + WARM_ABOVE_ROOM and (not heating or self.fresh)) or (
@@ -125,6 +137,47 @@ class RadiatorTracker:
         if at - self.heating_since < COLD_AFTER_SECONDS:
             return WAITING
         return COLD
+
+
+    def _observe_hold(
+        self,
+        heating: bool,
+        demand: float | None,
+        device: float | None,
+        room: float | None,
+    ) -> None:
+        """Follow a radiator while the room only holds its temperature.
+
+        Such a valve opens a little and is never judged cold, but a radiator
+        that gets warm says the boiler delivers. Only a reading above the
+        first one of the stretch counts, so a valve that still reads warm
+        from hours ago (or a radiator cooling down in the boiler's night
+        pause, also after a restart) does not.
+        """
+        if heating or demand is None or demand <= HEATING_STOP_DEMAND:
+            self.hold_first = None
+            self.hold_peak = None
+            self.hold_warm = False
+            return
+        if device is None:
+            # Keep the last verdict until the next reading.
+            return
+        if self.hold_first is None:
+            self.hold_first = device
+            self.hold_peak = device
+        else:
+            self.hold_peak = device if self.hold_peak is None else max(self.hold_peak, device)
+        self.hold_warm = (
+            room is not None
+            and device > self.hold_first
+            and device >= room + WARM_ABOVE_ROOM
+            and device > self.hold_peak - HOLD_COOLING
+        )
+
+    @property
+    def asking(self) -> bool:
+        """Whether this radiator tells something about the boiler now."""
+        return self.heating_since is not None or self.hold_warm
 
 
 def heating_wanted(demand: float | None, was_heating: bool) -> bool:
