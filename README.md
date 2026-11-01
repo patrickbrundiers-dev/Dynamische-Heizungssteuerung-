@@ -369,6 +369,10 @@ Ein frisch gelerntes Raummodell steuert nur das Vorheizen. Absenkungsgrenzen, �
 - **Raummodell lernt nur aus Stunden mit Wärme**: Stunden, in denen geheizt werden sollte, die Heizkörper aber kalt blieben, zählen nicht mehr. Bisher lernte das Modell daraus eine viel zu kleine Heizleistung und plante beim Vorheizen immer die volle Zeit. Ein mit 0.9.2 oder älter gelerntes Modell wird einmal verworfen und neu aus dem Recorder angelernt (dann mit den Gehäusetemperaturen).
 - **Wochenbericht**: nennt zusätzlich die geschätzte Ersparnis gegenüber Dauer-Komfort (aus der Temperaturdifferenz zu draußen, nach der sich der Wärmeverlust richtet), die Stunden mit kalten Heizkörpern trotz Heizbedarf und wie gut das Raummodell liegt.
 
+## Version 0.19.0: Betriebsart „Wohlfühlen“
+
+- **Wohlfühlen** (Taste, Betriebsart und Preset `cozy` des Raum-Thermostats): heizt den Raum auf eine eigene Temperatur (*Wohlfühlen-Temperatur*, 23 °C voreingestellt) und hält sie für eine eigene Dauer (*Dauer „Wohlfühlen“* unter *Betriebsarten*, 3 Stunden), unabhängig von der Betriebsart-Dauer. Danach geht der Raum von selbst zurück in Automatik. Ein offenes Fenster hat weiter Vorrang. „Wohlfühlen“ wird nicht als Gewohnheit gelernt, und „Gute Nacht“ lässt einen Raum mit laufendem Wohlfühlen aus.
+
 ## Version 0.18.0: Ideen aus anderen Integrationen und Studien
 
 - **Vor dem Weggehen früher abschalten** (Studie „EarlyOff“, Option unter *Intelligente Regelung*, aus): Neben der Heimkehr lernt die Integration, wann das Haus an welchem Wochentag meist leer wird (Haus-Sensor *Übliches Weggehen*, Werktage und Wochenende anfangs gemeinsam, beim ersten Start aus dem Verlauf der Personen). Bis zu 60 Minuten vorher heizt ein Raum in Komfortzeit nicht mehr nach, wenn das Raummodell sagt, dass er bis dahin höchstens 0,5 °C verliert. Bleibt jemand länger oder kühlt der Raum schneller aus, wird wieder geheizt.

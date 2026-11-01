@@ -20,6 +20,11 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_COZY_DURATION,
+    CONF_COZY_TEMPERATURE,
+    DEFAULT_COZY_DURATION,
+    DEFAULT_COZY_TEMPERATURE,
+    QUICK_COZY,
     CONF_WARM_UP_DURATION,
     CONF_WARM_UP_STEP,
     DEFAULT_WARM_UP_DURATION,
@@ -1680,8 +1685,17 @@ class DynamicHeatingCoordinator(
                 )
             self.boost_until = None
             self.quick_mode = mode
-            self.quick_until = None if mode == QUICK_AUTO else self._quick_end()
-            if mode not in (QUICK_AUTO, QUICK_MAINTENANCE) and source != "Push-Meldung":
+            self.quick_until = (
+                None
+                if mode == QUICK_AUTO
+                else self._cozy_end()
+                if mode == QUICK_COZY
+                else self._quick_end()
+            )
+            if (
+                mode not in (QUICK_AUTO, QUICK_MAINTENANCE, QUICK_COZY)
+                and source != "Push-Meldung"
+            ):
                 self._record_habit(mode, QUICK_LABELS.get(mode, mode))
         # A tap on the dashboard should act at once, not after the debounce.
         await self.async_refresh()
@@ -1749,10 +1763,20 @@ class DynamicHeatingCoordinator(
             return None
         return self._next_event
 
+    def _cozy_end(self) -> datetime:
+        """When a "Wohlfühlen" started now ends: its own duration."""
+        try:
+            seconds = int(
+                self.config.get(CONF_COZY_DURATION) or DEFAULT_COZY_DURATION
+            )
+        except (TypeError, ValueError):
+            seconds = DEFAULT_COZY_DURATION
+        return dt_util.utcnow() + timedelta(seconds=max(seconds, 60))
+
     async def async_set_quick_duration(self, duration: str) -> None:
         """Choose how long a hand-picked mode holds; a running one is re-timed."""
         self.quick_duration = duration
-        if self.quick_mode != QUICK_AUTO:
+        if self.quick_mode not in (QUICK_AUTO, QUICK_COZY):
             self.quick_until = self._quick_end()
         await self.async_refresh()
 
@@ -1820,6 +1844,7 @@ class DynamicHeatingCoordinator(
                 CONF_ACTIVITY_TEMPERATURE,
                 DEFAULT_ACTIVITY_TEMPERATURE,
             ),
+            (QUICK_COZY, "Wohlfühlen", CONF_COZY_TEMPERATURE, DEFAULT_COZY_TEMPERATURE),
         ):
             if self.quick_mode == mode:
                 value = self.config.get(key)

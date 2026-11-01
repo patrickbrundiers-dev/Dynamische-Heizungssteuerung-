@@ -38,7 +38,8 @@ from .select import device_info
 
 # Quick modes offered as presets. Their keys are Home Assistant's standard
 # presets (comfort, home, activity, eco, sleep, away, boost), so cards and
-# voice assistants know them; Automatik is "none".
+# voice assistants know them; Automatik is "none". The others (cozy,
+# maintenance) get their German names from the entity translations.
 _PRESETS = [mode for mode in QUICK_MODES if mode not in (QUICK_AUTO, QUICK_OFF)]
 
 
@@ -56,6 +57,7 @@ class RoomClimate(CoordinatorEntity[DynamicHeatingCoordinator], ClimateEntity):
 
     _attr_has_entity_name = True
     _attr_name = None
+    _attr_translation_key = "room"
     _attr_icon = "mdi:home-thermometer"
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
