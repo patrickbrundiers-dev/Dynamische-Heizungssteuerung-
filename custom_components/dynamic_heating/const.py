@@ -236,6 +236,10 @@ QUICK_AWAY: Final = "away"
 QUICK_SLEEP: Final = "sleep"
 QUICK_HOME: Final = "home"
 QUICK_ACTIVITY: Final = "activity"
+# "Wohlfühlen": a warmer room for a while (e.g. heated ahead for the
+# evening), with its own temperature and duration. Deliberately named like
+# the other presets; it is not learned as a habit.
+QUICK_COZY: Final = "cozy"
 # A temperature set on the room thermostat entity; it holds like the other
 # modes for the chosen duration. Not offered as a button.
 QUICK_MANUAL: Final = "manual"
@@ -247,6 +251,7 @@ QUICK_MODES: Final = (
     QUICK_COMFORT,
     QUICK_HOME,
     QUICK_ACTIVITY,
+    QUICK_COZY,
     QUICK_ECO,
     QUICK_SLEEP,
     QUICK_AWAY,
@@ -260,6 +265,7 @@ QUICK_LABELS: Final = {
     QUICK_COMFORT: "Komfort",
     QUICK_HOME: "Zuhause",
     QUICK_ACTIVITY: "Aktivität",
+    QUICK_COZY: "Wohlfühlen",
     QUICK_ECO: "Eco",
     QUICK_SLEEP: "Schlafen",
     QUICK_AWAY: "Abwesend",
@@ -273,6 +279,7 @@ QUICK_ICONS: Final = {
     QUICK_COMFORT: "mdi:sofa",
     QUICK_HOME: "mdi:home",
     QUICK_ACTIVITY: "mdi:run",
+    QUICK_COZY: "mdi:white-balance-sunny",
     QUICK_ECO: "mdi:leaf",
     QUICK_SLEEP: "mdi:bed",
     QUICK_AWAY: "mdi:home-export-outline",
@@ -291,6 +298,10 @@ CONF_ACTIVITY_TEMPERATURE: Final = "activity_temperature"
 DEFAULT_SLEEP_TEMPERATURE: Final = 18.0
 DEFAULT_HOME_TEMPERATURE: Final = 20.0
 DEFAULT_ACTIVITY_TEMPERATURE: Final = 22.0
+CONF_COZY_TEMPERATURE: Final = "cozy_temperature"
+CONF_COZY_DURATION: Final = "cozy_duration"
+DEFAULT_COZY_TEMPERATURE: Final = 23.0
+DEFAULT_COZY_DURATION: Final = 10800
 # How long a hand-picked Komfort/Eco/Aus holds.
 QUICK_UNTIL_SCHEDULE: Final = "schedule"
 QUICK_UNTIL_1H: Final = "1h"
@@ -514,6 +525,8 @@ SETTINGS_GROUPS: Final = {
         CONF_HOME_TEMPERATURE,
         CONF_ACTIVITY_TEMPERATURE,
         CONF_SLEEP_TEMPERATURE,
+        CONF_COZY_TEMPERATURE,
+        CONF_COZY_DURATION,
         CONF_MAX_PREHEAT_MINUTES,
     ),
     "windows": (

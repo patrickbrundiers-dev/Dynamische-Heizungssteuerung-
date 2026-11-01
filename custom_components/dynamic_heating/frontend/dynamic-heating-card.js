@@ -13,6 +13,7 @@ const ICONS = {
   Komfort: "mdi:sofa",
   Zuhause: "mdi:home",
   "Aktivität": "mdi:run",
+  "Wohlfühlen": "mdi:white-balance-sunny",
   Eco: "mdi:leaf",
   Schlafen: "mdi:bed",
   Abwesend: "mdi:home-export-outline",

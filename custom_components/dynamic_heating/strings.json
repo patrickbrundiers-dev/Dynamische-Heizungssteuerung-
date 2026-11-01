@@ -209,6 +209,8 @@
           "home_temperature": "Temperatur „Zuhause“",
           "activity_temperature": "Temperatur „Aktivität“",
           "sleep_temperature": "Temperatur „Schlafen“",
+          "cozy_temperature": "Temperatur „Wohlfühlen“",
+          "cozy_duration": "Dauer „Wohlfühlen“",
           "warm_up_step": "Kurz wärmer: um so viel anheben",
           "warm_up_duration": "Kurz wärmer: so lange",
           "manual_max_temperature": "Höchstwert für Handänderungen",
@@ -226,6 +228,8 @@
           "home_temperature": "Solltemperatur der Taste bzw. Betriebsart „Zuhause“ (wie das Preset „Home“ von Better Thermostat).",
           "activity_temperature": "Solltemperatur der Taste bzw. Betriebsart „Aktivität“ (wie das Preset „Activity“ von Better Thermostat).",
           "sleep_temperature": "Solltemperatur der Taste bzw. Betriebsart „Schlafen“ (wie das Preset „Sleep“ von Better Thermostat). „Abwesend“ nutzt die Abwesenheitstemperatur, ohne sie die Eco-Temperatur.",
+          "cozy_temperature": "Solltemperatur der Taste bzw. Betriebsart „Wohlfühlen“: der Raum wird darauf aufgeheizt und hält sie.",
+          "cozy_duration": "So lange gilt „Wohlfühlen“, unabhängig von der Betriebsart-Dauer; danach geht der Raum von selbst zurück in Automatik.",
           "warm_up_step": "Die Taste „Kurz wärmer“ (auch per Alexa) hebt das aktuelle Ziel um diesen Wert an. Nochmals drücken legt einen weiteren Schritt drauf (höchstens drei).",
           "warm_up_duration": "Danach geht der Raum von selbst zurück in Automatik.",
           "manual_max_temperature": "Wird am Ventil, in der App oder am Raum-Thermostat mehr eingestellt, regelt der Raum nur bis zu diesem Wert. Leer = keine Grenze.",
@@ -518,6 +522,29 @@
         "include_house": {
           "name": "Haus mit",
           "description": "Auch Haus-Werte (Heizzeiten der Therme, Stufen) zurückholen. Standard: nur wenn alle Räume zurückgeholt werden."
+        }
+      }
+    }
+  },
+  "entity": {
+    "climate": {
+      "room": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "comfort": "Komfort",
+              "home": "Zuhause",
+              "activity": "Aktivität",
+              "cozy": "Wohlfühlen",
+              "eco": "Eco",
+              "sleep": "Schlafen",
+              "away": "Abwesend",
+              "boost": "Boost",
+              "maintenance": "Wartung",
+              "manual": "Manuell",
+              "none": "Automatik"
+            }
+          }
         }
       }
     }

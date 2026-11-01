@@ -209,6 +209,8 @@
           "home_temperature": "\"Home\" temperature",
           "activity_temperature": "\"Activity\" temperature",
           "sleep_temperature": "\"Sleep\" temperature",
+          "cozy_temperature": "\"Wohlfühlen\" temperature",
+          "cozy_duration": "\"Wohlfühlen\" duration",
           "warm_up_step": "Warm up: raise by",
           "warm_up_duration": "Warm up: for",
           "manual_max_temperature": "Maximum for manual changes",
@@ -226,6 +228,8 @@
           "home_temperature": "Target of the \"Zuhause\" (home) button and mode, like Better Thermostat's home preset.",
           "activity_temperature": "Target of the \"Aktivität\" (activity) button and mode, like Better Thermostat's activity preset.",
           "sleep_temperature": "Target of the \"Schlafen\" (sleep) button and mode, like Better Thermostat's sleep preset. \"Abwesend\" (away) uses the away temperature, or eco without one.",
+          "cozy_temperature": "Target of the \"Wohlfühlen\" button and mode: the room heats up to it and holds it.",
+          "cozy_duration": "How long \"Wohlfühlen\" holds, regardless of the Betriebsart duration; then the room returns to automatic control.",
           "warm_up_step": "The \"Kurz wärmer\" button (also via Alexa) raises the current target by this much. Pressing again adds another step (at most three).",
           "warm_up_duration": "Afterwards the room returns to automatic on its own.",
           "manual_max_temperature": "A higher value set at the valve, in the app or on the room thermostat is capped at this. Empty = no cap.",
@@ -518,6 +522,29 @@
         "include_house": {
           "name": "Include house",
           "description": "Also restore house values (boiler hours, levels). Default: only when all rooms are restored."
+        }
+      }
+    }
+  },
+  "entity": {
+    "climate": {
+      "room": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "comfort": "Comfort",
+              "home": "Home",
+              "activity": "Activity",
+              "cozy": "Wohlfühlen",
+              "eco": "Eco",
+              "sleep": "Sleep",
+              "away": "Away",
+              "boost": "Boost",
+              "maintenance": "Maintenance",
+              "manual": "Manual",
+              "none": "Automatic"
+            }
+          }
         }
       }
     }

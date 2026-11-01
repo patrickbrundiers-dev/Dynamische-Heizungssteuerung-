@@ -44,6 +44,7 @@ from .const import (
     HOUSE_VACATION,
     LEVELS,
     QUICK_AUTO,
+    QUICK_COZY,
     QUICK_MORNING_HOUR,
     QUICK_SLEEP,
 )
@@ -839,6 +840,9 @@ class HouseManager:
         for room in self.rooms():
             data = room.data or {}
             if not room.enabled or not data.get("schedule_active"):
+                continue
+            if room.quick_mode == QUICK_COZY:
+                # A running "Wohlfühlen" was started on purpose for the evening.
                 continue
             end = room._next_event
             room.boost_until = None

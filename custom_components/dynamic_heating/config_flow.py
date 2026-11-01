@@ -95,6 +95,8 @@ from .const import (
     CONF_ADDITIONAL_CLIMATE_ENTITIES,
     CONF_AWAY_TEMPERATURE,
     CONF_BOOST_DURATION,
+    CONF_COZY_DURATION,
+    CONF_COZY_TEMPERATURE,
     CONF_NOTIFY_SERVICE,
     CONF_NOTIFY_AWAY,
     CONF_PREHEAT_EXTENSION,
@@ -131,6 +133,8 @@ from .const import (
     CONF_SLEEP_TEMPERATURE,
     DEFAULT_ACTIVITY_TEMPERATURE,
     DEFAULT_BOOST_DURATION,
+    DEFAULT_COZY_DURATION,
+    DEFAULT_COZY_TEMPERATURE,
     DEFAULT_BOOST_TEMPERATURE,
     DEFAULT_HOME_TEMPERATURE,
     DEFAULT_SLEEP_TEMPERATURE,
@@ -231,6 +235,7 @@ _DURATION_OPTIONS = (
     CONF_WINDOW_OPEN_DELAY,
     CONF_WINDOW_CLOSE_DELAY,
     CONF_BOOST_DURATION,
+    CONF_COZY_DURATION,
     CONF_FROST_AFTER_ABSENCE,
     CONF_DOOR_OPEN_DELAY,
     CONF_DOOR_CLOSE_DELAY,
@@ -854,6 +859,15 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 )
             },
             vol.Optional(
+                CONF_COZY_TEMPERATURE,
+                default=float(
+                    current.get(CONF_COZY_TEMPERATURE, DEFAULT_COZY_TEMPERATURE)
+                ),
+            ): _temperature_selector(16, 26),
+            self._duration_field(
+                CONF_COZY_DURATION, current, DEFAULT_COZY_DURATION
+            )[0]: _duration_selector(),
+            vol.Optional(
                 CONF_WARM_UP_STEP,
                 default=float(current.get(CONF_WARM_UP_STEP, DEFAULT_WARM_UP_STEP)),
             ): _degrees_selector(3, 0.5),
@@ -1185,6 +1199,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             )
             for key, default in (
                 (CONF_BOOST_DURATION, DEFAULT_BOOST_DURATION),
+                (CONF_COZY_DURATION, DEFAULT_COZY_DURATION),
                 (CONF_WARM_UP_DURATION, DEFAULT_WARM_UP_DURATION),
             ):
                 current[key] = _duration_to_seconds(

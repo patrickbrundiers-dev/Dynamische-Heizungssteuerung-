@@ -16,6 +16,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_COZY_TEMPERATURE,
+    DEFAULT_COZY_TEMPERATURE,
     CONF_ENTRY_TYPE,
     ENTRY_TYPE_HOUSE,
     LEVELS,
@@ -53,6 +55,8 @@ _TEMPERATURES = (
      DEFAULT_ACTIVITY_TEMPERATURE),
     (CONF_SLEEP_TEMPERATURE, "Schlafen-Temperatur", "mdi:bed", 5.0, 30.0,
      DEFAULT_SLEEP_TEMPERATURE),
+    (CONF_COZY_TEMPERATURE, "Wohlfühlen-Temperatur", "mdi:white-balance-sunny",
+     16.0, 26.0, DEFAULT_COZY_TEMPERATURE),
     (CONF_BOOST_TEMPERATURE, "Boost-Temperatur", "mdi:fire", 16.0, 30.0,
      DEFAULT_BOOST_TEMPERATURE),
 )
