@@ -792,6 +792,15 @@ def aggressive_setpoint(
     return target
 
 
+def full_open_needed(
+    target: float, room_temperature: float, below: float | None
+) -> bool:
+    """Whether the room is so far below its target that valves open fully."""
+    if below is None:
+        return False
+    return room_temperature < target - below
+
+
 def select_schedule(
     schedules: list[tuple[str, str]], choice: str | None
 ) -> str:

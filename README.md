@@ -305,6 +305,7 @@ Die Fensterwerte stehen im Raum-Editor auf der Seite **Fenster, Außentemperatur
 - **Betriebsart Wartung**: Öffnet alle Ventile voll (Thermostat-Maximum), auch bei offenem Fenster und außerhalb der Heizperiode, z. B. für Thermenwartung oder Schornsteinfeger. Gilt für die Betriebsart-Dauer.
 - **Ereignis `dynamic_heating_mode_changed`**: Bei jedem Wechsel von Modus oder Sollwert, mit `room`, `mode`, `previous_mode`, `target_temperature`, `status`, `present`, `window_open`, `active_schedule` und `quick_mode`.
 - **Aggressiv-Modus**: Liegt der Raum weiter als der eingestellte Bereich unter oder über dem Soll, wird Soll plus bzw. minus Versatz an die Ventile gesendet. Angezeigt wird weiter der eigentliche Sollwert. Standardmäßig aus.
+- **Ventile ganz öffnen**: Liegt der Raum um mehr als den eingestellten Wert (z. B. 1 °C) unter dem Soll, bekommen die Ventile ihre Höchsttemperatur und öffnen ganz. Proportionale Ventile wie Aqara E1 öffnen bei Soll plus ein paar Grad sonst nur einen Spalt, und der Heizkörper bleibt unten kalt. Kurz vor dem Ziel wird wieder normal geregelt. Der Status zeigt dann „Ventile ganz offen“. Standardmäßig aus.
 - **Fenstererkennung der Thermostate abschalten**: Bei aktiver Regelung und vorhandenem Fensterkontakt schaltet die Integration die eigenen Fenstererkennungs-Schalter der Thermostate (`…_window_detection`, z. B. Aqara E1) aus.
 
 ## Version 0.7.0: Ideen aus Better Thermostat und Climate Group Helper

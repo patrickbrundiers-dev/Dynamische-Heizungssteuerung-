@@ -3007,6 +3007,43 @@ async def test_aggressive_mode_pushes_the_sent_setpoint(
 
 
 @pytest.mark.asyncio
+async def test_far_below_the_target_the_valves_open_fully(
+    hass, enable_custom_integrations
+):
+    """More than the set margin below the target, the valve gets its maximum."""
+    _set_up_test_entities(hass)
+    _comfort_now(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["full_open_below"] = 0.5
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert coordinator.data["target_temperature"] == 21.0
+    assert coordinator.data["full_open"] is True
+    assert coordinator.data["status"].endswith("Ventile ganz offen")
+    maximum = hass.states.get("climate.living_room").attributes.get("max_temp", 30.0)
+    assert [call[2]["temperature"] for call in calls] == [maximum]
+
+
+@pytest.mark.asyncio
+async def test_opening_fully_can_be_turned_off(hass, enable_custom_integrations):
+    """Without a margin the normal setpoint goes out."""
+    _set_up_test_entities(hass)
+    _comfort_now(hass)
+    _, coordinator = await _setup_integration(hass)
+    coordinator.config["full_open_below"] = None
+
+    with _capture_climate_calls(hass) as calls:
+        coordinator.enabled = True
+        await coordinator.async_refresh()
+
+    assert coordinator.data["full_open"] is False
+    assert [call[2]["temperature"] for call in calls] == [21.0]
+
+
+@pytest.mark.asyncio
 async def test_thermostat_window_detection_is_turned_off(
     hass, enable_custom_integrations
 ):

@@ -384,6 +384,10 @@ CONF_ECO_SCHEDULE_ENTITY: Final = "eco_schedule_entity"
 CONF_AGGRESSIVE_RANGE: Final = "aggressive_range"
 CONF_AGGRESSIVE_OFFSET: Final = "aggressive_offset"
 DEFAULT_AGGRESSIVE_OFFSET: Final = 2.0
+# Far below the target the valves get their maximum, so they open fully.
+# Proportional valves (Aqara E1) open only a little at target plus a few
+# degrees, and the radiator stays lukewarm. Off unless a margin is set.
+CONF_FULL_OPEN_BELOW: Final = "full_open_below"
 
 # Turn off the thermostats' own window detection when the room has a window
 # contact, so a valve does not close on its own while the room should heat.
@@ -565,6 +569,7 @@ SETTINGS_GROUPS: Final = {
         CONF_LOCK_VALVES,
         CONF_AGGRESSIVE_RANGE,
         CONF_AGGRESSIVE_OFFSET,
+        CONF_FULL_OPEN_BELOW,
         CONF_COMMAND_DELAY,
         CONF_VALVE_MAINTENANCE,
         CONF_MAINTENANCE_WEEKDAY,
