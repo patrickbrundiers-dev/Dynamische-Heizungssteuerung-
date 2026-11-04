@@ -218,6 +218,10 @@ def test_radiator_test_verdicts():
     assert "B +0,2 K" in text
     assert radiator_test_verdict({}, 0.3, None)[0] == TEST_WARM
     assert radiator_test_verdict({"Ventil": None}, None, None)[0] == "no_data"
+    # A valve sensor that does not move while the room clearly warms up.
+    code, text = radiator_test_verdict({"A": 0.0, "B": 0.0}, 0.29, True)
+    assert code == TEST_WARM
+    assert "Ventilfühler" in text
 
 
 @pytest.mark.asyncio

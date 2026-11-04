@@ -619,6 +619,13 @@ def radiator_test_verdict(
             TEST_NO_SUPPLY,
             "Die Zentralheizung lieferte gerade keine Wärme – Test bitte später wiederholen.",
         )
+    if not warm and room_rise is not None and room_rise >= RADIATOR_TEST_ROOM_RISE:
+        # Some valves (Aqara E1) report a coarse chip temperature that hardly
+        # moves; a room that clearly warms up means the heat arrives.
+        return TEST_WARM, (
+            f"Der Raum wird wärmer{room_text}; der Ventilfühler zeigt die "
+            "Heizkörperwärme nicht an."
+        )
     if warm:
         return TEST_COLD, (
             f"Nur ein Teil wird warm ({rises(warm)}); kalt bleibt {rises(cold)}: "
