@@ -83,6 +83,7 @@ from .const import (
     CONF_ADDITIONAL_SCHEDULE_ENTITIES,
     CONF_AGGRESSIVE_OFFSET,
     CONF_AGGRESSIVE_RANGE,
+    CONF_FULL_OPEN_BELOW,
     CONF_AWAY_OFFSET,
     CONF_AWAY_SCHEDULE_MODE,
     CONF_DISABLE_TRV_WINDOW_DETECTION,
@@ -807,6 +808,7 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                     current.get(CONF_AGGRESSIVE_OFFSET, DEFAULT_AGGRESSIVE_OFFSET)
                 ),
             ): _degrees_selector(5, 0.5),
+            vol.Optional(CONF_FULL_OPEN_BELOW): _degrees_selector(5, 0.5),
             vol.Optional(
                 CONF_VALVE_FALLBACK,
                 default=bool(current.get(CONF_VALVE_FALLBACK, DEFAULT_VALVE_FALLBACK)),
@@ -1160,6 +1162,8 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             current.update(user_input)
             # An empty range turns aggressive mode off.
             current[CONF_AGGRESSIVE_RANGE] = user_input.get(CONF_AGGRESSIVE_RANGE)
+            # An empty value turns opening fully off.
+            current[CONF_FULL_OPEN_BELOW] = user_input.get(CONF_FULL_OPEN_BELOW)
             current[CONF_MAINTENANCE_DURATION] = _duration_to_seconds(
                 user_input.get(
                     CONF_MAINTENANCE_DURATION,

@@ -176,6 +176,7 @@
           "lock_valves": "Ventile sperren",
           "aggressive_range": "Aggressiv-Modus: Bereich (°C, optional)",
           "aggressive_offset": "Aggressiv-Modus: Versatz",
+          "full_open_below": "Ventile ganz öffnen ab (°C zu kalt, optional)",
           "valve_fallback": "Notprogramm im Ventil beim Herunterfahren",
           "valve_sensor_calibration": "Ventilfühler auf Raumtemperatur kalibrieren",
           "radiator_power": "Heizkörperleistung für den Wärmezähler"
@@ -193,6 +194,7 @@
           "lock_valves": "Wird an einem Thermostat gedreht, stellt die Regelung den Sollwert des Raums sofort wieder her (wie die Kindersicherung von Better Thermostat oder der Sperr-Modus von Climate Group Helper). Hat Vorrang vor „Drehen am Ventil gilt für den Raum“.",
           "aggressive_range": "Liegt der Raum um mehr als diesen Wert unter oder über dem Soll, wird Soll plus bzw. minus Versatz gesendet, damit träge Ventile deutlich öffnen oder schließen. Leer lassen zum Abschalten.",
           "aggressive_offset": "Um so viel wird der gesendete Sollwert außerhalb des Bereichs angehoben oder abgesenkt.",
+          "full_open_below": "Liegt der Raum um mehr als diesen Wert unter dem Soll, bekommen die Ventile ihre Höchsttemperatur und öffnen ganz. Hilft bei Ventilen wie Aqara E1, die sonst nur einen Spalt öffnen und den Heizkörper lauwarm lassen. Leer lassen zum Abschalten.",
           "valve_fallback": "Beim Herunterfahren von Home Assistant bekommen Ventile mit eigenem Zeitplan (z. B. Aqara E1) die Komfort- und Eco-Zeiten von heute und regeln auf ihren eigenen Fühler. Nach dem Start schaltet die Integration das wieder aus. Bei Stromausfall oder Absturz greift es nicht.",
           "valve_sensor_calibration": "Für Ventile ohne Eingang für die Raumtemperatur (z. B. Tuya): die Integration stellt die Kalibrierung im Ventil so ein, dass es ungefähr die Raumtemperatur misst. Wichtig für das Notprogramm im Ventil.",
           "radiator_power": "Leistung aller Heizkörper des Raums bei voll offenem Ventil, z. B. vom Typenschild oder Datenblatt (bei Zentralheizung eher 60 % der Normleistung). 0 = geschätzt mit 1000 W je Thermostat. Der Wärmezähler ist eine Schätzung, kein geeichter Zähler."

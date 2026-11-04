@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from custom_components.dynamic_heating.logic import (
     TrendSample,
     aggressive_setpoint,
+    full_open_needed,
     calendar_temperature,
     temperature_trend,
     select_schedule,
@@ -763,3 +764,10 @@ def test_maintenance_on_a_weekday() -> None:
     assert not valve_maintenance_due(
         monday - timedelta(hours=1), monday, 11, 7, 11, 0, 0
     )
+
+
+def test_full_open_only_far_below_the_target() -> None:
+    assert full_open_needed(20.0, 18.6, 1.0) is True
+    assert full_open_needed(20.0, 19.0, 1.0) is False
+    assert full_open_needed(20.0, 19.5, 1.0) is False
+    assert full_open_needed(20.0, 15.0, None) is False

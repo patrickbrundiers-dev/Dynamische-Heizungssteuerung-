@@ -78,6 +78,7 @@ from .const import (
     VALVE_OFFSET_MIN,
     CONF_ADDITIONAL_SCHEDULE_ENTITIES,
     CONF_AGGRESSIVE_OFFSET,
+    CONF_FULL_OPEN_BELOW,
     CONF_AGGRESSIVE_RANGE,
     CONF_AWAY_OFFSET,
     CONF_AWAY_SCHEDULE_MODE,
@@ -85,6 +86,7 @@ from .const import (
     CONF_FROST_AFTER_ABSENCE,
     CONF_SYNC_MANUAL_CHANGE,
     DEFAULT_AGGRESSIVE_OFFSET,
+    ROOM_MAX_TEMPERATURE,
     DEFAULT_FROST_AFTER_ABSENCE,
     DEFAULT_SYNC_MANUAL_CHANGE,
     QUICK_MAINTENANCE,
@@ -184,6 +186,7 @@ from .logic import (
     description_value,
     temperature_trend,
     aggressive_setpoint,
+    full_open_needed,
     select_schedule,
     apply_hysteresis,
     calibration_offset,
@@ -899,6 +902,17 @@ class DynamicHeatingCoordinator(
             return None
         return value if math.isfinite(value) else None
 
+    @classmethod
+    def _valve_maximum(cls, climate_state: State) -> float:
+        """The highest setpoint a thermostat takes: it then opens fully."""
+        try:
+            maximum = float(climate_state.attributes.get("max_temp"))
+        except (TypeError, ValueError):
+            maximum = ROOM_MAX_TEMPERATURE
+        if not math.isfinite(maximum):
+            maximum = ROOM_MAX_TEMPERATURE
+        return cls._fit_to_thermostat(maximum, climate_state)
+
     @staticmethod
     def _fit_to_thermostat(target: float, climate_state: State) -> float:
         """Clamp to the thermostat limits and round to its setpoint step.
@@ -1563,8 +1577,19 @@ class DynamicHeatingCoordinator(
                 ),
             )
             result["aggressive_setpoint"] = sent
+        below = self.config.get(CONF_FULL_OPEN_BELOW)
+        full_open = calibrate and full_open_needed(
+            target, room_temperature, None if below is None else float(below)
+        )
+        result["full_open"] = full_open
         setpoints: dict[str, float] = {}
         for entity_id, state in active.items():
+            if full_open:
+                setpoint = self._valve_maximum(state)
+                setpoints[entity_id] = setpoint
+                if not await self._write_setpoint(entity_id, state, setpoint, now):
+                    failed = True
+                continue
             setpoint = self._fit_to_thermostat(
                 self._calibrated(entity_id, state, sent, room_temperature, now)
                 + self.valve_offsets.get(entity_id, 0.0)
@@ -1576,6 +1601,8 @@ class DynamicHeatingCoordinator(
             if not await self._write_setpoint(entity_id, state, setpoint, now):
                 failed = True
         result["thermostat_setpoints"] = setpoints
+        if full_open and not failed:
+            result["status"] = f"{result['status']} – Ventile ganz offen"
         self._track_divergence(active, now)
         result["valve_divergence"] = dict(self._divergence)
         if failed:
