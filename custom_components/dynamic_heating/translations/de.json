@@ -101,11 +101,13 @@
         "description": "Legt den Hausmodus (Zuhause, Abwesend, Urlaub), das Urlaubsende und eine Übersicht aller Räume an.",
         "data": {
           "notify_service": "Benachrichtigungsdienst (optional)",
-          "house_calendar": "Haus-Kalender (optional)"
+          "house_calendar": "Haus-Kalender (optional)",
+          "bed_sensors": "Bett- oder Schlafsensoren (optional)"
         },
         "data_description": {
           "notify_service": "Für den Wochenbericht, z. B. notify.mobile_app_patrick.",
-          "house_calendar": "Kalender oder Zeitplan fürs ganze Haus. Ein laufender Termin wählt in jedem Raum den Zeitplan, den sein Titel oder „zeitplan: Ferien“ nennt. Mit „komfort: an“ oder „temperature: 21“ in der Beschreibung ist er in allen Räumen Komfortzeit."
+          "house_calendar": "Kalender oder Zeitplan fürs ganze Haus. Ein laufender Termin wählt in jedem Raum den Zeitplan, den sein Titel oder „zeitplan: Ferien“ nennt. Mit „komfort: an“ oder „temperature: 21“ in der Beschreibung ist er in allen Räumen Komfortzeit.",
+          "bed_sensors": "Melder am Bett oder im Schlafzimmer. Sind sie am Abend 20 Minuten an, gilt das als Schlafenszeit; daraus und aus „Gute Nacht“ lernt das Haus die übliche Schlafenszeit je Wochentag."
         }
       }
     },
@@ -361,11 +363,13 @@
         "title": "Haus-Einstellungen",
         "data": {
           "notify_service": "Benachrichtigungsdienst (optional)",
-          "house_calendar": "Haus-Kalender (optional)"
+          "house_calendar": "Haus-Kalender (optional)",
+          "bed_sensors": "Bett- oder Schlafsensoren (optional)"
         },
         "data_description": {
           "notify_service": "Für den Wochenbericht, z. B. notify.mobile_app_patrick.",
-          "house_calendar": "Kalender oder Zeitplan fürs ganze Haus. Ein laufender Termin wählt in jedem Raum den Zeitplan, den sein Titel oder „zeitplan: Ferien“ nennt. Mit „komfort: an“ oder „temperature: 21“ in der Beschreibung ist er in allen Räumen Komfortzeit."
+          "house_calendar": "Kalender oder Zeitplan fürs ganze Haus. Ein laufender Termin wählt in jedem Raum den Zeitplan, den sein Titel oder „zeitplan: Ferien“ nennt. Mit „komfort: an“ oder „temperature: 21“ in der Beschreibung ist er in allen Räumen Komfortzeit.",
+          "bed_sensors": "Melder am Bett oder im Schlafzimmer. Sind sie am Abend 20 Minuten an, gilt das als Schlafenszeit; daraus und aus „Gute Nacht“ lernt das Haus die übliche Schlafenszeit je Wochentag."
         }
       },
       "house_menu": {
@@ -406,7 +410,10 @@
           "cold_comfort_boost": "Komfort bei Frost anheben um bis zu (0 = aus)",
           "departure_stop": "Vor dem üblichen Weggehen früher abschalten",
           "solar_forecast": "Sonnige Stunden einplanen (Wettervorhersage)",
-          "unusual_notify": "Ungewöhnlichen Wärmeverlust melden"
+          "unusual_notify": "Ungewöhnlichen Wärmeverlust melden",
+          "cold_snap": "Kälteeinbruch hebt die Heizgrenze auf",
+          "frost_night_setback": "In Frostnächten nur halb absenken",
+          "facade": "Himmelsrichtung der Fenster (optional)"
         },
         "data_description": {
           "recovery_limit": "Außerhalb der Komfortzeit muss der Raum innerhalb der maximalen Vorheizzeit wieder warm werden.",
@@ -421,7 +428,10 @@
           "cold_comfort_boost": "Bei Frost sind die Wände kälter und es fühlt sich kühler an. Ab +5 °C außen steigt die Komforttemperatur gleichmäßig bis zu diesem Wert bei −10 °C. Eco bleibt gleich.",
           "departure_stop": "Die Integration lernt, wann das Haus an welchem Wochentag meist leer wird (Sensor „Übliches Weggehen“ am Haus). Bis zu 60 Minuten vorher heizt sie nicht mehr nach, wenn der Raum laut Raummodell bis dahin höchstens 0,5 °C verliert. Bleibt jemand länger, wird wieder geheizt.",
           "solar_forecast": "Nur mit Sonneneinstrahlungs-Sensor und einem sicheren Raummodell, das auf Sonne reagiert. Bringt die vorhergesagte Sonne der nächsten zwei Stunden den Raum allein ans Ziel, wird vorher nur bis 0,5 °C darunter geheizt.",
-          "unusual_notify": "Verliert der Raum über zwei Stunden viel mehr Wärme als das Raummodell erwartet (gekipptes Fenster, offene Tür) oder wird er mit offenem Ventil kaum warm (kalter Heizkörper), kommt höchstens einmal am Tag eine Meldung, nicht zwischen 22 und 7 Uhr."
+          "unusual_notify": "Verliert der Raum über zwei Stunden viel mehr Wärme als das Raummodell erwartet (gekipptes Fenster, offene Tür) oder wird er mit offenem Ventil kaum warm (kalter Heizkörper), kommt höchstens einmal am Tag eine Meldung, nicht zwischen 22 und 7 Uhr.",
+          "cold_snap": "Liegt die gemessene Außentemperatur der letzten 6 Stunden mindestens 5 °C unter der Heizgrenze, während die Vorhersage noch warm ist, wird trotzdem geheizt (bis sie wieder höher als 3 °C unter der Grenze liegt).",
+          "frost_night_setback": "Sind in den nächsten 12 Stunden −5 °C oder kälter vorhergesagt, gilt außerhalb der Komfortzeit die Mitte zwischen Eco und Komfort. Wände kühlen weniger aus, morgens wird es sicherer pünktlich warm.",
+          "facade": "Die Sonne zählt (Heizpause bei Sonne, „Sonne erwartet“, kürzeres Vorheizen) nur, wenn sie wirklich auf diese Wand scheint. Leer = wie bisher."
         }
       }
     },
@@ -444,6 +454,18 @@
         "presence": "Anwesenheit, Geo-Fencing, Erzwingen",
         "valves": "Ventile, Kalibrierung und Wartung",
         "outdoor": "Außentemperatur, Heizgrenze, Benachrichtigung"
+      }
+    },
+    "facade": {
+      "options": {
+        "N": "Norden",
+        "NO": "Nordosten",
+        "O": "Osten",
+        "SO": "Südosten",
+        "S": "Süden",
+        "SW": "Südwesten",
+        "W": "Westen",
+        "NW": "Nordwesten"
       }
     }
   },
@@ -524,6 +546,34 @@
         "include_house": {
           "name": "Haus mit",
           "description": "Auch Haus-Werte (Heizzeiten der Therme, Stufen) zurückholen. Standard: nur wenn alle Räume zurückgeholt werden."
+        }
+      }
+    },
+    "why": {
+      "name": "Warum heizt der Raum (nicht)?",
+      "description": "Listet alle Voraussetzungen fürs Heizen mit ihrem Wert und sagt, was gerade den Ausschlag gibt. Ändert nichts.",
+      "fields": {
+        "entity_id": {
+          "name": "Raum",
+          "description": "Eine Entität des Raums, z. B. seine Betriebsart."
+        }
+      }
+    },
+    "decisions": {
+      "name": "Entscheidungen",
+      "description": "Was der Raum wann warum entschieden hat, mit Messwerten, neueste zuerst (bis 7 Tage).",
+      "fields": {
+        "entity_id": {
+          "name": "Raum",
+          "description": "Eine Entität des Raums, z. B. seine Betriebsart."
+        },
+        "days": {
+          "name": "Tage",
+          "description": "Wie weit zurück."
+        },
+        "area": {
+          "name": "Bereich",
+          "description": "Nur Einträge dieses Bereichs."
         }
       }
     }

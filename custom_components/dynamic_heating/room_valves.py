@@ -16,6 +16,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    DOMAIN,
     CONF_MAINTENANCE_DURATION,
     CONF_MAINTENANCE_HOUR,
     CONF_MAINTENANCE_WEEKDAY,
@@ -24,7 +25,15 @@ from .const import (
     EXTERNAL_TEMPERATURE_PLATEAU_TOLERANCE,
     MAINTENANCE_ANY_DAY,
     VALVE_DIVERGENCE_MIN,
+    VALVE_DIVERGENCE_RETRIES,
     VALVE_DIVERGENCE_SECONDS,
+    VALVE_FIXED_PRESETS,
+    VALVE_MANUAL_PRESETS,
+    VALVE_OFFSET_PRESETS,
+    VALVE_OPEN_PRESETS,
+    VALVE_PROGRAM_PRESETS,
+    VALVE_STATE_FIX_REPORT,
+    VALVE_STATE_FIX_SECONDS,
     VALVE_OFFSET_MAX,
     VALVE_OFFSET_MIN,
     CONF_EXTERNAL_TEMPERATURE,
@@ -51,6 +60,7 @@ from .const import (
     VALVE_MAINTENANCE_PHASE_SECONDS,
 )
 from .logic import (
+    valve_own_state,
     external_temperature_due,
     schedule_comfort_temperature,
     valve_maintenance_due,
@@ -827,13 +837,83 @@ class ValveMixin:
                 continue
             since = self._divergent_since.setdefault(entity_id, now)
             if (now - since).total_seconds() >= VALVE_DIVERGENCE_SECONDS:
+                tries = self._divergence_retries.get(entity_id, 0)
+                if tries < VALVE_DIVERGENCE_RETRIES:
+                    # Once more before it is reported: the command may have
+                    # been lost on the radio (Zigbee, a restart of Z2M).
+                    self._divergence_retries[entity_id] = tries + 1
+                    self._divergent_since[entity_id] = now
+                    self._written.pop(entity_id, None)
+                    self._log(
+                        f"{self._friendly_name(entity_id)} übernimmt den Sollwert "
+                        f"nicht ({current:.1f} statt {written.target:.1f} °C)"
+                        " – wird neu gesendet".replace(".", ",")
+                    )
+                    continue
                 divergence[entity_id] = (
                     f"{current:.1f} statt {written.target:.1f} °C".replace(".", ",")
                 )
         for entity_id in list(self._divergent_since):
             if entity_id not in active:
                 self._divergent_since.pop(entity_id)
+        for entity_id in list(self._divergence_retries):
+            if entity_id not in self._divergent_since:
+                self._divergence_retries.pop(entity_id)
         self._divergence = divergence
+
+    async def _fix_valve_states(self, active: dict[str, State], now: datetime) -> None:
+        """Set valves back that are in a state of their own (0.21.0).
+
+        A Tuya valve with preset "on" stays fully open, an own week program
+        ("auto") or a fixed preset ignores the setpoints. Such a valve is set
+        back to heat/manual, at most once per half hour; after two fixes in a
+        row without success it is reported as a thermostat problem.
+        """
+        if self._fallback_auto or self._fallback_armed:
+            # The valves' own program is in use on purpose (shutdown/start).
+            return
+        found: dict[str, str] = {}
+        registry = er.async_get(self.hass)
+        for entity_id, state in active.items():
+            entry = registry.async_get(entity_id)
+            if entry is not None and entry.platform == DOMAIN:
+                # A room thermostat of this integration: its presets are modes.
+                continue
+            fix = valve_own_state(
+                state.state,
+                state.attributes.get("hvac_modes"),
+                state.attributes.get("preset_mode"),
+                state.attributes.get("preset_modes"),
+                open_presets=VALVE_OPEN_PRESETS,
+                program_presets=VALVE_PROGRAM_PRESETS,
+                fixed_presets=VALVE_FIXED_PRESETS,
+                offset_presets=VALVE_OFFSET_PRESETS,
+                manual_presets=VALVE_MANUAL_PRESETS,
+            )
+            if fix is None:
+                self._valve_state_fixes.pop(entity_id, None)
+                continue
+            service, value, text = fix
+            last, count = self._valve_state_fixes.get(entity_id, (None, 0))
+            if count >= VALVE_STATE_FIX_REPORT:
+                found[entity_id] = text
+            if last is not None and (now - last).total_seconds() < VALVE_STATE_FIX_SECONDS:
+                continue
+            field = "preset_mode" if service == "set_preset_mode" else "hvac_mode"
+            self._valve_state_fixes[entity_id] = (now, count + 1)
+            if await self._call("climate", service, {"entity_id": entity_id, field: value}):
+                self._log(
+                    f"{self._friendly_name(entity_id)} stand auf {text} – "
+                    f"zurück auf {value} gestellt"
+                )
+                # The valve may jump to a stored setpoint on the switch; that
+                # is not a turn of the knob. Send the room's setpoint again.
+                self._mode_switched_at[entity_id] = now
+                self._written.pop(entity_id, None)
+        for entity_id in list(self._valve_state_fixes):
+            if entity_id not in active:
+                self._valve_state_fixes.pop(entity_id)
+        self._valve_own_state = found
 
     async def async_set_valve_skipped(self, entity_id: str, skipped: bool) -> None:
         """Leave one valve out of control (closed once) or take it back."""

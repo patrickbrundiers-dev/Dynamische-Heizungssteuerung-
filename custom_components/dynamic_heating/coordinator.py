@@ -20,6 +20,18 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    DECISIONS_KEEP,
+    CONF_FACADE,
+    COLD_SNAP_BELOW,
+    COLD_SNAP_HOURS,
+    COLD_SNAP_MIN_SPAN_SECONDS,
+    COLD_SNAP_RELEASE,
+    CONF_COLD_SNAP,
+    CONF_FROST_NIGHT_SETBACK,
+    DEFAULT_COLD_SNAP,
+    DEFAULT_FROST_NIGHT_SETBACK,
+    FROST_NIGHT_HOURS,
+    FROST_NIGHT_TEMPERATURE,
     CONF_COZY_DURATION,
     CONF_COZY_TEMPERATURE,
     DEFAULT_COZY_DURATION,
@@ -176,6 +188,9 @@ from .const import (
 )
 from .logic import (
     TrendSample,
+    evaluate_cold_snap,
+    frost_night_eco,
+    min_forecast_temperature,
     match_schedule,
     mean_forecast_temperature,
     mean_history_temperature,
@@ -242,6 +257,7 @@ from .room_util import (
 )
 from .room_presence import PresenceMixin
 from .room_windows import WindowMixin
+from .room_why import WhyMixin
 from .room_valves import ValveMixin
 from .room_supply import SupplyMixin
 from .room_learning import LearningMixin
@@ -251,6 +267,7 @@ from .room_insights import InsightsMixin
 
 
 class DynamicHeatingCoordinator(
+    WhyMixin,
     PresenceMixin,
     WindowMixin,
     ValveMixin,
@@ -298,6 +315,8 @@ class DynamicHeatingCoordinator(
         # Kept between updates so the heating limit releases with hysteresis.
         self._heating_limit_reached = False
         self._outdoor_warmer = False
+        # 0.21.0: cold snap (measured outdoor mean far below the limit).
+        self._cold_snap = False
         # Debounced window state, kept so the close delay can run out.
         self._window_open = False
         # Window detection from a temperature drop: recent room readings and
@@ -421,8 +440,17 @@ class DynamicHeatingCoordinator(
         self._outdoor_history: list[tuple[datetime, float]] = []
         # Per external input: a small change waiting to prove it is stable.
         self._external_pending: dict[str, tuple[float, datetime]] = {}
+        # 0.21.0: the room's decisions (persisted) and the last one noted.
+        self.decision_log: list[dict[str, Any]] = []
+        self._decision_key: tuple | None = None
         # Debounced state of each contact group (windows, doors, zone).
         self._contact_open: dict[str, bool] = {}
+        # 0.21.0: contact health (last change seen, recent changes, since when
+        # unavailable, current problem per contact).
+        self._contact_changed: dict[str, datetime] = {}
+        self._contact_flips: dict[str, list[datetime]] = {}
+        self._contact_unavailable_since: dict[str, datetime] = {}
+        self._contact_problems: dict[str, str] = {}
         # A room reading outside the plausible range (value, sensor) and
         # whether a Repairs issue is open for it.
         self._implausible: tuple[float, str] | None = None
@@ -430,6 +458,11 @@ class DynamicHeatingCoordinator(
         # Per valve: since when its setpoint differs from what was written.
         self._divergent_since: dict[str, datetime] = {}
         self._divergence: dict[str, str] = {}
+        # 0.21.0: resends per diverging valve, valves in a state of their own
+        # (last fix, fixes in a row) and the ones reported for it.
+        self._divergence_retries: dict[str, int] = {}
+        self._valve_state_fixes: dict[str, tuple[datetime | None, int]] = {}
+        self._valve_own_state: dict[str, str] = {}
         # Valves left out of control (persisted) and the ones already closed.
         self.skipped_valves: set[str] = set()
         self._skip_closed: set[str] = set()
@@ -645,6 +678,8 @@ class DynamicHeatingCoordinator(
                 **state,
                 "week": dict(self._week),
                 "heat_stats": self.heat_stats.as_dict(),
+                # Written along like the week (at most every 15 minutes).
+                "decisions": list(self.decision_log),
             }
             self._state_store.async_delay_save(lambda: data, 2)
 
@@ -739,6 +774,12 @@ class DynamicHeatingCoordinator(
         auto = stored.get("fallback_auto")
         if isinstance(auto, list):
             self._fallback_auto = [str(item) for item in auto]
+        decisions = stored.get("decisions")
+        if isinstance(decisions, list):
+            self.decision_log = [
+                item for item in decisions
+                if isinstance(item, dict) and isinstance(item.get("at"), str)
+            ][-DECISIONS_KEEP:]
         self.heat_stats = HeatStats.from_dict(stored.get("heat_stats"))
         week = stored.get("week")
         if isinstance(week, dict):
@@ -1560,6 +1601,8 @@ class DynamicHeatingCoordinator(
             result["status"] = "Thermostat ausgeschaltet – keine Sollwertänderung"
             return
 
+        await self._fix_valve_states(active, now)
+        result["valve_own_state"] = dict(self._valve_own_state)
         failed = False
         # Outside the heating season the valve stays at its minimum, and
         # maintenance opens it fully: neither is calibrated or pushed.
@@ -2165,6 +2208,10 @@ class DynamicHeatingCoordinator(
             self.last_change_at.isoformat() if self.last_change_at else None
         )
         result["thermostat_warnings"] = self._thermostat_warnings()
+        result["contact_problems"] = {
+            self._friendly_name(entity_id): text
+            for entity_id, text in self._contact_problems.items()
+        }
         result["heating_problem"] = self.heating_problem
         result["heating_problem_detail"] = self.heating_problem_detail
         result["heat_demand"], result["heat_demand_source"] = self._heat_demand(
@@ -2201,6 +2248,7 @@ class DynamicHeatingCoordinator(
             await self._save_learning()
         self._fire_triggers(result)
         self._track_week(result)
+        self._record_decision(result)
         self._save_runtime_state()
         return result
 
@@ -2323,6 +2371,7 @@ class DynamicHeatingCoordinator(
 
     def _log(self, message: str) -> None:
         """Write a line to the logbook of the room's status sensor."""
+        self._note_message(message)
         if not self.hass.services.has_service("logbook", "log"):
             return
         data: dict[str, Any] = {
@@ -2606,6 +2655,20 @@ class DynamicHeatingCoordinator(
                 else eco_temperature
             )
         forecast_items = await self._async_get_forecast_items()
+        # 0.21.0: in a frost night only half the setback, so walls cool less
+        # and the morning start after the boiler's night pause is safe.
+        frost_night: float | None = None
+        if not schedule_active and self.config.get(
+            CONF_FROST_NIGHT_SETBACK, DEFAULT_FROST_NIGHT_SETBACK
+        ):
+            lowest = min_forecast_temperature(
+                forecast_items, dt_util.now(), FROST_NIGHT_HOURS
+            )
+            if lowest is not None and lowest <= FROST_NIGHT_TEMPERATURE:
+                raised = frost_night_eco(eco_temperature, comfort_temperature)
+                if raised > eco_temperature:
+                    eco_temperature = raised
+                    frost_night = lowest
         limit_basis, limit_source = self._heating_limit_basis(
             outdoor_temperature, forecast_items
         )
@@ -2625,6 +2688,33 @@ class DynamicHeatingCoordinator(
                 self._heating_limit_reached,
                 HEATING_LIMIT_HYSTERESIS,
             )
+        # 0.21.0: "Heute heizen" (house) and a cold snap lift the heating limit;
+        # the limit's own state keeps its hysteresis underneath.
+        house = self._house()
+        self._cold_snap, cold_snap_mean = (
+            evaluate_cold_snap(
+                self._outdoor_history,
+                dt_util.utcnow(),
+                None if limit_value is None else float(limit_value),
+                self._cold_snap,
+                hours=COLD_SNAP_HOURS,
+                below=COLD_SNAP_BELOW,
+                release=COLD_SNAP_RELEASE,
+                min_span_seconds=COLD_SNAP_MIN_SPAN_SECONDS,
+            )
+            # Only where the forecast decides: the measured past then shows
+            # a cold front the forecast mean has not caught up with.
+            if self.config.get(CONF_COLD_SNAP, DEFAULT_COLD_SNAP)
+            and limit_source == "forecast"
+            else (False, None)
+        )
+        limit_lifted: str | None = None
+        if self._heating_limit_reached:
+            if house is not None and house.heat_today_active():
+                limit_lifted = "heat_today"
+            elif self._cold_snap:
+                limit_lifted = "cold_snap"
+        limit_reached = self._heating_limit_reached and limit_lifted is None
         if heating_season and not self._room_fallback and self.config.get(
             CONF_OUTDOOR_WARMER_STOP, DEFAULT_OUTDOOR_WARMER_STOP
         ):
@@ -2708,7 +2798,7 @@ class DynamicHeatingCoordinator(
             and trusted is not None
             and self.config.get(CONF_RECOVERY_LIMIT, DEFAULT_RECOVERY_LIMIT)
             and self._absence != "house_empty"
-            and not self._heating_limit_reached
+            and not limit_reached
         ):
             setback_floor = self._recovery_floor(
                 event_view, comfort_temperature, room_temperature, max_preheat * 60
@@ -2736,7 +2826,13 @@ class DynamicHeatingCoordinator(
             eco_temperature=eco_temperature,
             heating_rate_c_per_hour=self.effective_heating_rate,
             cooling_rate_c_per_hour=self.effective_cooling_rate,
-            forecast_condition=forecast_condition,
+            # A sunny forecast shortens preheating only when the sun then
+            # shines on the room's own facade (0.21.0).
+            forecast_condition=(
+                None
+                if next_event is not None and self._facade_sun(next_event) is False
+                else forecast_condition
+            ),
             forecast_temperature=forecast_temperature,
             max_preheat_minutes=preheat_limit,
             lead_bias_minutes=self._lead_bias(),
@@ -2744,7 +2840,7 @@ class DynamicHeatingCoordinator(
             present=present,
             preheat_started=self._preheat_event is not None,
             away_temperature=away_temperature,
-            heating_limit_reached=self._heating_limit_reached,
+            heating_limit_reached=limit_reached,
             window_temperature=None if window_value is None else float(window_value),
             frost_protection_temperature=(
                 None if frost_value is None else float(frost_value)
@@ -2794,6 +2890,24 @@ class DynamicHeatingCoordinator(
             decision = replace(
                 decision,
                 status=f"Heizgrenze erreicht (Ø {span} {value} °C) – abgesenkt",
+            )
+        if frost_night is not None and decision.mode == "eco":
+            value = f"{frost_night:.0f}".replace("-", "−")
+            decision = replace(
+                decision,
+                status=f"{decision.status} – Frostnacht ({value} °C): halb abgesenkt",
+            )
+        if limit_lifted is not None and decision.mode in (
+            "comfort", "preheat", "eco", "homecoming"
+        ):
+            if limit_lifted == "heat_today":
+                end = dt_util.as_local(house.heat_today_until).strftime("%H:%M")
+                lifted = f"Heute heizen bis {end} Uhr"
+            else:
+                value = f"{cold_snap_mean:.1f}".replace(".", ",")
+                lifted = f"Kälteeinbruch (Ø {COLD_SNAP_HOURS} h {value} °C)"
+            decision = replace(
+                decision, status=f"{decision.status} – Heizgrenze aufgehoben: {lifted}"
             )
         if cold_raise and decision.mode in ("comfort", "preheat", "homecoming"):
             decision = replace(
@@ -2942,6 +3056,12 @@ class DynamicHeatingCoordinator(
                 self.quick_until.isoformat() if self.quick_until is not None else None
             ),
             "heating_limit_reached": self._heating_limit_reached,
+            "heating_limit_lifted": limit_lifted,
+            "cold_snap": self._cold_snap,
+            "cold_snap_mean": cold_snap_mean,
+            "frost_night": frost_night,
+            "facade": self.config.get(CONF_FACADE),
+            "sun_on_facade": self._facade_sun(),
             "outdoor_warmer": self._outdoor_warmer,
             "heating_limit_basis": limit_basis,
             "heating_limit_source": limit_source,

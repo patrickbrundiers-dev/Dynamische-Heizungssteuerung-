@@ -156,6 +156,13 @@ class NotifyMixin:
                 NOTIFY_PROBLEM_DELAY_SECONDS,
                 f"Thermostat-Problem – {details}",
             )
+        contact_problems = result.get("contact_problems") or {}
+        if contact_problems:
+            conditions["contact"] = (
+                NOTIFY_PROBLEM_DELAY_SECONDS,
+                "Fensterkontakt prüfen – "
+                + "; ".join(f"{name}: {text}" for name, text in contact_problems.items()),
+            )
         supply = result.get("radiator_supply")
         if (
             supply == SUPPLY_PARTLY
@@ -452,6 +459,7 @@ class NotifyMixin:
                         name,
                         {"title": title, "message": "Wieder in Ordnung: " + {
                             "thermostat": "die Thermostate melden kein Problem mehr.",
+                            "contact": "die Fensterkontakte arbeiten wieder normal.",
                             "heating": "kein Heizproblem mehr.",
                             "radiator": "alle Heizkörper werden wieder warm.",
                             "sensor": "der Raumfühler liefert wieder Werte.",
@@ -669,11 +677,13 @@ class NotifyMixin:
             if not self._valid(self.hass.states.get(entity_id))
         ]
         if contacts:
+            contact_problems = result.get("contact_problems") or {}
+            details = [f"nicht erreichbar: {', '.join(dead)}"] if dead else []
+            details += [f"{name}: {text}" for name, text in contact_problems.items()]
             add(
                 "Fensterkontakte",
-                not dead,
-                f"nicht erreichbar: {', '.join(dead)}" if dead
-                else f"{len(contacts)} erreichbar",
+                not details,
+                "; ".join(details) if details else f"{len(contacts)} erreichbar",
             )
         if self.config.get(CONF_OUTDOOR_TEMPERATURE_ENTITY) or self.config.get(
             CONF_WEATHER_ENTITY
@@ -786,6 +796,10 @@ class NotifyMixin:
                         found.append(f"meldet Problem ({name})")
             if entity_id in self._divergence:
                 found.append(f"übernimmt den Sollwert nicht ({self._divergence[entity_id]})")
+            if entity_id in self._valve_own_state:
+                found.append(
+                    f"lässt sich nicht zurückstellen: {self._valve_own_state[entity_id]}"
+                )
             if found:
                 warnings[entity_id] = found
         return warnings

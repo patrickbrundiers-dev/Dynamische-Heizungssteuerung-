@@ -633,7 +633,7 @@ async def test_house_settings_are_created_once(hass, enable_custom_integrations)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"] == {"entry_type": "house"}
     assert result["options"] == {
-        "notify_service": "notify.phone", "house_calendar": None
+        "notify_service": "notify.phone", "house_calendar": None, "bed_sensors": []
     }
     await hass.async_block_till_done()
 

@@ -37,6 +37,9 @@ from .const import (
     SERVICE_HEAT_LOAD,
     SERVICE_EXPORT_LEARNING,
     SERVICE_RESTORE_LEARNING,
+    SERVICE_DECISIONS,
+    SERVICE_WHY,
+    DECISIONS_DAYS,
     HEAT_LOAD_OUTDOOR,
 )
 from .assist import async_setup_assist
@@ -90,6 +93,31 @@ async def _estimate_savings(call: ServiceCall) -> ServiceResponse:
         eco=call.data.get("eco_temperature"),
         shift_minutes=call.data.get("shift_minutes", 0),
     )
+
+
+WHY_SCHEMA = vol.Schema({vol.Required("entity_id"): cv.entity_id})
+DECISIONS_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Optional("days", default=1): vol.All(
+            vol.Coerce(float), vol.Range(min=0.1, max=DECISIONS_DAYS)
+        ),
+        vol.Optional("area"): cv.string,
+    }
+)
+
+
+async def _why(call: ServiceCall) -> ServiceResponse:
+    """Warum heizt der Raum (nicht)? Every precondition with its value."""
+    return _room_of(call.hass, call.data["entity_id"]).why()
+
+
+async def _decisions(call: ServiceCall) -> ServiceResponse:
+    """The room's decisions, newest first."""
+    room = _room_of(call.hass, call.data["entity_id"])
+    area = call.data.get("area") or None
+    items = room.decisions(call.data.get("days"), area)
+    return {"room": room.room_name, "count": len(items), "decisions": items}
 
 
 HEAT_LOAD_SCHEMA = vol.Schema(
@@ -168,6 +196,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         _restore_learning,
         schema=RESTORE_SCHEMA,
         supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_WHY, _why, schema=WHY_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_DECISIONS, _decisions, schema=DECISIONS_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )
     async_setup_assist(hass)
     if hass.http is None:

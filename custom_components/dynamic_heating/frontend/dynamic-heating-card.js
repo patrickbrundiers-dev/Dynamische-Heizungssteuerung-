@@ -938,7 +938,7 @@ class DynamicHeatingCard extends HTMLElement {
           button.chip { flex: 0 1 auto; font-size: 0.85em; padding: 4px 10px; border-radius: 16px; }
           .valve { display: flex; justify-content: space-between; font-size: 0.9em; padding: 4px 0;
             border-top: 1px solid var(--divider-color); cursor: pointer; }
-          .foot { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-top: 8px;
+          .foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px; margin-top: 8px;
             color: var(--secondary-text-color); font-size: 0.9em; }
           .foot .info { flex: 1 1 auto; }
           .toggle { flex: 0 0 auto; }
@@ -949,9 +949,24 @@ class DynamicHeatingCard extends HTMLElement {
             border: 1px solid var(--divider-color); background: var(--card-background-color); color: var(--primary-text-color); }
           .savings .answer { margin: 8px 0; line-height: 1.4; }
           .savings .hint { color: var(--secondary-text-color); font-size: 0.85em; }
+          .panel:not(:empty) { border-top: 1px solid var(--divider-color); margin-top: 12px; padding-top: 8px; }
+          .panel .verdict { font-weight: 500; margin: 4px 0 8px; line-height: 1.4; }
+          .panel .check { display: grid; grid-template-columns: 1.4em minmax(90px, 32%) 1fr; gap: 4px;
+            font-size: 0.9em; padding: 3px 0; border-top: 1px solid var(--divider-color); }
+          .panel .ok { color: var(--success-color, #43a047); }
+          .panel .no { color: var(--error-color, #db4437); }
+          .panel .info { color: var(--secondary-text-color); }
+          .panel .entry { font-size: 0.9em; padding: 4px 0; border-top: 1px solid var(--divider-color); line-height: 1.35; }
+          .panel .meta { color: var(--secondary-text-color); font-size: 0.85em; }
+          .panel .filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+          .panel select { font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--divider-color);
+            background: var(--card-background-color); color: var(--primary-text-color); }
+          .panel .hint { color: var(--secondary-text-color); font-size: 0.85em; }
         </style>
-        <ha-card><div class="main"></div><div class="savings"></div><div class="schedule"></div></ha-card>`;
+        <ha-card><div class="main"></div><div class="panel"></div><div class="savings"></div><div class="schedule"></div></ha-card>`;
       this._main = this.shadowRoot.querySelector(".main");
+      this._panelBox = this.shadowRoot.querySelector(".panel");
+      this.shadowRoot.addEventListener("change", (event) => this._change(event));
       this._savingsBox = this.shadowRoot.querySelector(".savings");
       this._scheduleBox = this.shadowRoot.querySelector(".schedule");
       this.shadowRoot.addEventListener("click", (event) => this._click(event));
@@ -1065,6 +1080,82 @@ class DynamicHeatingCard extends HTMLElement {
     }
   }
 
+  // "Warum?" and "Protokoll" (0.21.0): answers of the services why/decisions.
+  async _togglePanel(kind) {
+    this._panel = this._panel === kind ? null : kind;
+    this._render();
+    if (!this._panel) {
+      this._panelBox.innerHTML = "";
+      return;
+    }
+    await this._loadPanel();
+  }
+
+  async _loadPanel() {
+    const box = this._panelBox;
+    if (!this._panel || !box) return;
+    box.innerHTML = '<div class="hint">Wird geladen …</div>';
+    const data = { entity_id: this._config.entity };
+    if (this._panel === "log") {
+      data.days = Number(this._logDays || 1);
+      if (this._logArea) data.area = this._logArea;
+    }
+    try {
+      const result = await this._hass.callWS({
+        type: "call_service",
+        domain: "dynamic_heating",
+        service: this._panel === "why" ? "why" : "decisions",
+        service_data: data,
+        return_response: true,
+      });
+      const response = result.response || {};
+      box.innerHTML = this._panel === "why" ? this._whyHtml(response) : this._logHtml(response);
+    } catch (err) {
+      box.innerHTML = `<div class="hint">Ging nicht: ${escape(err?.message || err)}</div>`;
+    }
+  }
+
+  _whyHtml(response) {
+    const mark = (ok) => (ok === true ? '<span class="ok">✓</span>' : ok === false ? '<span class="no">✗</span>' : '<span class="info">·</span>');
+    const rows = (response.checks || []).map((check) => `
+      <div class="check">${mark(check.ok)}<span>${escape(check.name)}</span><span>${escape(check.detail)}</span></div>`).join("");
+    return `<div class="verdict">${escape(response.verdict || "")}</div>${rows}
+      <div class="row"><button class="chip" data-action="panel-reload">Neu prüfen</button></div>`;
+  }
+
+  _logHtml(response) {
+    const areas = ["Zeitplan", "Anwesenheit", "Fenster", "Wetter", "Therme", "Ventile", "Bedienung", "Hinweis", "Störung"];
+    const days = [[1, "heute/24 h"], [3, "3 Tage"], [7, "7 Tage"]];
+    const filters = `<div class="filters">
+      <select data-filter="days">${days.map(([value, label]) => `<option value="${value}" ${Number(this._logDays || 1) === value ? "selected" : ""}>${label}</option>`).join("")}</select>
+      <select data-filter="area"><option value="">alle Bereiche</option>${areas.map((area) => `<option ${this._logArea === area ? "selected" : ""}>${area}</option>`).join("")}</select>
+    </div>`;
+    const items = response.decisions || [];
+    if (!items.length) return `${filters}<div class="hint">Keine Einträge.</div>`;
+    const stamp = (value) => {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? "" : date.toLocaleString("de-DE", { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    };
+    const rows = items.slice(0, 150).map((item) => {
+      const values = [];
+      if (item.target !== undefined && item.target !== null) values.push(`Soll ${number(item.target)} °C`);
+      if (item.room !== undefined && item.room !== null) values.push(`Raum ${number(item.room)} °C`);
+      if (item.outdoor !== undefined && item.outdoor !== null) values.push(`außen ${number(item.outdoor)} °C`);
+      if (item.source) values.push(`durch ${item.source}`);
+      return `<div class="entry"><div>${escape(item.text || "")}</div>
+        <div class="meta">${escape(stamp(item.at))} · ${escape(item.area || "")}${values.length ? ` · ${escape(values.join(" · "))}` : ""}</div></div>`;
+    }).join("");
+    return `${filters}${rows}`;
+  }
+
+  _change(event) {
+    const filter = event.target?.dataset?.filter;
+    if (!filter) return;
+    if (filter === "days") this._logDays = event.target.value;
+    if (filter === "area") this._logArea = event.target.value;
+    this._loadPanel();
+  }
+
   _click(event) {
     // Clicks inside the schedule editor are handled there.
     if (this._editor && event.composedPath().includes(this._editor)) return;
@@ -1080,6 +1171,10 @@ class DynamicHeatingCard extends HTMLElement {
       this._call("switch", "toggle", { entity_id: related.enabled });
     } else if (action === "schedule") {
       this._toggleSchedule();
+    } else if (action === "why" || action === "log") {
+      this._togglePanel(action);
+    } else if (action === "panel-reload") {
+      this._loadPanel();
     } else if (action === "savings") {
       this._toggleSavings(related);
     } else if (action === "savings-run") {
@@ -1153,6 +1248,8 @@ class DynamicHeatingCard extends HTMLElement {
       ${valveRows}
       <div class="foot">
         <span class="info">${next ? `Nächster Wechsel ${next} Uhr` : ""}${demand !== undefined ? ` · Wärmebedarf ${number(demand, 0)} %` : ""}${energy !== undefined && energy !== null ? ` · heute ca. ${number(energy)} kWh` : ""}</span>
+        <button class="toggle chip ${this._panel === "why" ? "active" : ""}" data-action="why">Warum?</button>
+        <button class="toggle chip ${this._panel === "log" ? "active" : ""}" data-action="log">Protokoll</button>
         ${related.eco ? `<button class="toggle chip ${this._showSavings ? "active" : ""}" data-action="savings">Sparen?</button>` : ""}
         ${scheduleButton ? `<button class="toggle chip ${this._showSchedule ? "active" : ""}" data-action="schedule">Zeitplan</button>` : ""}
         ${related.enabled ? `<button class="toggle chip ${enabled ? "active" : ""}" data-action="toggle">${enabled ? "Regelung an" : "Regelung aus"}</button>` : ""}

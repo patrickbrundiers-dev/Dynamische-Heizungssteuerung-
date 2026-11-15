@@ -867,3 +867,26 @@ def expected_solar_kw(elevation: float, cloud_percent: float | None) -> float:
     clear = 1.098 * sine * math.exp(-0.057 / sine)
     cover = 0.5 if cloud_percent is None else max(0.0, min(1.0, cloud_percent / 100))
     return max(0.0, clear * (1 - 0.75 * cover**3.4))
+
+
+def sun_azimuth(at_utc_timestamp: float, latitude: float, longitude: float) -> float:
+    """Azimuth of the sun in degrees from north, clockwise (NOAA approximation)."""
+    days = at_utc_timestamp / 86400.0 + 2440587.5 - 2451545.0
+    mean_longitude = math.radians((280.460 + 0.9856474 * days) % 360)
+    anomaly = math.radians((357.528 + 0.9856003 * days) % 360)
+    ecliptic = mean_longitude + math.radians(
+        1.915 * math.sin(anomaly) + 0.020 * math.sin(2 * anomaly)
+    )
+    obliquity = math.radians(23.439 - 0.0000004 * days)
+    declination = math.asin(math.sin(obliquity) * math.sin(ecliptic))
+    right_ascension = math.atan2(
+        math.cos(obliquity) * math.sin(ecliptic), math.cos(ecliptic)
+    )
+    sidereal = math.radians((280.46061837 + 360.98564736629 * days) % 360)
+    hour_angle = sidereal + math.radians(longitude) - right_ascension
+    lat = math.radians(latitude)
+    azimuth = math.atan2(
+        math.sin(hour_angle),
+        math.cos(hour_angle) * math.sin(lat) - math.tan(declination) * math.cos(lat),
+    )
+    return (math.degrees(azimuth) + 180.0) % 360.0

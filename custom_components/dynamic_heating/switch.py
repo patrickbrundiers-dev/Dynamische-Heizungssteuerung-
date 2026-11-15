@@ -22,7 +22,11 @@ async def async_setup_entry(
 ) -> None:
     """Set up the opt-in control switch, or the house's bundling switch."""
     if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HOUSE:
-        async_add_entities([BundleHoldingSwitch(entry.runtime_data, entry, "bundle_holding")])
+        async_add_entities([
+            BundleHoldingSwitch(entry.runtime_data, entry, "bundle_holding"),
+            HeatTodaySwitch(entry.runtime_data, entry, "heat_today"),
+            AutoGoodNightSwitch(entry.runtime_data, entry, "auto_good_night"),
+        ])
         return
     coordinator: DynamicHeatingCoordinator = entry.runtime_data
     entities = [DynamicHeatingSwitch(coordinator, entry), BoostSwitch(coordinator, entry)]
@@ -209,3 +213,43 @@ class BundleHoldingSwitch(HouseEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.house.async_set_bundle_holding(False)
+
+
+class HeatTodaySwitch(HouseEntity, SwitchEntity):
+    """Heute heizen: the heating limit does not apply for 24 hours (0.21.0)."""
+
+    _attr_name = "Heute heizen"
+    _attr_icon = "mdi:radiator"
+    _attr_should_poll = True
+
+    @property
+    def is_on(self) -> bool:
+        return self.house.heat_today_active()
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        until = self.house.heat_today_until
+        return {"until": until.isoformat() if self.is_on and until else None}
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.house.async_set_heat_today(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.house.async_set_heat_today(False)
+
+
+class AutoGoodNightSwitch(HouseEntity, SwitchEntity):
+    """Gute Nacht automatisch at the usual bedtime (0.21.0, off by default)."""
+
+    _attr_name = "Gute Nacht automatisch"
+    _attr_icon = "mdi:weather-night"
+
+    @property
+    def is_on(self) -> bool:
+        return self.house.auto_good_night
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.house.async_set_auto_good_night(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.house.async_set_auto_good_night(False)

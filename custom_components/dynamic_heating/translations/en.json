@@ -101,11 +101,13 @@
         "description": "Creates the house mode (home, away, vacation), the vacation end and an overview of all rooms.",
         "data": {
           "notify_service": "Notify service (optional)",
-          "house_calendar": "House calendar (optional)"
+          "house_calendar": "House calendar (optional)",
+          "bed_sensors": "Bed or sleep sensors (optional)"
         },
         "data_description": {
           "notify_service": "For the weekly report, e.g. notify.mobile_app_phone.",
-          "house_calendar": "Calendar or schedule for the whole house. A running event picks the schedule its title or \"zeitplan: Ferien\" names in every room. With \"komfort: an\" or \"temperature: 21\" in the description it is comfort time in every room."
+          "house_calendar": "Calendar or schedule for the whole house. A running event picks the schedule its title or \"zeitplan: Ferien\" names in every room. With \"komfort: an\" or \"temperature: 21\" in the description it is comfort time in every room.",
+          "bed_sensors": "Sensors at the bed or in the bedroom. On for 20 minutes in the evening counts as bedtime; from that and from Good night the house learns the usual bedtime per weekday."
         }
       }
     },
@@ -361,11 +363,13 @@
         "title": "House settings",
         "data": {
           "notify_service": "Notify service (optional)",
-          "house_calendar": "House calendar (optional)"
+          "house_calendar": "House calendar (optional)",
+          "bed_sensors": "Bed or sleep sensors (optional)"
         },
         "data_description": {
           "notify_service": "For the weekly report, e.g. notify.mobile_app_phone.",
-          "house_calendar": "Calendar or schedule for the whole house. A running event picks the schedule its title or \"zeitplan: Ferien\" names in every room. With \"komfort: an\" or \"temperature: 21\" in the description it is comfort time in every room."
+          "house_calendar": "Calendar or schedule for the whole house. A running event picks the schedule its title or \"zeitplan: Ferien\" names in every room. With \"komfort: an\" or \"temperature: 21\" in the description it is comfort time in every room.",
+          "bed_sensors": "Sensors at the bed or in the bedroom. On for 20 minutes in the evening counts as bedtime; from that and from Good night the house learns the usual bedtime per weekday."
         }
       },
       "house_menu": {
@@ -406,7 +410,10 @@
           "cold_comfort_boost": "Raise comfort in frost by up to (0 = off)",
           "departure_stop": "Stop heating before the usual departure",
           "solar_forecast": "Plan for sunny hours (weather forecast)",
-          "unusual_notify": "Report unusual heat loss"
+          "unusual_notify": "Report unusual heat loss",
+          "cold_snap": "Cold snap lifts the heating limit",
+          "frost_night_setback": "Only half the setback in frost nights",
+          "facade": "Direction the windows face (optional)"
         },
         "data_description": {
           "recovery_limit": "Outside comfort time the room must get warm again within the maximum preheat time.",
@@ -421,7 +428,10 @@
           "cold_comfort_boost": "In frost the walls are colder and the room feels cooler. From +5 °C outdoors the comfort temperature rises evenly up to this value at −10 °C. Eco stays the same.",
           "departure_stop": "Learns when the house usually becomes empty on each weekday (house sensor \"Übliches Weggehen\"). Up to 60 minutes before, the room is not reheated if the room model says it loses at most 0.5 °C until then. If somebody stays longer, heating resumes.",
           "solar_forecast": "Only with a solar radiation sensor and a trusted room model that reacts to the sun. When the forecast sun of the next two hours alone brings the room to its target, it is heated only to 0.5 °C below before.",
-          "unusual_notify": "When the room loses far more heat over two hours than the room model expects (tilted window, open door) or barely warms with the valves open (cold radiator), a push is sent at most once a day, never between 22:00 and 7:00."
+          "unusual_notify": "When the room loses far more heat over two hours than the room model expects (tilted window, open door) or barely warms with the valves open (cold radiator), a push is sent at most once a day, never between 22:00 and 7:00.",
+          "cold_snap": "When the measured outdoor mean of the last 6 hours is at least 5 °C below the heating limit while the forecast is still warm, the room heats anyway.",
+          "frost_night_setback": "With -5 °C or colder forecast for the next 12 hours, outside comfort time the middle between eco and comfort applies.",
+          "facade": "The sun only counts (sun pause, sun expected, shorter preheating) while it shines on this wall. Empty = as before."
         }
       }
     },
@@ -444,6 +454,18 @@
         "presence": "Presence, geofencing, forcing",
         "valves": "Valves, calibration and maintenance",
         "outdoor": "Outdoor temperature, heating limit, notifications"
+      }
+    },
+    "facade": {
+      "options": {
+        "N": "North",
+        "NO": "North-east",
+        "O": "East",
+        "SO": "South-east",
+        "S": "South",
+        "SW": "South-west",
+        "W": "West",
+        "NW": "North-west"
       }
     }
   },
@@ -524,6 +546,34 @@
         "include_house": {
           "name": "Include house",
           "description": "Also restore house values (boiler hours, levels). Default: only when all rooms are restored."
+        }
+      }
+    },
+    "why": {
+      "name": "Why does the room (not) heat?",
+      "description": "Lists every precondition of heating with its value and what decides right now. Changes nothing.",
+      "fields": {
+        "entity_id": {
+          "name": "Room",
+          "description": "An entity of the room, e.g. its mode."
+        }
+      }
+    },
+    "decisions": {
+      "name": "Decisions",
+      "description": "What the room decided when and why, with measured values, newest first (up to 7 days).",
+      "fields": {
+        "entity_id": {
+          "name": "Room",
+          "description": "An entity of the room, e.g. its mode."
+        },
+        "days": {
+          "name": "Days",
+          "description": "How far back."
+        },
+        "area": {
+          "name": "Area",
+          "description": "Only entries of this area."
         }
       }
     }

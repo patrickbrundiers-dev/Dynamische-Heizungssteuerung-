@@ -21,6 +21,9 @@ from homeassistant.util import dt as dt_util
 from .battery import describe_days
 from .const import (
     BATTERY_BUNDLE_DAYS,
+    BEDTIME_SENSOR_SECONDS,
+    CONF_BED_SENSORS,
+    HEAT_TODAY_SECONDS,
     CONF_HEATING_LIMIT_TEMPERATURE,
     CONF_OUTDOOR_TEMPERATURE_ENTITY,
     CONF_WEATHER_ENTITY,
@@ -59,6 +62,7 @@ from .house_insights import (
     week_ahead_text,
 )
 from .pending_push import hold_if_missing
+from .routine import Bedtime, bedtime_night, bedtime_text
 from .radiator import (
     SUPPLY_COLD,
     SUPPLY_VERSION,
@@ -114,6 +118,12 @@ class HouseManager:
         self.cycles = CycleWatch()
         self.bundle_holding = False
         self.heat_price = HEAT_PRICE_DEFAULT
+        # 0.21.0 (persisted): "Heute heizen" until, the learned bedtime, the
+        # switch "Gute Nacht automatisch" and the last evening of a Gute Nacht.
+        self.heat_today_until: datetime | None = None
+        self.bedtime = Bedtime()
+        self.auto_good_night = False
+        self.good_night_evening: str | None = None
         self._insights_at: datetime | None = None
         self._insights_saved_at: datetime | None = None
         # Daily mean outdoor temperatures from the recorder (day ISO -> °C)
@@ -152,6 +162,15 @@ class HouseManager:
             self.flow = FlowStats.from_dict(stored.get("flow"))
             self.cycles = CycleWatch.from_dict(stored.get("cycles"))
             self.bundle_holding = bool(stored.get("bundle_holding"))
+            raw_today = stored.get("heat_today_until")
+            parsed_today = (
+                dt_util.parse_datetime(raw_today) if isinstance(raw_today, str) else None
+            )
+            self.heat_today_until = dt_util.as_utc(parsed_today) if parsed_today else None
+            self.bedtime = Bedtime.from_dict(stored.get("bedtime"))
+            self.auto_good_night = bool(stored.get("auto_good_night"))
+            evening = stored.get("good_night_evening")
+            self.good_night_evening = evening if isinstance(evening, str) else None
             price = stored.get("heat_price")
             if isinstance(price, (int, float)) and 0 <= price <= 100:
                 self.heat_price = float(price)
@@ -165,6 +184,9 @@ class HouseManager:
             ),
             async_track_time_interval(
                 self.hass, self._async_check_vacation, timedelta(minutes=1)
+            ),
+            async_track_time_interval(
+                self.hass, self._async_bedtime_tick, timedelta(minutes=1)
             ),
             async_track_time_interval(
                 self.hass, self._async_refresh_insights_tick, timedelta(minutes=30)
@@ -373,6 +395,12 @@ class HouseManager:
                 "cycles": self.cycles.as_dict(),
                 "bundle_holding": self.bundle_holding,
                 "heat_price": self.heat_price,
+                "heat_today_until": (
+                    self.heat_today_until.isoformat() if self.heat_today_until else None
+                ),
+                "bedtime": self.bedtime.as_dict(),
+                "auto_good_night": self.auto_good_night,
+                "good_night_evening": self.good_night_evening,
             }
         )
 
@@ -730,6 +758,97 @@ class HouseManager:
         for room in self.rooms():
             await room.async_request_refresh()
 
+    # --- 0.21.0: Heute heizen, bedtime, Gute Nacht automatisch -------------
+
+    def heat_today_active(self, now: datetime | None = None) -> bool:
+        """"Heute heizen": the heating limit does not apply right now."""
+        until = self.heat_today_until
+        return until is not None and (now or dt_util.utcnow()) < until
+
+    async def async_set_heat_today(self, value: bool) -> None:
+        """Switch "Heute heizen" on (for 24 hours) or off."""
+        self.heat_today_until = (
+            dt_util.utcnow() + timedelta(seconds=HEAT_TODAY_SECONDS) if value else None
+        )
+        await self._async_save()
+        for listener in list(self._listeners):
+            listener()
+        for room in self.rooms():
+            room._pending_source = "Heute heizen"
+            await room.async_request_refresh()
+
+    async def async_set_auto_good_night(self, value: bool) -> None:
+        self.auto_good_night = bool(value)
+        await self._async_save()
+        for listener in list(self._listeners):
+            listener()
+
+    def bedtime_info(self) -> dict[str, Any]:
+        """The usual bedtime tonight and per weekday."""
+        local = dt_util.now()
+        night = bedtime_night(local)
+        evening = night[0] if night is not None else local.date()
+        minute = self.bedtime.usual(evening.weekday(), evening)
+        return {
+            "state": None if minute is None else bedtime_text(minute),
+            "minute": minute,
+            "week": self.bedtime.week(evening),
+            "count": self.bedtime.count(),
+            "sensors": list(self._bed_sensors()),
+            "auto_good_night": self.auto_good_night,
+        }
+
+    def _bed_sensors(self) -> list[str]:
+        value = self.entry.options.get(CONF_BED_SENSORS) or []
+        return [value] if isinstance(value, str) else list(value)
+
+    async def note_bedtime(self, at: datetime | None = None) -> bool:
+        """Record a bedtime (local time); True when it was new for the night."""
+        local = dt_util.as_local(at or dt_util.utcnow())
+        if not self.bedtime.record(local):
+            return False
+        await self._async_save()
+        for listener in list(self._listeners):
+            listener()
+        return True
+
+    async def _async_bedtime_tick(self, _now: Any = None) -> None:
+        """Learn the bedtime from bed sensors; run Gute Nacht automatically."""
+        now = dt_util.utcnow()
+        local = dt_util.as_local(now)
+        night = bedtime_night(local)
+        if night is None:
+            return
+        evening, minute_now = night
+        if not self.bedtime.recorded(evening):
+            for entity_id in self._bed_sensors():
+                state = self.hass.states.get(entity_id)
+                if (
+                    state is not None
+                    and state.state == "on"
+                    and (now - state.last_changed).total_seconds() >= BEDTIME_SENSOR_SECONDS
+                    and bedtime_night(dt_util.as_local(state.last_changed)) is not None
+                    and bedtime_night(dt_util.as_local(state.last_changed))[0] == evening
+                ):
+                    await self.note_bedtime(state.last_changed)
+                    break
+        if not self.auto_good_night or self.mode != HOUSE_HOME:
+            return
+        if self.good_night_evening == evening.isoformat():
+            return
+        usual = self.bedtime.usual(evening.weekday(), evening)
+        if usual is None or not usual <= minute_now < usual + 60:
+            return
+        if not any(room._household_present for room in self.rooms() if room.enabled):
+            return
+        lowered = await self.async_good_night(automatic=True)
+        if lowered:
+            await self._async_push(
+                "Gute Nacht",
+                f"Übliche Schlafenszeit {bedtime_text(usual)} Uhr – abgesenkt: "
+                + ", ".join(lowered),
+            )
+
     async def async_set_heat_price(self, value: float) -> None:
         self.heat_price = round(float(value), 1)
         await self._async_save()
@@ -821,7 +940,7 @@ class HouseManager:
         self.mode = mode
         await self._async_changed()
 
-    async def async_good_night(self) -> list[str]:
+    async def async_good_night(self, automatic: bool = False) -> list[str]:
         """"Gute Nacht": rooms in comfort time go to night setback now.
 
         Each such room sleeps until its comfort block ends; from there the
@@ -850,8 +969,17 @@ class HouseManager:
             room.quick_until = (
                 end if end is not None and end > now else dt_util.as_utc(morning)
             )
-            room._pending_source = "Gute Nacht"
+            room._pending_source = (
+                "Gute Nacht (automatisch)" if automatic else "Gute Nacht"
+            )
             lowered.append(room.room_name)
+        night = bedtime_night(local)
+        if night is not None:
+            self.good_night_evening = night[0].isoformat()
+            if not automatic:
+                # Pressed by hand in the evening: that is when the house sleeps.
+                self.bedtime.record(local)
+            await self._async_save()
         for room in self.rooms():
             if room.room_name in lowered:
                 await room.async_refresh()
