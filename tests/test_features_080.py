@@ -235,9 +235,11 @@ async def test_valve_that_does_not_take_the_setpoint_is_reported(
     with _capture_all_calls(hass):
         coordinator.enabled = True
         await coordinator.async_refresh()
-        # The valve keeps reporting 18 °C instead of the 21 °C written.
+        # The valve keeps reporting 18 °C instead of the 21 °C written. After
+        # 15 minutes the setpoint is sent once more (0.21.0), 15 minutes
+        # later it is reported.
         start = dt_util.utcnow()
-        for minutes in (6, 12, 18):
+        for minutes in (6, 12, 18, 24, 30, 36):
             with patch(_UTCNOW, return_value=start + timedelta(minutes=minutes)):
                 await coordinator.async_refresh()
     warnings = coordinator.data["thermostat_warnings"]["climate.living_room"]

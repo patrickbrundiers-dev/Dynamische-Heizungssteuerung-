@@ -1138,3 +1138,125 @@ def data_quality(sources: list[tuple[str, str, float | None]]) -> dict:
         "problems": problems,
         "sources": {name: quality for name, quality, _age in sources},
     }
+
+
+# --- 0.21.0: ideas from Raumklima ------------------------------------------
+
+
+def valve_own_state(
+    hvac_state: str | None,
+    hvac_modes: list[str] | None,
+    preset: str | None,
+    preset_modes: list[str] | None,
+    *,
+    open_presets: tuple[str, ...],
+    program_presets: tuple[str, ...],
+    fixed_presets: tuple[str, ...],
+    offset_presets: tuple[str, ...],
+    manual_presets: tuple[str, ...],
+) -> tuple[str, str, str] | None:
+    """A valve state that keeps it from following the room, and the fix.
+
+    Returns (service, value, text): ``set_preset_mode`` or ``set_hvac_mode``
+    with the value to set and a short German description of the state, or
+    None when the valve follows its setpoint. An own week program in
+    ``auto`` is fixed with ``heat``; presets go back to manual (or none).
+    """
+    modes = [str(mode) for mode in hvac_modes or []]
+    if hvac_state == "auto" and "heat" in modes:
+        return "set_hvac_mode", "heat", "eigenes Programm (auto)"
+    if not preset:
+        return None
+    name = str(preset).lower()
+    if name in manual_presets:
+        return None
+    if name in open_presets:
+        text = f"dauerhaft offen (Preset {preset})"
+    elif name in program_presets:
+        text = f"eigenes Programm (Preset {preset})"
+    elif name in fixed_presets:
+        text = f"fester Zustand (Preset {preset})"
+    elif name in offset_presets:
+        text = f"eigener Ab-/Aufschlag (Preset {preset})"
+    else:
+        return None
+    available = [str(mode) for mode in preset_modes or []]
+    for candidate in manual_presets:
+        if candidate in available:
+            return "set_preset_mode", candidate, text
+    return None
+
+
+def count_recent(times: list[datetime], now: datetime, seconds: float) -> list[datetime]:
+    """The moments of ``times`` within the last ``seconds``."""
+    return [moment for moment in times if (now - moment).total_seconds() <= seconds]
+
+
+def evaluate_cold_snap(
+    samples: list[tuple[datetime, float]],
+    now: datetime,
+    limit: float | None,
+    active: bool,
+    *,
+    hours: float,
+    below: float,
+    release: float,
+    min_span_seconds: float,
+) -> tuple[bool, float | None]:
+    """Cold snap: the measured outdoor mean of the last ``hours`` is far below
+    the heating limit. Returns (active, that mean)."""
+    if limit is None:
+        return False, None
+    recent = [
+        (moment, value)
+        for moment, value in samples
+        if (now - moment).total_seconds() <= hours * 3600
+    ]
+    mean = mean_history_temperature(recent, min_span_seconds)
+    if mean is None:
+        return False, None
+    if active:
+        return mean < limit - release, mean
+    return mean <= limit - below, mean
+
+
+def min_forecast_temperature(
+    forecast: list[dict], now: datetime, hours: float
+) -> float | None:
+    """The lowest forecast temperature within the next ``hours``."""
+    end = now + timedelta(hours=hours)
+    lowest: float | None = None
+    for item in forecast:
+        raw_datetime = item.get("datetime")
+        raw_temperature = item.get("temperature")
+        if not isinstance(raw_datetime, str) or isinstance(raw_temperature, bool):
+            continue
+        try:
+            temperature = float(raw_temperature)
+            moment = datetime.fromisoformat(raw_datetime.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(temperature):
+            continue
+        if moment.tzinfo is None and now.tzinfo is not None:
+            moment = moment.replace(tzinfo=now.tzinfo)
+        if now - timedelta(hours=1) <= moment <= end:
+            lowest = temperature if lowest is None else min(lowest, temperature)
+    return lowest
+
+
+def frost_night_eco(eco: float, comfort: float) -> float:
+    """Half the setback: the middle between eco and comfort, on 0.5 °C."""
+    if comfort <= eco:
+        return eco
+    return math.ceil((eco + comfort) / 2 * 2 - 1e-9) / 2
+
+
+def sun_on_facade(
+    azimuth: float, elevation: float, facade: float, spread: float, min_elevation: float
+) -> bool:
+    """Whether the sun shines on a wall facing ``facade`` (degrees from north)."""
+    if elevation < min_elevation:
+        return False
+    difference = abs((azimuth - facade + 180.0) % 360.0 - 180.0)
+    return difference <= spread

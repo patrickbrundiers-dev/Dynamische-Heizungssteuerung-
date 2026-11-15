@@ -14,6 +14,10 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_FACADE,
+    FACADE_MIN_ELEVATION,
+    FACADE_SPREAD,
+    FACADES,
     BUNDLE_HEATING_DEMAND,
     BUNDLE_JOIN_ABOVE,
     BUNDLE_JOIN_UNTIL,
@@ -54,11 +58,12 @@ from .const import (
     SCHOOL_HOLIDAY_WORDS,
 )
 from .logic import (
+    sun_on_facade,
     HeatingDecision,
     calendar_temperature,
     schedule_comfort_temperature,
 )
-from .model import ModelView, expected_solar_kw, sun_elevation
+from .model import ModelView, expected_solar_kw, sun_azimuth, sun_elevation
 from .plan import (
     CHECK_ALPHA,
     CHECK_HOURS,
@@ -686,6 +691,7 @@ class PlanMixin:
             or not self.config.get(CONF_SOLAR_RADIATION_ENTITY)
             or decision.mode not in ("comfort", "preheat", "away_reduced")
             or target is None
+            or self._facade_sun() is False
         ):
             self._solar_pause = False
             return decision
@@ -774,6 +780,25 @@ class PlanMixin:
             preheat_minutes=0,
         )
 
+    def _facade_sun(self, at: datetime | None = None) -> bool | None:
+        """Whether the sun shines on the room's facade (0.21.0).
+
+        None without a facade (or location): the sun counts as before.
+        """
+        facade = FACADES.get(str(self.config.get(CONF_FACADE) or "").lower())
+        latitude = self.hass.config.latitude
+        longitude = self.hass.config.longitude
+        if facade is None or latitude is None or longitude is None:
+            return None
+        moment = (at or dt_util.utcnow()).timestamp()
+        return sun_on_facade(
+            sun_azimuth(moment, latitude, longitude),
+            sun_elevation(moment, latitude, longitude),
+            facade,
+            FACADE_SPREAD,
+            FACADE_MIN_ELEVATION,
+        )
+
     def _expected_sun(self, hours: int) -> float | None:
         """Mean forecast global radiation (kW/m²) over the next hours."""
         latitude = self.hass.config.latitude
@@ -796,6 +821,10 @@ class PlanMixin:
             cloud = clouds.get(int(at // 3600))
             if cloud is None:
                 return None
+            if self._facade_sun(dt_util.utc_from_timestamp(at)) is False:
+                # The sun is on another side of the house then.
+                values.append(0.0)
+                continue
             values.append(
                 expected_solar_kw(sun_elevation(at, latitude, longitude), cloud)
             )

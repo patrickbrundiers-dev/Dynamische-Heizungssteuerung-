@@ -408,6 +408,7 @@ async def async_setup_entry(
             HouseHeatLoadSensor(entry.runtime_data, entry, "heat_load"),
             HouseHomecomingSensor(entry.runtime_data, entry, "homecoming"),
             HouseDepartureSensor(entry.runtime_data, entry, "departure"),
+            HouseBedtimeSensor(entry.runtime_data, entry, "bedtime"),
             HouseHeatingCurveSensor(entry.runtime_data, entry, "heating_curve"),
             HouseBalancePointSensor(entry.runtime_data, entry, "balance_point"),
             HouseWeekAheadSensor(entry.runtime_data, entry, "week_ahead"),
@@ -790,6 +791,28 @@ class HouseHomecomingSensor(HouseEntity, SensorEntity):
             "weekdays": info["week"],
             "homecomings_seen": info["count"],
             "learned_in": info["room"],
+        }
+
+
+class HouseBedtimeSensor(HouseEntity, SensorEntity):
+    """When the house usually goes to bed tonight (0.21.0)."""
+
+    _attr_name = "Übliche Schlafenszeit"
+    _attr_icon = "mdi:bed-clock"
+    _attr_should_poll = True
+
+    @property
+    def native_value(self) -> str | None:
+        return self.house.bedtime_info()["state"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        info = self.house.bedtime_info()
+        return {
+            "weekdays": info["week"],
+            "nights_seen": info["count"],
+            "bed_sensors": info["sensors"],
+            "auto_good_night": info["auto_good_night"],
         }
 
 

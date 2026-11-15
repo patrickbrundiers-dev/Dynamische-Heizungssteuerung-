@@ -24,6 +24,9 @@ from .const import (
     DEFAULT_ZONE_WINDOW_CLOSE_DELAY,
     DEFAULT_ZONE_WINDOW_OPEN_DELAY,
     CONF_ADDITIONAL_WINDOW_ENTITIES,
+    CONTACT_FLIP_LIMIT,
+    CONTACT_FLIP_WINDOW,
+    CONTACT_UNAVAILABLE_SECONDS,
     CONF_DISABLE_TRV_WINDOW_DETECTION,
     TRV_WINDOW_DETECTION_SUFFIX,
     CONF_WINDOW_CLOSE_DELAY,
@@ -37,6 +40,7 @@ from .const import (
     DEFAULT_WINDOW_OPEN_DELAY,
 )
 from .logic import (
+    count_recent,
     evaluate_window_open,
     detect_temperature_drop,
 )
@@ -104,6 +108,11 @@ class WindowMixin:
         states: list[State] = []
         for index, entity_id in enumerate(contacts):
             state = self.hass.states.get(entity_id)
+            problem = self._observe_contact(entity_id, state, now)
+            if problem is not None:
+                # Flapping, or gone for hours: counted as closed, so one bad
+                # contact does not pause the room or stop its control.
+                continue
             if self._valid(state):
                 states.append(state)
             elif index == 0 and main_required:
@@ -114,6 +123,45 @@ class WindowMixin:
         if opened:
             return True, max((now - s.last_changed).total_seconds() for s in opened)
         return False, min((now - s.last_changed).total_seconds() for s in states)
+
+    def _observe_contact(
+        self, entity_id: str, state: State | None, now
+    ) -> str | None:
+        """Health of one contact (0.21.0): None when it can be trusted.
+
+        More than CONTACT_FLIP_LIMIT changes in 24 hours: loose magnet or a
+        defective sensor, ignored until it calms down. Unavailable for more
+        than two hours: reported and counted as closed.
+        """
+        name = self._friendly_name(entity_id)
+        problem: str | None = None
+        if self._valid(state):
+            self._contact_unavailable_since.pop(entity_id, None)
+            seen = self._contact_changed.get(entity_id)
+            if seen is not None and state.last_changed != seen:
+                self._contact_flips.setdefault(entity_id, []).append(now)
+            self._contact_changed[entity_id] = state.last_changed
+            flips = count_recent(
+                self._contact_flips.get(entity_id, []), now, CONTACT_FLIP_WINDOW
+            )
+            self._contact_flips[entity_id] = flips
+            if len(flips) > CONTACT_FLIP_LIMIT:
+                problem = f"{len(flips)} Wechsel in 24 Stunden – wird ignoriert"
+        else:
+            since = self._contact_unavailable_since.setdefault(entity_id, now)
+            if (now - since).total_seconds() >= CONTACT_UNAVAILABLE_SECONDS:
+                hours = int((now - since).total_seconds() // 3600)
+                problem = f"seit {hours} Stunden nicht erreichbar – gilt als zu"
+        previous = self._contact_problems.get(entity_id)
+        if problem is None:
+            if previous is not None:
+                self._contact_problems.pop(entity_id)
+                self._log(f"Fensterkontakt {name} wieder in Ordnung")
+            return None
+        if previous is None:
+            self._log(f"Fensterkontakt {name}: {problem}")
+        self._contact_problems[entity_id] = problem
+        return problem
 
     def _evaluate_contacts(self) -> tuple[bool, bool] | None:
         """(debounced open, any contact open now), None if the main is unknown."""

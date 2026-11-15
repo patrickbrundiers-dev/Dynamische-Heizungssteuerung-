@@ -825,3 +825,60 @@ BUNDLE_JOIN_UNTIL: Final = 0.2
 BUNDLE_WAIT_BELOW: Final = 0.3
 BUNDLE_WAIT_UNTIL: Final = 0.4
 BUNDLE_HEATING_DEMAND: Final = 50
+
+# --- 0.21.0: ideas from Raumklima (Goldi5) --------------------------------
+# 2. A valve in a state of its own: device presets and modes that keep it
+# from following the room (Tuya "on" = fully open, an own week program …).
+# They are set back to manual/heat, at most once per interval.
+VALVE_OPEN_PRESETS: Final = ("on",)
+VALVE_PROGRAM_PRESETS: Final = ("auto", "schedule", "program", "programme", "timer")
+VALVE_FIXED_PRESETS: Final = ("off", "antifrost", "frost_protection", "holiday", "away")
+VALVE_OFFSET_PRESETS: Final = ("eco", "comfort", "boost")
+VALVE_MANUAL_PRESETS: Final = ("manual", "none")
+VALVE_STATE_FIX_SECONDS: Final = 1800
+# After this many fixes in a row without success the valve is reported.
+VALVE_STATE_FIX_REPORT: Final = 2
+# A valve that does not follow the written setpoint gets it once more before
+# it is reported.
+VALVE_DIVERGENCE_RETRIES: Final = 1
+# 6. Window contacts: more changes than this in 24 hours = loose magnet or
+# defective, the contact is ignored; unavailable this long = reported and
+# counted as closed so the room keeps its control.
+CONTACT_FLIP_LIMIT: Final = 20
+CONTACT_FLIP_WINDOW: Final = 86400
+CONTACT_UNAVAILABLE_SECONDS: Final = 7200
+# 3. "Heute heizen" (house switch): the heating limit does not apply for
+# 24 hours. Cold snap: the measured outdoor mean of the last hours is far
+# below the heating limit while the forecast mean still says warm.
+HEAT_TODAY_SECONDS: Final = 86400
+CONF_COLD_SNAP: Final = "cold_snap"
+DEFAULT_COLD_SNAP: Final = True
+COLD_SNAP_HOURS: Final = 6
+COLD_SNAP_BELOW: Final = 5.0
+COLD_SNAP_RELEASE: Final = 3.0
+COLD_SNAP_MIN_SPAN_SECONDS: Final = 4 * 3600
+# 4. Frost nights: with -5 °C or colder forecast for the next hours the
+# setback is only half as deep (middle between eco and comfort). Off by default.
+CONF_FROST_NIGHT_SETBACK: Final = "frost_night_setback"
+DEFAULT_FROST_NIGHT_SETBACK: Final = False
+FROST_NIGHT_TEMPERATURE: Final = -5.0
+FROST_NIGHT_HOURS: Final = 12
+# 5. Facade of the room: the sun only counts while it shines on this wall.
+CONF_FACADE: Final = "facade"
+# Lower case: Home Assistant translation keys must be [a-z0-9-_].
+FACADES: Final = {
+    "n": 0.0, "no": 45.0, "o": 90.0, "so": 135.0,
+    "s": 180.0, "sw": 225.0, "w": 270.0, "nw": 315.0,
+}
+FACADE_SPREAD: Final = 80.0
+FACADE_MIN_ELEVATION: Final = 5.0
+# 8. Bedtime: learned from "Gute Nacht" and bed/presence sensors of the house
+# (on for 20 minutes in the evening). The house switch "Gute Nacht
+# automatisch" runs Gute Nacht at the usual time while somebody is home.
+CONF_BED_SENSORS: Final = "bed_sensors"
+BEDTIME_SENSOR_SECONDS: Final = 1200
+# 7. Decisions of a room: kept for a week, at most this many.
+DECISIONS_KEEP: Final = 400
+DECISIONS_DAYS: Final = 7
+SERVICE_WHY: Final = "why"
+SERVICE_DECISIONS: Final = "decisions"

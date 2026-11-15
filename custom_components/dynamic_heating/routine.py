@@ -1119,3 +1119,94 @@ def tuya_week_schedule(
         )
         for day in TUYA_DAYS
     }
+
+
+# 0.21.0: usual bedtime per weekday (evening of that day). Minutes after
+# midnight count on: 00:30 is 24 * 60 + 30 of the evening before.
+BEDTIME_FROM_HOUR = 19
+BEDTIME_UNTIL_HOUR = 3
+
+
+def bedtime_night(at: datetime) -> tuple[date, int] | None:
+    """(evening the night belongs to, minute from that midnight), None outside
+    the evening/night window."""
+    if at.hour >= BEDTIME_FROM_HOUR:
+        return at.date(), at.hour * 60 + at.minute
+    if at.hour < BEDTIME_UNTIL_HOUR:
+        return at.date() - timedelta(days=1), (24 + at.hour) * 60 + at.minute
+    return None
+
+
+@dataclass(slots=True)
+class Bedtime:
+    """Learns when the house usually goes to bed (one entry per night)."""
+
+    # Weekday of the evening (0 = Monday) -> [(evening ISO, minute)].
+    nights: dict[int, list[tuple[str, int]]] = field(default_factory=dict)
+
+    def record(self, at: datetime) -> bool:
+        """Note a bedtime at ``at`` (local); the first one of a night counts."""
+        night = bedtime_night(at)
+        if night is None:
+            return False
+        evening, minute = night
+        day = evening.isoformat()
+        items = self.nights.get(evening.weekday(), [])
+        if any(item[0] == day for item in items):
+            return False
+        items = sorted([*items, (day, minute)])[-HOMECOMING_KEEP:]
+        self.nights[evening.weekday()] = items
+        return True
+
+    def recorded(self, evening: date) -> bool:
+        day = evening.isoformat()
+        return any(item[0] == day for item in self.nights.get(evening.weekday(), []))
+
+    def usual(self, weekday: int, today: date | None = None) -> int | None:
+        """Usual minute (from the evening's midnight) of going to bed."""
+        return Homecoming()._usual(self.nights, weekday, today)
+
+    def week(self, today: date | None = None) -> dict[str, str | None]:
+        names = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+        result: dict[str, str | None] = {}
+        for weekday, name in enumerate(names):
+            minute = self.usual(weekday, today)
+            result[name] = None if minute is None else bedtime_text(minute)
+        return result
+
+    def count(self) -> int:
+        return sum(len(items) for items in self.nights.values())
+
+    def as_dict(self) -> dict:
+        return {str(weekday): [list(item) for item in items] for weekday, items in self.nights.items()}
+
+    @classmethod
+    def from_dict(cls, data: object) -> Bedtime:
+        result = cls()
+        if not isinstance(data, dict):
+            return result
+        for key, items in data.items():
+            try:
+                weekday = int(key)
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= weekday <= 6 or not isinstance(items, list):
+                continue
+            kept = [
+                (item[0], item[1])
+                for item in items
+                if isinstance(item, list)
+                and len(item) == 2
+                and isinstance(item[0], str)
+                and isinstance(item[1], int)
+                and BEDTIME_FROM_HOUR * 60 <= item[1] < (24 + BEDTIME_UNTIL_HOUR) * 60
+            ]
+            if kept:
+                result.nights[weekday] = sorted(kept)[-HOMECOMING_KEEP:]
+        return result
+
+
+def bedtime_text(minute: int) -> str:
+    """Minute from the evening's midnight as "HH:MM" (00:30 for 24:30)."""
+    minute %= 24 * 60
+    return f"{minute // 60:02d}:{minute % 60:02d}"

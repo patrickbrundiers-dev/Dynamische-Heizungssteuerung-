@@ -27,6 +27,13 @@ from .const import (
     CONF_UNUSUAL_NOTIFY,
     DEFAULT_UNUSUAL_NOTIFY,
     CONF_COLD_COMFORT_BOOST,
+    CONF_BED_SENSORS,
+    CONF_COLD_SNAP,
+    CONF_FACADE,
+    CONF_FROST_NIGHT_SETBACK,
+    DEFAULT_COLD_SNAP,
+    DEFAULT_FROST_NIGHT_SETBACK,
+    FACADES,
     DEFAULT_COLD_COMFORT_BOOST,
     COLD_COMFORT_MAX,
     CONF_OUTDOOR_HUMIDITY_ENTITY,
@@ -352,6 +359,9 @@ def _house_schema(hass) -> vol.Schema:
         vol.Optional(CONF_HOUSE_CALENDAR): selector.EntitySelector(
             selector.EntitySelectorConfig(domain=["calendar", "schedule"])
         ),
+        vol.Optional(CONF_BED_SENSORS): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain=["binary_sensor"], multiple=True)
+        ),
     })
 
 
@@ -531,6 +541,7 @@ class DynamicHeatingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 options={
                     CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE) or None,
                     CONF_HOUSE_CALENDAR: user_input.get(CONF_HOUSE_CALENDAR) or None,
+                    CONF_BED_SENSORS: list(user_input.get(CONF_BED_SENSORS) or []),
                 },
             )
         return self.async_show_form(
@@ -1060,10 +1071,19 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
             (CONF_SHOWER_LEARNING, DEFAULT_SHOWER_LEARNING),
             (CONF_SOLAR_FORECAST, DEFAULT_SOLAR_FORECAST),
             (CONF_UNUSUAL_NOTIFY, DEFAULT_UNUSUAL_NOTIFY),
+            (CONF_COLD_SNAP, DEFAULT_COLD_SNAP),
+            (CONF_FROST_NIGHT_SETBACK, DEFAULT_FROST_NIGHT_SETBACK),
         ):
             schema[vol.Optional(key, default=bool(current.get(key, default)))] = (
                 selector.BooleanSelector()
             )
+        schema[vol.Optional(CONF_FACADE)] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=list(FACADES),
+                mode=selector.SelectSelectorMode.DROPDOWN,
+                translation_key="facade",
+            )
+        )
         item = self._duration_field(
             CONF_PREHEAT_EXTENSION, current, DEFAULT_PREHEAT_EXTENSION
         )
@@ -1372,8 +1392,12 @@ class DynamicHeatingOptionsFlow(config_entries.OptionsFlowWithReload):
                 (CONF_SHOWER_LEARNING, DEFAULT_SHOWER_LEARNING),
                 (CONF_SOLAR_FORECAST, DEFAULT_SOLAR_FORECAST),
                 (CONF_UNUSUAL_NOTIFY, DEFAULT_UNUSUAL_NOTIFY),
+                (CONF_COLD_SNAP, DEFAULT_COLD_SNAP),
+                (CONF_FROST_NIGHT_SETBACK, DEFAULT_FROST_NIGHT_SETBACK),
             ):
                 current[key] = bool(user_input.get(key, default))
+            # An empty choice means no facade (sun counts as before).
+            current[CONF_FACADE] = user_input.get(CONF_FACADE) or None
             for key in (CONF_ROOM_EMPTY_RECOVERY, CONF_ROOM_EMPTY_GRACE, CONF_EARLY_STOP,
                         CONF_PREHEAT_EXTENSION):
                 current[key] = _duration_to_seconds(user_input.get(key, current.get(key, 0)))
@@ -1407,6 +1431,7 @@ class HouseOptionsFlow(config_entries.OptionsFlowWithReload):
                 data={
                     CONF_NOTIFY_SERVICE: user_input.get(CONF_NOTIFY_SERVICE) or None,
                     CONF_HOUSE_CALENDAR: user_input.get(CONF_HOUSE_CALENDAR) or None,
+                    CONF_BED_SENSORS: list(user_input.get(CONF_BED_SENSORS) or []),
                 },
             )
         return self.async_show_form(
