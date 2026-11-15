@@ -610,6 +610,14 @@ class HeatingSensor(CoordinatorEntity[DynamicHeatingCoordinator], SensorEntity):
             "solar_pause",
             "radiator_supply",
             "aggressive_setpoint",
+            "heating_limit_lifted",
+            "cold_snap",
+            "cold_snap_mean",
+            "frost_night",
+            "facade",
+            "sun_on_facade",
+            "contact_problems",
+            "valve_own_state",
         )
         return {
             key: self.coordinator.data[key]

@@ -370,6 +370,10 @@ Ein frisch gelerntes Raummodell steuert nur das Vorheizen. Absenkungsgrenzen, �
 - **Raummodell lernt nur aus Stunden mit Wärme**: Stunden, in denen geheizt werden sollte, die Heizkörper aber kalt blieben, zählen nicht mehr. Bisher lernte das Modell daraus eine viel zu kleine Heizleistung und plante beim Vorheizen immer die volle Zeit. Ein mit 0.9.2 oder älter gelerntes Modell wird einmal verworfen und neu aus dem Recorder angelernt (dann mit den Gehäusetemperaturen).
 - **Wochenbericht**: nennt zusätzlich die geschätzte Ersparnis gegenüber Dauer-Komfort (aus der Temperaturdifferenz zu draußen, nach der sich der Wärmeverlust richtet), die Stunden mit kalten Heizkörpern trotz Heizbedarf und wie gut das Raummodell liegt.
 
+## Version 0.21.1
+
+- Die neuen Raumwerte aus 0.21.0 (Heizgrenze aufgehoben, Kälteeinbruch, Frostnacht, Fassade und Sonne, Fensterkontakt-Probleme, Ventile im Eigenzustand) stehen jetzt auch als Attribute am Status-Sensor, damit Dashboards sie ohne Dienstaufruf lesen können.
+
 ## Version 0.21.0: Ideen aus Raumklima
 
 Acht Ideen aus [Raumklima](https://github.com/Goldi5/Raumklima-2) (MIT), nachgebaut für diese Integration.
