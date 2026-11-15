@@ -865,9 +865,10 @@ FROST_NIGHT_TEMPERATURE: Final = -5.0
 FROST_NIGHT_HOURS: Final = 12
 # 5. Facade of the room: the sun only counts while it shines on this wall.
 CONF_FACADE: Final = "facade"
+# Lower case: Home Assistant translation keys must be [a-z0-9-_].
 FACADES: Final = {
-    "N": 0.0, "NO": 45.0, "O": 90.0, "SO": 135.0,
-    "S": 180.0, "SW": 225.0, "W": 270.0, "NW": 315.0,
+    "n": 0.0, "no": 45.0, "o": 90.0, "so": 135.0,
+    "s": 180.0, "sw": 225.0, "w": 270.0, "nw": 315.0,
 }
 FACADE_SPREAD: Final = 80.0
 FACADE_MIN_ELEVATION: Final = 5.0

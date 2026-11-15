@@ -458,14 +458,14 @@
     },
     "facade": {
       "options": {
-        "N": "Norden",
-        "NO": "Nordosten",
-        "O": "Osten",
-        "SO": "Südosten",
-        "S": "Süden",
-        "SW": "Südwesten",
-        "W": "Westen",
-        "NW": "Nordwesten"
+        "n": "Norden",
+        "no": "Nordosten",
+        "o": "Osten",
+        "so": "Südosten",
+        "s": "Süden",
+        "sw": "Südwesten",
+        "w": "Westen",
+        "nw": "Nordwesten"
       }
     }
   },

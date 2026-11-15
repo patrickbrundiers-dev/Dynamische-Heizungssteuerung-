@@ -785,7 +785,7 @@ class PlanMixin:
 
         None without a facade (or location): the sun counts as before.
         """
-        facade = FACADES.get(str(self.config.get(CONF_FACADE) or "").upper())
+        facade = FACADES.get(str(self.config.get(CONF_FACADE) or "").lower())
         latitude = self.hass.config.latitude
         longitude = self.hass.config.longitude
         if facade is None or latitude is None or longitude is None:
