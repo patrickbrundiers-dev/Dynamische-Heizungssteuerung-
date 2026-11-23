@@ -955,11 +955,16 @@ class DynamicHeatingCoordinator(
         return cls._fit_to_thermostat(maximum, climate_state)
 
     @staticmethod
-    def _fit_to_thermostat(target: float, climate_state: State) -> float:
+    def _fit_to_thermostat(
+        target: float, climate_state: State, *, round_up: bool = False
+    ) -> float:
         """Clamp to the thermostat limits and round to its setpoint step.
 
         Without rounding, a thermostat with 0.5 °C steps stores 21.0 for a
         requested 21.2 and the difference triggers a new write every update.
+        ``round_up`` rounds to the next step instead: a setback floor is the
+        lowest the room may go, so 21.3 on a 1 °C thermostat must become 22,
+        not 21, or the room is not warm again when comfort starts.
         """
         attributes = climate_state.attributes
         try:
@@ -975,7 +980,9 @@ class DynamicHeatingCoordinator(
         except (TypeError, ValueError):
             step = 0
         if math.isfinite(step) and step > 0:
-            target = round(round(target / step) * step, 2)
+            steps = target / step
+            steps = math.ceil(steps - 1e-6) if round_up else round(steps)
+            target = round(steps * step, 2)
         return max(min_temp, min(target, max_temp))
 
     @staticmethod
@@ -2605,6 +2612,9 @@ class DynamicHeatingCoordinator(
                 # empty room keeps comfort for now.
                 present, presence_status = True, hold
         reduced_comfort: tuple[str, float] | None = None
+        # Targets that are a lower limit (recovery floors): they are rounded
+        # up to the thermostat step, never down below the limit.
+        floor_targets: list[float] = []
         away_offset = self.config.get(CONF_AWAY_OFFSET)
         if away_offset and (
             self._absence == "room_empty"
@@ -2632,6 +2642,7 @@ class DynamicHeatingCoordinator(
                 )
                 if floor > reduced:
                     reduced = min(floor, comfort_temperature)
+                    floor_targets.append(reduced)
                     status = (
                         "Raum leer – nur bis "
                         + f"{reduced:.1f}".replace(".", ",")
@@ -2810,6 +2821,8 @@ class DynamicHeatingCoordinator(
             ):
                 setback_floor = previous
         self._setback_floor = setback_floor
+        if setback_floor is not None:
+            floor_targets.append(setback_floor)
         self._bias_context = (
             forecast_temperature
             if forecast_temperature is not None
@@ -2982,6 +2995,14 @@ class DynamicHeatingCoordinator(
         )
         if decision.mode == "preheat":
             self._preheat_event = next_event
+        floor_hold = (
+            decision.mode in ("eco", "away_reduced")
+            and decision.target_temperature is not None
+            and any(
+                abs(decision.target_temperature - floor) < 1e-6
+                for floor in floor_targets
+            )
+        )
         if (
             self.room_offset
             and decision.target_temperature is not None
@@ -3003,7 +3024,9 @@ class DynamicHeatingCoordinator(
             )
 
         target_temperature = self._fit_to_thermostat(
-            decision.target_temperature, climate_state
+            decision.target_temperature,
+            climate_state,
+            round_up=floor_hold,
         )
 
         result: dict[str, Any] = {
